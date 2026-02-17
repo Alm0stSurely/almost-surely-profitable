@@ -1,33 +1,32 @@
 __pycache__/
 *.pyc
 .env
+.env.*
 *.egg-info/
 dist/
 build/
 .venv/
 venv/
-models/*.pt
-models/*.pth
-data/*.csv
 .ipynb_checkpoints/
 *.log
-wandb/
 
 # Secrets
-.env.*
 *.key
 *.pem
 credentials/
 secrets/
 
-# Trained models (keep local only)
-models/
-checkpoints/
-*.onnx
+# Portfolio state (contains live positions)
+portfolio_state.json
+state/
 
-# Local config with sensitive params
-config/local*.yml
-config/local*.json
+# Data cache (re-downloadable)
+data/*.csv
+data/*.parquet
+data/cache/
+
+# Results with sensitive params
+results/daily/*.json
 hyperparams/optimized/
 
 # OS
