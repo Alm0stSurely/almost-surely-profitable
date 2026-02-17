@@ -77,12 +77,12 @@ class TradingAgent:
         self,
         api_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        model: str = "gpt-4o-mini",
+        model: str = None,
         history_file: str = "data/decision_history.json"
     ):
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.api_url = api_url or os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
-        self.model = model
+        self.model = model or os.getenv("LLM_MODEL", "kimi")
         self.history_file = Path(history_file)
         self.history_file.parent.mkdir(exist_ok=True)
         
@@ -218,7 +218,8 @@ class TradingAgent:
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": os.getenv("LLM_USER_AGENT", "python-trading-agent/1.0")
         }
         
         payload = {
@@ -228,7 +229,7 @@ class TradingAgent:
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 2000
+            "max_tokens": 16000,
         }
         
         try:
@@ -237,12 +238,19 @@ class TradingAgent:
                 self.api_url,
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=180
             )
             response.raise_for_status()
             
             result = response.json()
-            content = result['choices'][0]['message']['content']
+            msg = result["choices"][0]["message"]
+            content = msg.get("content", "") or ""
+            # Kimi may put the answer in reasoning_content instead of content
+            if not content.strip() and msg.get("reasoning_content"):
+                content = msg["reasoning_content"]
+                logger.info("Using reasoning_content as content (Kimi quirk)")
+            logger.info(f"LLM content length: {len(content) if content else 0}")
+            logger.info(f"LLM content preview: {repr(content[:200]) if content else None}")
             logger.info("✓ LLM response received")
             return content
             
@@ -262,12 +270,33 @@ class TradingAgent:
         """
         try:
             # Try to extract JSON from the response
-            # The response might have markdown formatting
+            # Response may be: pure JSON, markdown-wrapped JSON, or free text with JSON embedded
+            json_str = None
+            
             if "```json" in response:
                 json_str = response.split("```json")[1].split("```")[0].strip()
             elif "```" in response:
-                json_str = response.split("```")[1].strip()
-            else:
+                json_str = response.split("```")[1].split("```")[0].strip()
+            
+            # Try to find JSON object with "actions" key in the text
+            if json_str is None:
+                import re
+                # Find the last JSON-like block containing "actions"
+                matches = list(re.finditer(r'{[^{}]*"actions"\s*:', response))
+                if matches:
+                    start = matches[-1].start()
+                    # Find matching closing brace
+                    depth = 0
+                    for i in range(start, len(response)):
+                        if response[i] == "{":
+                            depth += 1
+                        elif response[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                json_str = response[start:i+1]
+                                break
+            
+            if json_str is None:
                 json_str = response.strip()
             
             parsed = json.loads(json_str)
