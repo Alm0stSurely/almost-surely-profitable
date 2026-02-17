@@ -1,4 +1,4 @@
-# Risk-Sensitive Trading
+# Almost Surely Profitable
 
 Applying risk-sensitive reinforcement learning to financial markets.
 
