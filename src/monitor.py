@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/repos/almost-surely-profitable/.venv/bin/python3
 """
 Intraday monitoring script.
 Checks for significant price movements and alerts if thresholds are breached.
@@ -13,7 +13,7 @@ from typing import Dict, List
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data.fetch_market_data import fetch_current_prices, ETF_TICKERS
+from data.fetch_market_data import fetch_current_prices
 from portfolio.portfolio import Portfolio
 
 

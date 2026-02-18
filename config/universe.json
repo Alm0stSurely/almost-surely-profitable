@@ -1,0 +1,40 @@
+{
+  "etf": [
+    {"ticker": "SPY", "name": "S&P 500 ETF"},
+    {"ticker": "QQQ", "name": "Nasdaq 100 ETF"},
+    {"ticker": "GLD", "name": "Gold ETF"},
+    {"ticker": "TLT", "name": "US Bonds ETF"},
+    {"ticker": "FEZ", "name": "Euro Stoxx 50 ETF"},
+    {"ticker": "^FCHI", "name": "CAC 40"}
+  ],
+  "small_cap": [
+    {"ticker": "IWM", "name": "iShares Russell 2000"},
+    {"ticker": "IJR", "name": "iShares Core S&P Small-Cap 600"},
+    {"ticker": "VB", "name": "Vanguard Small-Cap ETF"},
+    {"ticker": "GWX", "name": "SPDR S&P International Small Cap"}
+  ],
+  "commodity": [
+    {"ticker": "SLV", "name": "iShares Silver Trust"},
+    {"ticker": "USO", "name": "United States Oil Fund"},
+    {"ticker": "DBA", "name": "Invesco DB Agriculture Fund"},
+    {"ticker": "PDBC", "name": "Invesco Optimum Yield Diversified Commodity"},
+    {"ticker": "COPX", "name": "Global X Copper Miners ETF"}
+  ],
+  "euronext": [
+    {"ticker": "MC.PA", "name": "LVMH"},
+    {"ticker": "TTE.PA", "name": "TotalEnergies"},
+    {"ticker": "SAN.PA", "name": "Sanofi"},
+    {"ticker": "OR.PA", "name": "L'Oreal"},
+    {"ticker": "AIR.PA", "name": "Airbus"},
+    {"ticker": "SU.PA", "name": "Schneider Electric"},
+    {"ticker": "AI.PA", "name": "Air Liquide"},
+    {"ticker": "BNP.PA", "name": "BNP Paribas"},
+    {"ticker": "CS.PA", "name": "AXA"},
+    {"ticker": "RMS.PA", "name": "Hermes"},
+    {"ticker": "SAF.PA", "name": "Safran"},
+    {"ticker": "DSY.PA", "name": "Dassault Systemes"},
+    {"ticker": "DG.PA", "name": "Vinci"},
+    {"ticker": "SGO.PA", "name": "Saint-Gobain"},
+    {"ticker": "KER.PA", "name": "Kering"}
+  ]
+}

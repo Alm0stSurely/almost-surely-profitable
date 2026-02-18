@@ -1,42 +1,61 @@
 """
 Market data fetching module using yfinance.
-Fetches historical and intraday data for ETFs, small caps, commodities, and French stocks.
+Reads asset universe from config/universe.json.
 """
 
+import json
+import os
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Asset definitions
-ETF_TICKERS = ["SPY", "QQQ", "GLD", "TLT", "FEZ", "^FCHI"]
+# Resolve project root (2 levels up from src/data/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+UNIVERSE_PATH = PROJECT_ROOT / "config" / "universe.json"
 
-SMALL_CAP_TICKERS = [
-    "IWM",    # iShares Russell 2000 (US small caps)
-    "IJR",    # iShares Core S&P Small-Cap 600
-    "VB",     # Vanguard Small-Cap ETF
-    "GWX",    # SPDR S&P International Small Cap
-]
 
-COMMODITY_TICKERS = [
-    "SLV",    # iShares Silver Trust
-    "USO",    # United States Oil Fund
-    "DBA",    # Invesco DB Agriculture Fund
-    "PDBC",   # Invesco Optimum Yield Diversified Commodity
-    "COPX",   # Global X Copper Miners ETF
-]
+def load_universe() -> Dict:
+    """Load asset universe from config/universe.json."""
+    if not UNIVERSE_PATH.exists():
+        logger.warning(f"Universe config not found at {UNIVERSE_PATH}, using empty universe")
+        return {}
+    with open(UNIVERSE_PATH) as f:
+        return json.load(f)
 
-FRENCH_STOCK_TICKERS = [
-    "MC.PA", "TTE.PA", "SAN.PA", "OR.PA", "AIR.PA", "SU.PA",
-    "AI.PA", "BNP.PA", "CS.PA", "RMS.PA", "SAF.PA", "DSY.PA",
-    "DG.PA", "SGO.PA", "KER.PA"
-]
 
-ALL_TICKERS = ETF_TICKERS + SMALL_CAP_TICKERS + COMMODITY_TICKERS + FRENCH_STOCK_TICKERS
+def get_all_tickers() -> List[str]:
+    """Get flat list of all tickers from universe config."""
+    universe = load_universe()
+    tickers = []
+    for category in universe.values():
+        for asset in category:
+            tickers.append(asset["ticker"])
+    return tickers
+
+
+def get_ticker_names() -> Dict[str, str]:
+    """Get ticker -> display name mapping from universe config."""
+    universe = load_universe()
+    names = {}
+    for category in universe.values():
+        for asset in category:
+            names[asset["ticker"]] = asset["name"]
+    return names
+
+
+def get_tickers_by_category(category: str) -> List[str]:
+    """Get tickers for a specific category (etf, small_cap, commodity, euronext)."""
+    universe = load_universe()
+    return [asset["ticker"] for asset in universe.get(category, [])]
+
+
+# Module-level convenience (lazy-loaded)
+ALL_TICKERS = get_all_tickers()
 
 
 def fetch_historical_data(
@@ -46,37 +65,37 @@ def fetch_historical_data(
 ) -> Dict[str, pd.DataFrame]:
     """
     Fetch historical market data for specified tickers.
-    
+
     Args:
-        tickers: List of ticker symbols (default: ALL_TICKERS)
+        tickers: List of ticker symbols (default: all from universe config)
         period: Data period (default: "30d")
         interval: Data interval (default: "1d")
-    
+
     Returns:
         Dict mapping ticker to DataFrame with OHLCV data
     """
     if tickers is None:
-        tickers = ALL_TICKERS
-    
+        tickers = get_all_tickers()
+
     results = {}
-    
+
     for ticker in tickers:
         try:
             logger.info(f"Fetching data for {ticker}...")
             stock = yf.Ticker(ticker)
             hist = stock.history(period=period, interval=interval)
-            
+
             if hist.empty:
                 logger.warning(f"No data returned for {ticker}")
                 continue
-                
+
             results[ticker] = hist
-            logger.info(f"✓ {ticker}: {len(hist)} rows")
-            
+            logger.info(f"  {ticker}: {len(hist)} rows")
+
         except Exception as e:
             logger.error(f"Error fetching {ticker}: {e}")
             continue
-    
+
     return results
 
 
@@ -85,50 +104,48 @@ def fetch_current_prices(
 ) -> Dict[str, Optional[float]]:
     """
     Fetch current/latest prices for specified tickers.
-    
+
     Args:
-        tickers: List of ticker symbols (default: ALL_TICKERS)
-    
+        tickers: List of ticker symbols (default: all from universe config)
+
     Returns:
         Dict mapping ticker to current price (or None if error)
     """
     if tickers is None:
-        tickers = ALL_TICKERS
-    
+        tickers = get_all_tickers()
+
     results = {}
-    
+
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            # Get the most recent data (1 day)
             hist = stock.history(period="1d", interval="1m")
-            
+
             if hist.empty:
-                # Try daily data if intraday fails
                 hist = stock.history(period="5d")
-            
+
             if hist.empty:
                 logger.warning(f"No price data for {ticker}")
                 results[ticker] = None
                 continue
-            
-            current_price = hist['Close'].iloc[-1]
+
+            current_price = hist["Close"].iloc[-1]
             results[ticker] = float(current_price)
-            
+
         except Exception as e:
             logger.error(f"Error fetching current price for {ticker}: {e}")
             results[ticker] = None
-    
+
     return results
 
 
 def fetch_ticker_info(ticker: str) -> Dict:
     """
     Fetch general information about a ticker.
-    
+
     Args:
         ticker: Ticker symbol
-    
+
     Returns:
         Dict with ticker info (name, sector, currency, etc.)
     """
@@ -149,11 +166,11 @@ def fetch_ticker_info(ticker: str) -> Dict:
 
 
 if __name__ == "__main__":
-    # Quick test
-    print("Testing fetch_market_data...")
+    print(f"Universe: {UNIVERSE_PATH}")
+    universe = load_universe()
+    for cat, assets in universe.items():
+        print(f"  {cat}: {len(assets)} assets")
+    print(f"Total: {len(get_all_tickers())} tickers")
+    print()
     prices = fetch_current_prices(["SPY", "MC.PA"])
     print("Current prices:", prices)
-    
-    hist = fetch_historical_data(["SPY"], period="5d")
-    print("\nHistorical SPY:")
-    print(hist.get("SPY").tail())
