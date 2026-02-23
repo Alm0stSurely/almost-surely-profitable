@@ -4,6 +4,27 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-02-23 — Implémentation du CVaR
+
+**Contexte** : Besoin de métriques de risque quantitatives pour le LLM
+
+**Solution** : Module `risk/cvar.py` avec calcul du Conditional Value at Risk
+
+**Implémentation** :
+- CVaR 95% : perte attendue si on dépasse le VaR 95%
+- VaR 95% : perte maximale avec 95% de confiance
+- Tail risk metrics : skewness, kurtosis, Sortino ratio
+- Intégration dans `daily_run.py` pour enrichir le contexte LLM
+
+**Formule** : CVaR_α = E[X | X ≤ VaR_α]
+
+**Règle** :
+- CVaR > VaR (toujours — c'est la moyenne des queues)
+- Si CVaR 95% = 2% → en cas de perte extrême, attendre -2%
+- Utiliser le CVaR pour ajuster le cash buffer (plus CVaR élevé → plus de cash)
+
+---
+
 ## 2026-02-20 — Partial Profit Taking sur momentum extremes
 
 **Contexte** : MC.PA (LVMH) +4.78% intraday après 24h de détention
