@@ -69,7 +69,8 @@ def run_daily_pipeline(dry_run: bool = False):
     portfolio_weights = {}
     total_value = portfolio_summary['total_value']
     
-    for ticker, position in portfolio_summary.get('positions', {}).items():
+    for position in portfolio_summary.get('positions', []):
+        ticker = position['ticker']
         if ticker in market_analysis['assets']:
             # Get historical returns for this position
             hist_data = market_analysis['assets'][ticker]
