@@ -174,6 +174,18 @@ class TradingAgent:
         prompt_parts.append(f"Total Return: {portfolio_summary.get('total_return_pct', 0):.2f}%")
         prompt_parts.append(f"Total P&L: €{portfolio_summary.get('total_pnl', 0):+.2f}")
         
+        # Risk metrics (CVaR)
+        risk_metrics = portfolio_summary.get('risk_metrics', {})
+        if risk_metrics:
+            prompt_parts.append("\n=== RISK METRICS (Tail Risk Analysis) ===")
+            prompt_parts.append(f"CVaR 95% (Expected Shortfall): {risk_metrics.get('cvar_95', 0)*100:.2f}%")
+            prompt_parts.append(f"VaR 95%: {risk_metrics.get('var_95', 0)*100:.2f}%")
+            prompt_parts.append(f"Max Drawdown: {risk_metrics.get('max_drawdown', 0)*100:.2f}%")
+            prompt_parts.append(f"Sortino Ratio: {risk_metrics.get('sortino_ratio', 0):.2f}")
+            prompt_parts.append(f"Return Skewness: {risk_metrics.get('skewness', 0):.2f}")
+            prompt_parts.append(f"Return Kurtosis: {risk_metrics.get('kurtosis', 0):.2f}")
+            prompt_parts.append("\nNote: CVaR measures expected loss in worst 5% of cases. Lower is safer.")
+        
         positions = portfolio_summary.get('positions', [])
         if positions:
             prompt_parts.append("\nCurrent Positions:")
