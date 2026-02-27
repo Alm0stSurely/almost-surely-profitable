@@ -18,6 +18,13 @@ try:
 except ImportError:
     pass  # Use environment variables directly
 
+# Import risk metrics module
+try:
+    from ..risk import calculate_portfolio_risk_metrics, get_risk_summary_for_llm
+    RISK_MODULE_AVAILABLE = True
+except ImportError:
+    RISK_MODULE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # System prompt with risk management principles inspired by prospect theory
@@ -197,6 +204,17 @@ class TradingAgent:
                 )
         else:
             prompt_parts.append("\nNo current positions (all cash)")
+        
+        # Risk metrics (if available)
+        if RISK_MODULE_AVAILABLE and 'historical_prices' in market_data:
+            try:
+                prices_dict = market_data['historical_prices']
+                weights = {pos['ticker']: pos['market_value'] for pos in positions}
+                risk_metrics = calculate_portfolio_risk_metrics(prices_dict, weights)
+                prompt_parts.append("\n\n=== PORTFOLIO RISK METRICS ===")
+                prompt_parts.append(get_risk_summary_for_llm(risk_metrics))
+            except Exception as e:
+                logger.warning(f"Could not calculate risk metrics: {e}")
         
         # Recent decisions
         if recent_decisions:

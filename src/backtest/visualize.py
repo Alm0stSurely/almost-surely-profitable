@@ -12,9 +12,17 @@ try:
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from datetime import datetime
+    HAS_MATPLOTLIB = True
 except ImportError:
-    print("matplotlib required for visualization. Install with: pip install matplotlib")
-    sys.exit(1)
+    HAS_MATPLOTLIB = False
+    plt = None
+    mdates = None
+
+
+def check_matplotlib():
+    """Check if matplotlib is available."""
+    if not HAS_MATPLOTLIB:
+        raise ImportError("matplotlib required for visualization. Install with: pip install matplotlib")
 
 
 def load_backtest_results(filepath: str) -> Dict:
@@ -25,6 +33,7 @@ def load_backtest_results(filepath: str) -> Dict:
 
 def plot_equity_curves(results: Dict, output_path: str = "results/backtest_equity.png"):
     """Plot equity curves for all strategies."""
+    check_matplotlib()
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 1]})
     
     colors = {'buy_and_hold': '#2196F3', 'equal_weight': '#4CAF50', 'llm': '#FF9800'}
@@ -74,6 +83,7 @@ def plot_equity_curves(results: Dict, output_path: str = "results/backtest_equit
 
 def plot_metrics_comparison(results: Dict, output_path: str = "results/backtest_metrics.png"):
     """Plot metrics comparison bar chart."""
+    check_matplotlib()
     strategies = list(results.keys())
     
     # Extract metrics
@@ -135,6 +145,62 @@ def print_summary_table(results: Dict):
               f"{result['win_rate']*100:>9.1f}%")
     
     print("="*100 + "\n")
+
+
+def plot_backtest_results(result: Dict, output_path: str):
+    """Plot backtest results (single strategy).
+    
+    Args:
+        result: Backtest result dictionary
+        output_path: Path to save the plot
+    """
+    check_matplotlib()
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 1]})
+    
+    # Extract dates and values
+    daily_results = result.get('daily_results', [])
+    if not daily_results:
+        print("No daily results to plot")
+        return
+    
+    dates = [datetime.strptime(d['date'], '%Y-%m-%d') for d in daily_results]
+    values = [d['total_value'] for d in daily_results]
+    
+    # Calculate drawdowns
+    peak = values[0]
+    drawdowns = []
+    for value in values:
+        if value > peak:
+            peak = value
+        drawdowns.append((peak - value) / peak * 100)
+    
+    # Plot equity curve
+    ax1.plot(dates, values, linewidth=2, color='#2196F3', label='Portfolio Value')
+    ax1.axhline(y=result['initial_capital'], color='gray', linestyle='--', alpha=0.5, label='Initial Capital')
+    ax1.set_title(f'Backtest: {result["strategy"]} ({result["start_date"]} to {result["end_date"]})', 
+                  fontsize=14, fontweight='bold')
+    ax1.set_ylabel('Portfolio Value (€)', fontsize=12)
+    ax1.legend(loc='upper left')
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+    
+    # Plot drawdown
+    ax2.fill_between(dates, drawdowns, 0, color='red', alpha=0.3, label='Drawdown %')
+    ax2.plot(dates, drawdowns, color='red', linewidth=1)
+    ax2.set_ylabel('Drawdown (%)', fontsize=12)
+    ax2.set_xlabel('Date', fontsize=12)
+    ax2.legend(loc='lower left')
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
 
 
 if __name__ == "__main__":

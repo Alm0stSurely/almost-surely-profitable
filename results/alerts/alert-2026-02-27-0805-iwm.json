@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-02-27T08:05:07",
+  "alert_type": "POSITION_MOVEMENT",
+  "ticker": "IWM",
+  "severity": "MEDIUM",
+  "movement_pct": 2.08,
+  "current_price": 265.94,
+  "reference_price": 260.51,
+  "analysis": {
+    "portfolio_exposure": true,
+    "position_size_pct": 19.2,
+    "unrealized_pnl": 39.65,
+    "unrealized_pnl_pct": 2.08,
+    "z_score": 1.66,
+    "volatility_context": "within_normal_range",
+    "concentration_limit_breached": false,
+    "stop_loss_triggered": false
+  },
+  "decision": {
+    "action": "HOLD",
+    "reasoning": [
+      "Movement within expected volatility (1.66 std dev)",
+      "Position size 19.2% below 25% concentration limit",
+      "Unrealized gain +2.08%, far from -5% stop-loss",
+      "Systematic rebalancing scheduled at 22:30 UTC",
+      "Intraday reactions risk mean-reversion traps"
+    ],
+    "executed_trades": [],
+    "override_systematic": false
+  },
+  "next_review": "2026-02-27T22:30:00",
+  "detailed_analysis_file": "alert-2026-02-27-0805-iwm-analysis.md"
+}
