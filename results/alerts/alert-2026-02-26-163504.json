@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-02-26T16:35:04",
+  "alert_type": "INDEX_MOVEMENT",
+  "ticker": "USO",
+  "severity": "HIGH",
+  "movement_pct": 3.34,
+  "current_price": 80.86,
+  "analysis": {
+    "portfolio_exposure": false,
+    "uso_in_portfolio": false,
+    "pdbc_correlation": "low (+0.34% vs +3.34%)",
+    "z_score": 0.47,
+    "volatility_context": "within_normal_range",
+    "statistical_significance": "low"
+  },
+  "decision": {
+    "action": "HOLD",
+    "reasoning": [
+      "USO not in current portfolio (positions: IWM, PDBC)",
+      "PDBC (commodities basket) showing muted reaction (+0.34%)",
+      "Z-score of 0.47 indicates movement within expected volatility",
+      "Portfolio is 69% cash - defensive positioning adequate",
+      "Intraday oil volatility often mean-reverting",
+      "Awaiting US market close (22:30 UTC) for systematic rebalancing"
+    ],
+    "executed_trades": []
+  },
+  "next_review": "2026-02-26T22:30:00"
+}
