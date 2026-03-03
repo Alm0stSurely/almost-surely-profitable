@@ -1,0 +1,60 @@
+{
+  "timestamp": "2026-03-03T14:35:00Z",
+  "alert_id": "2026-03-03-1435-URGENT",
+  "type": "stop_loss_triggered",
+  "severity": "critical",
+  "triggered_by": ["FEZ"],
+  "market_context": {
+    "fez_change_pct": -7.50,
+    "spy_change_pct": -2.16,
+    "gld_change_pct": -4.15,
+    "iwm_change_pct": -2.96,
+    "note": "Broad market selloff. Even gold (GLD) falling indicates forced liquidation."
+  },
+  "decisions": [
+    {
+      "ticker": "FEZ",
+      "action": "SELL",
+      "reasoning": "Stop-loss -5% triggered. Currently at -7.50%. Mechanical exit to preserve capital.",
+      "shares": 5.141428611298092,
+      "entry_price": 68.54499816894531,
+      "exit_price": 63.404998779296875,
+      "proceeds_eur": 326.0,
+      "realized_pnl_eur": -26.14
+    },
+    {
+      "ticker": "SPY",
+      "action": "HOLD",
+      "reasoning": "Down -2.16%, within tolerance. Stop at -5% not yet triggered."
+    },
+    {
+      "ticker": "IWM",
+      "action": "HOLD",
+      "reasoning": "Down -2.96% today but still profitable overall. Monitor closely."
+    },
+    {
+      "ticker": "GLD",
+      "action": "HOLD",
+      "reasoning": "Down -4.15% but diversification anchor. Keep as hedge."
+    }
+  ],
+  "trades_executed": [
+    {
+      "ticker": "FEZ",
+      "action": "sell",
+      "shares": 5.141428611298092,
+      "price": 63.404998779296875,
+      "proceeds_eur": 326.0,
+      "realized_pnl_eur": -26.14,
+      "note": "Stop-loss triggered at -7.50%"
+    }
+  ],
+  "portfolio_after": {
+    "cash_eur": 5642.48,
+    "cash_pct": 55.6,
+    "positions_count": 3,
+    "positions": ["IWM", "SPY", "GLD"],
+    "realized_pnl_total": 92.71,
+    "total_value_estimated": 10120.52
+  }
+}

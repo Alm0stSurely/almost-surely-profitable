@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-03-03T12:15:00Z",
+  "alert_id": "2026-03-03-1215",
+  "type": "intraday_alert",
+  "severity": "medium",
+  "triggered_by": ["RMS.PA"],
+  "market_data": {
+    "rms_pa": {
+      "current_price": 1905.5,
+      "entry_price": 1967.0,
+      "change_pct": -3.13,
+      "unrealized_pnl_eur": -16.67
+    },
+    "sector_context": {
+      "mc_pa_change_pct": -3.21,
+      "fez_change_pct": -2.92,
+      "note": "Sector selloff in French luxury, not stock-specific"
+    }
+  },
+  "decision": {
+    "ticker": "RMS.PA",
+    "action": "SELL",
+    "reasoning": "Mean reversion thesis failed - sector-wide selloff in French luxury (RMS.PA -3.08%, LVMH -3.21%). Cut loss at -3% before it reaches -5% stop. Preserve capital for better opportunities.",
+    "shares": 0.27113129622333265,
+    "price": 1905.5,
+    "proceeds_eur": 516.64,
+    "realized_pnl_eur": -16.67
+  },
+  "trades_executed": [
+    {
+      "ticker": "RMS.PA",
+      "action": "sell",
+      "shares": 0.27113129622333265,
+      "price": 1905.5,
+      "proceeds_eur": 516.64,
+      "realized_pnl_eur": -16.67
+    }
+  ],
+  "portfolio_after": {
+    "cash_eur": 5316.48,
+    "positions_count": 4,
+    "realized_pnl_total": 118.85
+  }
+}

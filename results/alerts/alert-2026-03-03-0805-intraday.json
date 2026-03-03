@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-03-03T08:05:00Z",
+  "alert_id": "2026-03-03-0805",
+  "type": "intraday_alert",
+  "severity": "medium",
+  "triggered_by": ["GLD", "FEZ"],
+  "market_data": {
+    "vix": 21.44,
+    "vix_change": 1.58,
+    "spy_1d": 0.06,
+    "gld_1d": 1.29,
+    "fez_1d": -2.92
+  },
+  "positions_analyzed": [
+    {
+      "ticker": "GLD",
+      "action": "HOLD",
+      "current_price": 489.96,
+      "entry_price": 477.46,
+      "unrealized_pnl_pct": 2.62,
+      "unrealized_pnl_eur": 14.56,
+      "rationale": "Defensive position working as intended; rising VIX supports gold allocation"
+    },
+    {
+      "ticker": "FEZ",
+      "action": "HOLD",
+      "current_price": 66.54,
+      "entry_price": 68.54,
+      "unrealized_pnl_pct": -2.92,
+      "unrealized_pnl_eur": -10.28,
+      "rationale": "Continue monitoring; cut if -5% stop hit. Downtrend confirmed but position size small."
+    }
+  ],
+  "trades_executed": [],
+  "data_issues": [
+    "yfinance failing on .PA tickers (Euronext Paris)",
+    "yfinance failing on ^FCHI (CAC 40)"
+  ],
+  "next_review": "2026-03-03T21:30:00Z"
+}
