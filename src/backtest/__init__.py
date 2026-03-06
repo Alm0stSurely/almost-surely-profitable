@@ -14,6 +14,12 @@ from .triple_barrier import (
     calculate_volatility,
     get_barrier_levels
 )
+from .cpcv import (
+    PurgedKFold,
+    CombinatorialPurgedCV,
+    apply_purged_cv,
+    calculate_purged_cv_score
+)
 
 __all__ = [
     'BacktestEngine',
@@ -25,5 +31,9 @@ __all__ = [
     'analyze_barrier_distribution',
     'format_barrier_report',
     'calculate_volatility',
-    'get_barrier_levels'
+    'get_barrier_levels',
+    'PurgedKFold',
+    'CombinatorialPurgedCV',
+    'apply_purged_cv',
+    'calculate_purged_cv_score'
 ]
