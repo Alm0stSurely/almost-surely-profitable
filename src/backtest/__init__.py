@@ -29,6 +29,12 @@ from .meta_labeling import (
     create_meta_labels_from_triple_barrier,
     apply_meta_labeling
 )
+from .deflated_sharpe import (
+    SharpeMetrics,
+    DeflatedSharpeRatio,
+    probabilistic_sharpe_ratio,
+    minimum_track_record_length
+)
 
 __all__ = [
     'BacktestEngine',
@@ -51,5 +57,9 @@ __all__ = [
     'MetaLabelingConfig',
     'MetaLabeler',
     'create_meta_labels_from_triple_barrier',
-    'apply_meta_labeling'
+    'apply_meta_labeling',
+    'SharpeMetrics',
+    'DeflatedSharpeRatio',
+    'probabilistic_sharpe_ratio',
+    'minimum_track_record_length'
 ]
