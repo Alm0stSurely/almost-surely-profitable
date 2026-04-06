@@ -284,6 +284,135 @@ def check_movements(
     return alerts
 
 
+# Wrapper functions for backward compatibility and testing
+def check_position_movements(positions: Dict, previous_close: Dict, current_prices: Dict, threshold_pct: float = 2.0) -> List[Dict]:
+    """
+    Check for significant position movements (wrapper for check_movements).
+    
+    Args:
+        positions: Dict of position data
+        previous_close: Previous closing prices
+        current_prices: Current market prices
+        threshold_pct: Alert threshold percentage
+        
+    Returns:
+        List of movement alerts
+    """
+    from portfolio.portfolio import Portfolio, Position
+    
+    # Create a mock portfolio from positions dict
+    portfolio = Portfolio(data_dir="data")
+    for ticker, pos_data in positions.items():
+        portfolio.positions[ticker] = Position(
+            ticker=ticker,
+            quantity=pos_data.get('quantity', 0),
+            avg_price=pos_data.get('avg_price', 0),
+            current_price=pos_data.get('current_price', pos_data.get('avg_price', 0))
+        )
+    
+    all_alerts = check_movements(current_prices, previous_close, portfolio)
+    
+    # Filter only position movement alerts
+    return [a for a in all_alerts if a['type'] == 'position_movement']
+
+
+def check_portfolio_drawdown(portfolio_value: float, cost_basis: float, threshold_pct: float = 1.5) -> Dict:
+    """
+    Check if portfolio drawdown exceeds threshold.
+    
+    Args:
+        portfolio_value: Current portfolio value
+        cost_basis: Total cost basis
+        threshold_pct: Drawdown threshold percentage
+        
+    Returns:
+        Alert dict if drawdown exceeds threshold, None otherwise
+    """
+    if cost_basis <= 0:
+        return None
+    
+    drawdown_pct = ((portfolio_value - cost_basis) / cost_basis) * 100
+    
+    if drawdown_pct <= -threshold_pct:
+        return {
+            'type': 'portfolio_drawdown',
+            'ticker': 'PORTFOLIO',
+            'severity': 'critical',
+            'current_value': portfolio_value,
+            'cost_basis': cost_basis,
+            'drawdown_pct': drawdown_pct
+        }
+    
+    return None
+
+
+def check_index_movements(current_prices: Dict, reference_prices: Dict, indices: List[str], threshold_pct: float = 3.0) -> List[Dict]:
+    """
+    Check for significant index movements.
+    
+    Args:
+        current_prices: Current market prices
+        reference_prices: Reference prices (previous close)
+        indices: List of index tickers to check
+        threshold_pct: Alert threshold percentage
+        
+    Returns:
+        List of index movement alerts
+    """
+    alerts = []
+    
+    for index in indices:
+        current_price = current_prices.get(index)
+        reference_price = reference_prices.get(index)
+        
+        if current_price and reference_price and reference_price > 0:
+            movement_pct = ((current_price - reference_price) / reference_price) * 100
+            
+            if abs(movement_pct) >= threshold_pct:
+                alerts.append({
+                    'type': 'index_movement',
+                    'ticker': index,
+                    'severity': 'high',
+                    'current_price': current_price,
+                    'reference_price': reference_price,
+                    'movement_pct': movement_pct
+                })
+    
+    return alerts
+
+
+def generate_alerts(alerts_or_current_prices, reference_prices=None, portfolio=None) -> Dict:
+    """
+    Generate alert summary from alerts list or by checking movements.
+    
+    Can be called in two ways:
+    1. generate_alerts(alerts_list) - Format alerts for output (used by tests)
+    2. generate_alerts(current_prices, reference_prices, portfolio) - Generate from data
+    
+    Args:
+        alerts_or_current_prices: Either a list of alerts or current prices dict
+        reference_prices: Reference prices (required for mode 2)
+        portfolio: Portfolio object (required for mode 2)
+        
+    Returns:
+        Dict with 'alert_count' and 'alerts' keys
+    """
+    # Mode 1: Called with pre-generated alerts list (from tests)
+    if isinstance(alerts_or_current_prices, list):
+        alerts = alerts_or_current_prices
+    # Mode 2: Called with price data - generate alerts
+    elif reference_prices is not None and portfolio is not None:
+        alerts = check_movements(alerts_or_current_prices, reference_prices, portfolio)
+    else:
+        alerts = []
+    
+    return {
+        'alert_count': len(alerts),
+        'alerts': alerts,
+        'timestamp': datetime.now().isoformat()
+    }
+
+
 def run_monitor():
     """Run the monitoring check."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting intraday monitor...")

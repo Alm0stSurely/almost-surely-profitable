@@ -207,9 +207,19 @@ class TradingAgent:
         
         # Correlations
         correlations = market_data.get('correlations', {})
-        if not correlations.empty:
+        has_correlations = False
+        if hasattr(correlations, 'empty'):
+            has_correlations = not correlations.empty
+        elif isinstance(correlations, dict):
+            has_correlations = len(correlations) > 0
+        
+        if has_correlations:
             prompt_parts.append("\n=== CORRELATIONS (20-day returns) ===")
-            prompt_parts.append(correlations.to_string())
+            if hasattr(correlations, 'to_string'):
+                prompt_parts.append(correlations.to_string())
+            elif isinstance(correlations, dict):
+                for pair, corr in correlations.items():
+                    prompt_parts.append(f"  {pair}: {corr:.3f}")
         
         # Market Regime Analysis
         regime = market_data.get('regime')
