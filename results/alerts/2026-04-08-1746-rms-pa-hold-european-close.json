@@ -1,0 +1,61 @@
+{
+  "timestamp": "2026-04-08T17:46:00.068535",
+  "alert_type": "INTRADAY_POSITION_MOVEMENT",
+  "ticker": "RMS.PA",
+  "severity": "HIGH",
+  "market_context": {
+    "alert_price": 1765.0,
+    "live_price": 1768.0,
+    "european_close": "just_occurred_1730_utc",
+    "rms_pa_daily": 7.25,
+    "lvmh_daily": 6.85,
+    "cac40_daily": 4.49,
+    "spy_daily": 2.49,
+    "qqq_daily": 2.99,
+    "interpretation": "European markets closed, US continues strong"
+  },
+  "position_analysis": {
+    "remaining_qty": 0.6670573604252217,
+    "avg_price": 1663.4803944596904,
+    "alert_price": 1765.0,
+    "live_price": 1768.0,
+    "unrealized_pnl": 67.72,
+    "status": "above_all_stops"
+  },
+  "decision": {
+    "action": "HOLD",
+    "reasoning": [
+      "Price stable at \u20ac1765 (alert) / \u20ac1768 (live)",
+      "European markets just closed at 17:30 UTC \u2014 no more European price action today",
+      "US markets continue strong (SPY +2.49%, QQQ +2.99%)",
+      "Position remains above all stops (\u20ac1760 emergency, \u20ac1755 trailing)",
+      "No action needed until daily session at 21:30 UTC"
+    ],
+    "framework": "Behavioral_RL",
+    "principles_applied": [
+      "Patience",
+      "No_Trading_When_Market_Closed"
+    ],
+    "next_action": {
+      "time": "21:30 UTC",
+      "event": "Daily trading session \u2014 full reassessment",
+      "rationale": "US close provides complete daily picture"
+    }
+  },
+  "executed_trade": null,
+  "day_summary": {
+    "morning_sale": {
+      "qty": 0.667,
+      "price": 1767.5,
+      "pnl": 69.38
+    },
+    "remaining_position": {
+      "qty": 0.667,
+      "current_price": 1765.0,
+      "pnl": 67.72
+    },
+    "total_realized": 69.38,
+    "total_unrealized": 67.72,
+    "combined_pnl": 137.1
+  }
+}
