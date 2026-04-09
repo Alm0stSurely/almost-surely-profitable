@@ -1,15 +1,21 @@
 #!/repos/almost-surely-profitable/.venv/bin/python3
 """
-Intraday monitoring script.
+Intraday monitoring script with alert deduplication.
 Checks for significant price movements and alerts if thresholds are breached.
 Called every 2 hours during market hours (8h-20h UTC) by external cron.
+
+Alert Deduplication Logic:
+- First alert for a ticker: triggers immediately
+- Subsequent alerts for same ticker: suppressed for COOLDOWN_HOURS (default 6h)
+- Escalation alert: triggers if movement exceeds previous by ESCALATION_THRESHOLD (default 2%)
+- Session reset: all alerts reset at market open (08:00 UTC)
 """
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -20,6 +26,12 @@ from portfolio.portfolio import Portfolio
 # Load thresholds from config
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "monitor.json"
 UNIVERSE_PATH = Path(__file__).parent.parent / "config" / "universe.json"
+ALERT_HISTORY_PATH = Path(__file__).parent.parent / "data" / "alert_history.json"
+
+# Alert deduplication settings
+COOLDOWN_HOURS = 6  # Don't re-alert same ticker within 6 hours
+ESCALATION_THRESHOLD_PCT = 2.0  # Re-alert if movement exceeds previous by 2%
+
 
 def load_monitor_config() -> dict:
     """Load monitor configuration from config/monitor.json."""
@@ -41,8 +53,11 @@ def load_monitor_config() -> dict:
         'indices': ["SPY", "^FCHI"],
         'check_stop_losses': True,
         'stop_loss_threshold_pct': 5.0,
-        'check_bollinger': True
+        'check_bollinger': True,
+        'cooldown_hours': COOLDOWN_HOURS,
+        'escalation_threshold_pct': ESCALATION_THRESHOLD_PCT
     }
+
 
 def load_universe() -> dict:
     """Load asset universe from config/universe.json."""
@@ -54,6 +69,86 @@ def load_universe() -> dict:
             print(f"Warning: Could not load universe: {e}")
     return {}
 
+
+def load_alert_history() -> Dict:
+    """Load alert history for deduplication."""
+    if ALERT_HISTORY_PATH.exists():
+        try:
+            with open(ALERT_HISTORY_PATH, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {
+        'alerts': [],
+        'last_reset': datetime.now().isoformat()
+    }
+
+
+def save_alert_history(history: Dict):
+    """Save alert history."""
+    ALERT_HISTORY_PATH.parent.mkdir(exist_ok=True)
+    with open(ALERT_HISTORY_PATH, 'w') as f:
+        json.dump(history, f, indent=2)
+
+
+def should_alert(ticker: str, movement_pct: float, alert_type: str, history: Dict) -> Tuple[bool, str]:
+    """
+    Determine if we should alert for this ticker.
+    
+    Returns:
+        (should_alert: bool, reason: str)
+    """
+    now = datetime.now()
+    
+    # Check if market just opened (reset history at 08:00 UTC)
+    if now.hour == 8 and now.minute < 30:
+        # Clear history at market open
+        history['alerts'] = []
+        history['last_reset'] = now.isoformat()
+        return True, "New trading session"
+    
+    # Find previous alert for this ticker
+    previous_alerts = [
+        a for a in history.get('alerts', [])
+        if a.get('ticker') == ticker and a.get('type') == alert_type
+    ]
+    
+    if not previous_alerts:
+        return True, "First alert for this ticker"
+    
+    # Get most recent alert
+    last_alert = max(previous_alerts, key=lambda x: x.get('timestamp', ''))
+    last_time = datetime.fromisoformat(last_alert['timestamp'])
+    last_movement = last_alert.get('movement_pct', 0)
+    
+    # Check cooldown period
+    cooldown = timedelta(hours=COOLDOWN_HOURS)
+    if now - last_time < cooldown:
+        # Within cooldown - check for escalation
+        movement_diff = abs(movement_pct) - abs(last_movement)
+        if movement_diff >= ESCALATION_THRESHOLD_PCT:
+            return True, f"Escalation: movement increased by {movement_diff:.2f}%"
+        else:
+            return False, f"Within cooldown ({COOLDOWN_HOURS}h), no escalation"
+    
+    # Cooldown expired
+    return True, "Cooldown expired"
+
+
+def record_alert(ticker: str, movement_pct: float, alert_type: str, severity: str, history: Dict):
+    """Record an alert in history."""
+    history['alerts'].append({
+        'ticker': ticker,
+        'type': alert_type,
+        'movement_pct': movement_pct,
+        'severity': severity,
+        'timestamp': datetime.now().isoformat()
+    })
+    
+    # Keep only last 100 alerts to prevent file bloat
+    history['alerts'] = history['alerts'][-100:]
+
+
 # Initialize config
 _monitor_config = load_monitor_config()
 THRESHOLDS = _monitor_config.get('alert_thresholds', {})
@@ -64,9 +159,7 @@ CHECK_BOLLINGER = _monitor_config.get('check_bollinger', True)
 
 
 def load_previous_close(portfolio: Portfolio) -> Dict[str, float]:
-    """
-    Load previous closing prices from portfolio state or market data.
-    """
+    """Load previous closing prices from portfolio state or market data."""
     state_file = Path("data/market_state.json")
     
     if state_file.exists():
@@ -101,6 +194,7 @@ def check_stop_losses(
 ) -> List[Dict]:
     """Check if any positions have hit their stop-loss threshold."""
     alerts = []
+    history = load_alert_history()
     
     if not CHECK_STOP_LOSSES:
         return alerts
@@ -113,17 +207,25 @@ def check_stop_losses(
         drawdown_pct = ((current_price - position.avg_price) / position.avg_price) * 100
         
         if drawdown_pct <= -STOP_LOSS_THRESHOLD:
-            alerts.append({
-                'type': 'stop_loss_triggered',
-                'ticker': ticker,
-                'severity': 'critical',
-                'current_price': current_price,
-                'entry_price': position.avg_price,
-                'drawdown_pct': drawdown_pct,
-                'stop_threshold': STOP_LOSS_THRESHOLD,
-                'action_required': 'SELL'
-            })
+            should_alert_flag, reason = should_alert(
+                ticker, drawdown_pct, 'stop_loss_triggered', history
+            )
+            
+            if should_alert_flag:
+                alerts.append({
+                    'type': 'stop_loss_triggered',
+                    'ticker': ticker,
+                    'severity': 'critical',
+                    'current_price': current_price,
+                    'entry_price': position.avg_price,
+                    'drawdown_pct': drawdown_pct,
+                    'stop_threshold': STOP_LOSS_THRESHOLD,
+                    'action_required': 'SELL',
+                    'alert_reason': reason
+                })
+                record_alert(ticker, drawdown_pct, 'stop_loss_triggered', 'critical', history)
     
+    save_alert_history(history)
     return alerts
 
 
@@ -144,6 +246,8 @@ def check_bollinger_breakouts(
         from data.fetch_market_data import fetch_market_data
     except ImportError:
         return alerts
+    
+    history = load_alert_history()
     
     for ticker in portfolio.positions.keys():
         current_price = current_prices.get(ticker)
@@ -166,29 +270,48 @@ def check_bollinger_breakouts(
             
             # Check for breakout
             if current_price > latest_upper:
-                alerts.append({
-                    'type': 'bollinger_breakout',
-                    'ticker': ticker,
-                    'severity': 'medium',
-                    'current_price': current_price,
-                    'bollinger_upper': float(latest_upper),
-                    'direction': 'upper',
-                    'interpretation': 'Overbought - potential mean reversion'
-                })
+                movement_pct = ((current_price - latest_upper) / latest_upper) * 100
+                should_alert_flag, reason = should_alert(
+                    ticker, movement_pct, 'bollinger_breakout_upper', history
+                )
+                
+                if should_alert_flag:
+                    alerts.append({
+                        'type': 'bollinger_breakout',
+                        'ticker': ticker,
+                        'severity': 'medium',
+                        'current_price': current_price,
+                        'bollinger_upper': float(latest_upper),
+                        'direction': 'upper',
+                        'interpretation': 'Overbought - potential mean reversion',
+                        'alert_reason': reason
+                    })
+                    record_alert(ticker, movement_pct, 'bollinger_breakout_upper', 'medium', history)
+                    
             elif current_price < latest_lower:
-                alerts.append({
-                    'type': 'bollinger_breakout',
-                    'ticker': ticker,
-                    'severity': 'medium',
-                    'current_price': current_price,
-                    'bollinger_lower': float(latest_lower),
-                    'direction': 'lower',
-                    'interpretation': 'Oversold - potential bounce'
-                })
+                movement_pct = ((current_price - latest_lower) / latest_lower) * 100
+                should_alert_flag, reason = should_alert(
+                    ticker, movement_pct, 'bollinger_breakout_lower', history
+                )
+                
+                if should_alert_flag:
+                    alerts.append({
+                        'type': 'bollinger_breakout',
+                        'ticker': ticker,
+                        'severity': 'medium',
+                        'current_price': current_price,
+                        'bollinger_lower': float(latest_lower),
+                        'direction': 'lower',
+                        'interpretation': 'Oversold - potential bounce',
+                        'alert_reason': reason
+                    })
+                    record_alert(ticker, movement_pct, 'bollinger_breakout_lower', 'medium', history)
+                    
         except Exception as e:
             # Silently skip if calculation fails
             continue
     
+    save_alert_history(history)
     return alerts
 
 
@@ -197,22 +320,25 @@ def check_movements(
     reference_prices: Dict[str, float],
     portfolio: Portfolio
 ) -> List[Dict]:
-    """
-    Check for significant price movements.
-    
-    Returns:
-        List of alerts
-    """
+    """Check for significant price movements with deduplication."""
     alerts = []
+    history = load_alert_history()
     
     # Check stop-losses first (highest priority)
     stop_alerts = check_stop_losses(current_prices, portfolio)
     alerts.extend(stop_alerts)
     
+    # Track which tickers already have stop-loss alerts
+    stop_loss_tickers = {a['ticker'] for a in stop_alerts}
+    
     # Check portfolio positions for significant movements
     for ticker, position in portfolio.positions.items():
         current_price = current_prices.get(ticker)
         if not current_price:
+            continue
+        
+        # Skip if stop-loss already triggered
+        if ticker in stop_loss_tickers:
             continue
         
         # Use position average price as reference
@@ -221,21 +347,25 @@ def check_movements(
         if reference_price > 0:
             movement_pct = ((current_price - reference_price) / reference_price) * 100
             
-            # Skip if stop-loss already triggered (avoid duplicate alerts)
-            if any(a['ticker'] == ticker and a['type'] == 'stop_loss_triggered' for a in stop_alerts):
-                continue
-            
             if abs(movement_pct) >= THRESHOLDS.get('position_movement_pct', 2.0):
-                alerts.append({
-                    'type': 'position_movement',
-                    'ticker': ticker,
-                    'severity': 'high' if abs(movement_pct) > 5 else 'medium',
-                    'current_price': current_price,
-                    'reference_price': reference_price,
-                    'movement_pct': movement_pct,
-                    'position_size': position.market_value,
-                    'unrealized_pnl': position.unrealized_pnl
-                })
+                should_alert_flag, reason = should_alert(
+                    ticker, movement_pct, 'position_movement', history
+                )
+                
+                if should_alert_flag:
+                    alerts.append({
+                        'type': 'position_movement',
+                        'ticker': ticker,
+                        'severity': 'high' if abs(movement_pct) > 5 else 'medium',
+                        'current_price': current_price,
+                        'reference_price': reference_price,
+                        'movement_pct': movement_pct,
+                        'position_size': position.market_value,
+                        'unrealized_pnl': position.unrealized_pnl,
+                        'alert_reason': reason
+                    })
+                    record_alert(ticker, movement_pct, 'position_movement', 
+                               'high' if abs(movement_pct) > 5 else 'medium', history)
     
     # Check indices
     for index in INDICES:
@@ -246,14 +376,21 @@ def check_movements(
             movement_pct = ((current_price - reference_price) / reference_price) * 100
             
             if abs(movement_pct) >= THRESHOLDS['index_movement_pct']:
-                alerts.append({
-                    'type': 'index_movement',
-                    'ticker': index,
-                    'severity': 'high',
-                    'current_price': current_price,
-                    'reference_price': reference_price,
-                    'movement_pct': movement_pct
-                })
+                should_alert_flag, reason = should_alert(
+                    index, movement_pct, 'index_movement', history
+                )
+                
+                if should_alert_flag:
+                    alerts.append({
+                        'type': 'index_movement',
+                        'ticker': index,
+                        'severity': 'high',
+                        'current_price': current_price,
+                        'reference_price': reference_price,
+                        'movement_pct': movement_pct,
+                        'alert_reason': reason
+                    })
+                    record_alert(index, movement_pct, 'index_movement', 'high', history)
     
     # Check portfolio drawdown
     if portfolio.positions:
@@ -268,39 +405,35 @@ def check_movements(
             
             threshold = THRESHOLDS.get('portfolio_drawdown_pct', 1.5)
             if drawdown_pct <= -threshold:
-                alerts.append({
-                    'type': 'portfolio_drawdown',
-                    'ticker': 'PORTFOLIO',
-                    'severity': 'critical',
-                    'current_value': total_current,
-                    'cost_basis': total_cost,
-                    'drawdown_pct': drawdown_pct
-                })
+                should_alert_flag, reason = should_alert(
+                    'PORTFOLIO', drawdown_pct, 'portfolio_drawdown', history
+                )
+                
+                if should_alert_flag:
+                    alerts.append({
+                        'type': 'portfolio_drawdown',
+                        'ticker': 'PORTFOLIO',
+                        'severity': 'critical',
+                        'current_value': total_current,
+                        'cost_basis': total_cost,
+                        'drawdown_pct': drawdown_pct,
+                        'alert_reason': reason
+                    })
+                    record_alert('PORTFOLIO', drawdown_pct, 'portfolio_drawdown', 'critical', history)
     
     # Check Bollinger Band breakouts
     bollinger_alerts = check_bollinger_breakouts(current_prices, portfolio)
     alerts.extend(bollinger_alerts)
     
+    save_alert_history(history)
     return alerts
 
 
-# Wrapper functions for backward compatibility and testing
+# Wrapper functions for backward compatibility
 def check_position_movements(positions: Dict, previous_close: Dict, current_prices: Dict, threshold_pct: float = 2.0) -> List[Dict]:
-    """
-    Check for significant position movements (wrapper for check_movements).
-    
-    Args:
-        positions: Dict of position data
-        previous_close: Previous closing prices
-        current_prices: Current market prices
-        threshold_pct: Alert threshold percentage
-        
-    Returns:
-        List of movement alerts
-    """
+    """Check for significant position movements (wrapper for check_movements)."""
     from portfolio.portfolio import Portfolio, Position
     
-    # Create a mock portfolio from positions dict
     portfolio = Portfolio(data_dir="data")
     for ticker, pos_data in positions.items():
         portfolio.positions[ticker] = Position(
@@ -311,23 +444,11 @@ def check_position_movements(positions: Dict, previous_close: Dict, current_pric
         )
     
     all_alerts = check_movements(current_prices, previous_close, portfolio)
-    
-    # Filter only position movement alerts
     return [a for a in all_alerts if a['type'] == 'position_movement']
 
 
 def check_portfolio_drawdown(portfolio_value: float, cost_basis: float, threshold_pct: float = 1.5) -> Dict:
-    """
-    Check if portfolio drawdown exceeds threshold.
-    
-    Args:
-        portfolio_value: Current portfolio value
-        cost_basis: Total cost basis
-        threshold_pct: Drawdown threshold percentage
-        
-    Returns:
-        Alert dict if drawdown exceeds threshold, None otherwise
-    """
+    """Check if portfolio drawdown exceeds threshold."""
     if cost_basis <= 0:
         return None
     
@@ -347,18 +468,7 @@ def check_portfolio_drawdown(portfolio_value: float, cost_basis: float, threshol
 
 
 def check_index_movements(current_prices: Dict, reference_prices: Dict, indices: List[str], threshold_pct: float = 3.0) -> List[Dict]:
-    """
-    Check for significant index movements.
-    
-    Args:
-        current_prices: Current market prices
-        reference_prices: Reference prices (previous close)
-        indices: List of index tickers to check
-        threshold_pct: Alert threshold percentage
-        
-    Returns:
-        List of index movement alerts
-    """
+    """Check for significant index movements."""
     alerts = []
     
     for index in indices:
@@ -382,25 +492,9 @@ def check_index_movements(current_prices: Dict, reference_prices: Dict, indices:
 
 
 def generate_alerts(alerts_or_current_prices, reference_prices=None, portfolio=None) -> Dict:
-    """
-    Generate alert summary from alerts list or by checking movements.
-    
-    Can be called in two ways:
-    1. generate_alerts(alerts_list) - Format alerts for output (used by tests)
-    2. generate_alerts(current_prices, reference_prices, portfolio) - Generate from data
-    
-    Args:
-        alerts_or_current_prices: Either a list of alerts or current prices dict
-        reference_prices: Reference prices (required for mode 2)
-        portfolio: Portfolio object (required for mode 2)
-        
-    Returns:
-        Dict with 'alert_count' and 'alerts' keys
-    """
-    # Mode 1: Called with pre-generated alerts list (from tests)
+    """Generate alert summary from alerts list or by checking movements."""
     if isinstance(alerts_or_current_prices, list):
         alerts = alerts_or_current_prices
-    # Mode 2: Called with price data - generate alerts
     elif reference_prices is not None and portfolio is not None:
         alerts = check_movements(alerts_or_current_prices, reference_prices, portfolio)
     else:
@@ -414,7 +508,7 @@ def generate_alerts(alerts_or_current_prices, reference_prices=None, portfolio=N
 
 
 def run_monitor():
-    """Run the monitoring check."""
+    """Run the monitoring check with deduplication."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting intraday monitor...")
     
     # Load portfolio
@@ -455,6 +549,7 @@ def run_monitor():
             print(f"Type: {alert['type'].upper()}")
             print(f"Ticker: {alert['ticker']}")
             print(f"Severity: {alert['severity'].upper()}")
+            print(f"Reason: {alert.get('alert_reason', 'N/A')}")
             
             if alert['type'] == 'position_movement':
                 print(f"Movement: {alert['movement_pct']:+.2f}%")
@@ -468,7 +563,7 @@ def run_monitor():
                 print(f"Value: €{alert['current_value']:.2f} (cost: €{alert['cost_basis']:.2f})")
             elif alert['type'] == 'stop_loss_triggered':
                 print(f"🚨 STOP-LOSS TRIGGERED 🚨")
-                print(f"Drawdown: {alert['drawdown_pct']:+.2f}% (threshold: -{alert['stop_threshold']}%)")
+                print(f"Drawdown: {alert['drawdown_pct']:.2f}% (threshold: -{alert['stop_threshold']}%)")
                 print(f"Price: €{alert['current_price']:.2f} (entry: €{alert['entry_price']:.2f})")
                 print(f"ACTION REQUIRED: {alert['action_required']}")
             elif alert['type'] == 'bollinger_breakout':
@@ -492,12 +587,21 @@ def run_monitor():
         print("\nJSON_OUTPUT:")
         print(json.dumps(output, indent=2))
         
-        return alerts, 1  # Exit code 1 = alert triggered
+        return alerts, 1
     else:
         print("✓ No significant movements detected.")
         print(f"Portfolio Value: €{portfolio.total_value:.2f}")
         
-        return [], 0  # Exit code 0 = normal
+        # Show suppressed alerts count
+        history = load_alert_history()
+        recent_suppressed = len([
+            a for a in history.get('alerts', [])
+            if datetime.now() - datetime.fromisoformat(a['timestamp']) < timedelta(hours=COOLDOWN_HOURS)
+        ])
+        if recent_suppressed > 0:
+            print(f"(Alert history: {recent_suppressed} tickers in cooldown period)")
+        
+        return [], 0
 
 
 if __name__ == "__main__":
@@ -508,4 +612,4 @@ if __name__ == "__main__":
         print(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(2)  # Exit code 2 = error
+        sys.exit(2)

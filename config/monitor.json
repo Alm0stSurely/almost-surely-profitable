@@ -14,5 +14,10 @@
     "us_close_utc": "21:00",
     "eu_open_utc": "08:00",
     "eu_close_utc": "16:30"
+  },
+  "alert_deduplication": {
+    "cooldown_hours": 6,
+    "escalation_threshold_pct": 2.0,
+    "reset_at_market_open": true
   }
 }
