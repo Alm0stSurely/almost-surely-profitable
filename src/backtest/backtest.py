@@ -258,7 +258,7 @@ class BacktestEngine:
             if action_type == "buy":
                 self.portfolio.buy(ticker, pct, price)
             elif action_type == "sell":
-                self.portfolio.sell(ticker, price)
+                self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
     def _execute_equal_weight_strategy(self, current_prices: Dict[str, float]):
         """Execute equal weight buy-and-hold strategy."""

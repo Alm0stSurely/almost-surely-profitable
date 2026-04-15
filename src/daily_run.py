@@ -199,7 +199,7 @@ def run_daily_pipeline(dry_run: bool = False):
                         'status': 'executed'
                     })
             elif action_type == 'sell':
-                success = portfolio.sell(ticker, current_price)
+                success = portfolio.sell(ticker, current_price, pct=pct if pct > 0 else None)
                 if success:
                     executed_trades.append({
                         'ticker': ticker,

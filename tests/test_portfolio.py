@@ -122,6 +122,44 @@ def test_sell_order():
         print("✓ Sell order test passed\n")
 
 
+def test_partial_sell_order():
+    """Test partial sell order execution."""
+    print("Test 4b: Partial Sell Order Execution")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        
+        # Buy using 50% cash = 12.5 shares @ $400
+        portfolio.buy("SPY", 50.0, 400.0)
+        initial_cash = portfolio.cash
+        
+        # Sell 40% of position = 5 shares @ $410
+        result = portfolio.sell("SPY", 410.0, pct=40.0)
+        
+        assert result is True, "Partial sell order should succeed"
+        assert "SPY" in portfolio.positions, "Position should remain after partial sell"
+        
+        # Remaining quantity: 12.5 * 0.6 = 7.5 shares
+        assert abs(portfolio.positions["SPY"].quantity - 7.5) < 0.01
+        # avg_price should remain unchanged
+        assert abs(portfolio.positions["SPY"].avg_price - 400.0) < 0.01
+        
+        # Cash should increase by 5 * 410 = 2050
+        expected_cash = initial_cash + (5.0 * 410.0)
+        assert abs(portfolio.cash - expected_cash) < 0.01
+        
+        # Realized PnL: 5 * (410 - 400) = 50
+        expected_pnl = 5.0 * (410.0 - 400.0)
+        assert abs(portfolio.total_realized_pnl - expected_pnl) < 0.01
+        
+        print(f"  Sold 40% of SPY position @ $410.00")
+        print(f"  Remaining quantity: {portfolio.positions['SPY'].quantity:.4f}")
+        print(f"  Realized PnL: ${portfolio.total_realized_pnl:.2f}")
+        print(f"  Cash after sale: ${portfolio.cash:.2f}")
+        print("✓ Partial sell order test passed\n")
+
+
 def test_insufficient_funds():
     """Test buy order with invalid parameters."""
     print("Test 5: Invalid Order Protection")
@@ -206,6 +244,7 @@ if __name__ == "__main__":
     test_portfolio_initialization()
     test_buy_order()
     test_sell_order()
+    test_partial_sell_order()
     test_insufficient_funds()
     test_position_update()
     test_portfolio_persistence()
