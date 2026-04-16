@@ -172,10 +172,16 @@ def tail_risk_analysis(
     metrics['var_95_pct'] = var_95 * 100
     
     # Skewness (asymmetry of returns)
-    metrics['skewness'] = float(pd.Series(returns).skew())
+    if len(returns) >= 3:
+        metrics['skewness'] = float(pd.Series(returns).skew())
+    else:
+        metrics['skewness'] = 0.0
     
     # Kurtosis (fat tails)
-    metrics['kurtosis'] = float(pd.Series(returns).kurtosis())
+    if len(returns) >= 4:
+        metrics['kurtosis'] = float(pd.Series(returns).kurtosis())
+    else:
+        metrics['kurtosis'] = 0.0
     
     # Maximum drawdown
     cumulative = np.cumprod(1 + returns)

@@ -52,6 +52,7 @@ class Trade:
     price: float
     total_value: float
     fees: float = 0.0
+    realized_pnl: float = 0.0
 
 
 class Portfolio:
@@ -136,7 +137,9 @@ class Portfolio:
             json.dump(state, f, indent=2)
     
     def save_trade(self, trade: Trade) -> None:
-        """Append trade to history file."""
+        """Append trade to history file and in-memory list."""
+        self.trades.append(trade)
+        
         trades = []
         if self.trades_file.exists():
             try:
@@ -288,7 +291,8 @@ class Portfolio:
             action='sell',
             quantity=quantity_to_sell,
             price=current_price,
-            total_value=sale_value
+            total_value=sale_value,
+            realized_pnl=realized_pnl
         )
         self.save_trade(trade)
         

@@ -201,12 +201,15 @@ def run_daily_pipeline(dry_run: bool = False):
             elif action_type == 'sell':
                 success = portfolio.sell(ticker, current_price, pct=pct if pct > 0 else None)
                 if success:
+                    # Get realized PnL from the most recent trade
+                    realized_pnl = portfolio.trades[-1].realized_pnl if portfolio.trades else 0.0
                     executed_trades.append({
                         'ticker': ticker,
                         'action': 'sell',
                         'pct': pct,
                         'price': current_price,
-                        'status': 'executed'
+                        'status': 'executed',
+                        'realized_pnl': realized_pnl
                     })
             elif action_type == 'hold':
                 print(f"  • {ticker}: HOLD")

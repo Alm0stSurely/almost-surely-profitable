@@ -100,7 +100,8 @@ def test_check_position_movements_alert():
     previous_close = {"RMS.PA": 1669.50}
     current_prices = {"RMS.PA": 1626.50}  # -2.58% drop
     
-    alerts = check_position_movements(positions, previous_close, current_prices, threshold_pct=2.0)
+    with patch('monitor.load_alert_history', return_value={'alerts': [], 'last_reset': datetime.now().isoformat()}):
+        alerts = check_position_movements(positions, previous_close, current_prices, threshold_pct=2.0)
     
     assert len(alerts) > 0
     assert alerts[0]['type'] == 'position_movement'

@@ -74,7 +74,7 @@ def calculate_sharpe_ratio(
     mean_excess = np.mean(excess_returns)
     std_excess = np.std(excess_returns, ddof=1)
     
-    if std_excess == 0:
+    if std_excess == 0 or np.isnan(std_excess):
         return 0.0
     
     sharpe = mean_excess / std_excess
@@ -174,13 +174,16 @@ def calculate_sortino_ratio(
     
     downside_std = np.std(downside_returns, ddof=1)
     
-    if downside_std == 0:
+    if downside_std == 0 or np.isnan(downside_std):
         return 0.0
     
     sortino = mean_excess / downside_std
     
     if annualized:
         sortino = sortino * np.sqrt(252)
+    
+    if np.isnan(sortino) or np.isinf(sortino):
+        return 0.0
     
     return float(sortino)
 

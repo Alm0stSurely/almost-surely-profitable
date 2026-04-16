@@ -116,6 +116,10 @@ def test_sell_order():
         expected_pnl = 10.0 * (410.0 - 400.0)
         assert abs(portfolio.total_realized_pnl - expected_pnl) < 0.01
         
+        # Trade history should record realized PnL
+        assert len(portfolio.trades) == 2  # buy + sell
+        assert abs(portfolio.trades[1].realized_pnl - expected_pnl) < 0.01
+        
         print(f"  Sold entire SPY position @ $410.00")
         print(f"  Realized PnL: ${portfolio.total_realized_pnl:.2f}")
         print(f"  Cash after sale: ${portfolio.cash:.2f}")
@@ -152,6 +156,10 @@ def test_partial_sell_order():
         # Realized PnL: 5 * (410 - 400) = 50
         expected_pnl = 5.0 * (410.0 - 400.0)
         assert abs(portfolio.total_realized_pnl - expected_pnl) < 0.01
+        
+        # Trade history should record realized PnL for partial sell
+        assert len(portfolio.trades) == 2  # buy + partial sell
+        assert abs(portfolio.trades[1].realized_pnl - expected_pnl) < 0.01
         
         print(f"  Sold 40% of SPY position @ $410.00")
         print(f"  Remaining quantity: {portfolio.positions['SPY'].quantity:.4f}")
