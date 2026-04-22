@@ -22,6 +22,54 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class RandomStrategy:
+    """
+    Random baseline strategy for backtesting.
+    Generates random buy/sell/hold decisions to establish
+    a statistical baseline for strategy comparison.
+    """
+    
+    def __init__(self, seed: Optional[int] = None, max_position_pct: float = 30.0):
+        self.rng = np.random.RandomState(seed)
+        self.max_position_pct = max_position_pct
+        self.actions = ["buy", "sell", "hold"]
+        self.weights = [0.25, 0.25, 0.50]  # More holds than trades
+    
+    def generate_decisions(
+        self,
+        tickers: List[str],
+        portfolio: Portfolio,
+        current_prices: Dict[str, float]
+    ) -> List[Dict]:
+        """Generate random trading decisions for given tickers."""
+        decisions = []
+        
+        for ticker in tickers:
+            if ticker not in current_prices:
+                continue
+            
+            action = self.rng.choice(self.actions, p=self.weights)
+            
+            if action == "hold":
+                decisions.append({"ticker": ticker, "action": "hold", "pct": 0})
+                continue
+            
+            if action == "buy":
+                # Random allocation between 5% and max_position_pct
+                pct = self.rng.uniform(5.0, self.max_position_pct)
+                decisions.append({"ticker": ticker, "action": "buy", "pct": round(pct, 1)})
+            
+            elif action == "sell":
+                # Only sell if we have a position
+                pos = portfolio.positions.get(ticker)
+                if pos is not None and getattr(pos, 'quantity', 0) > 0:
+                    # Random partial or full sell
+                    pct = self.rng.uniform(25.0, 100.0)
+                    decisions.append({"ticker": ticker, "action": "sell", "pct": round(pct, 1)})
+        
+        return decisions
+
+
 class BacktestEngine:
     """
     Backtesting engine for paper trading strategies.
@@ -106,8 +154,9 @@ class BacktestEngine:
     def run_backtest(
         self,
         use_llm: bool = False,
-        strategy: str = "buy_and_hold",  # buy_and_hold, equal_weight, llm
-        benchmark: str = "SPY"
+        strategy: str = "buy_and_hold",  # buy_and_hold, equal_weight, llm, random
+        benchmark: str = "SPY",
+        random_seed: Optional[int] = None
     ) -> Dict:
         """
         Run the backtest simulation.
@@ -141,6 +190,9 @@ class BacktestEngine:
         # Initialize LLM agent if needed
         agent = TradingAgent() if use_llm else None
         
+        # Initialize random strategy if needed
+        random_strategy = RandomStrategy(seed=random_seed) if strategy == "random" else None
+        
         # Run simulation
         for i, current_date in enumerate(trading_dates):
             if i % 20 == 0:
@@ -160,6 +212,8 @@ class BacktestEngine:
                     self._execute_llm_strategy(data, current_date, agent, current_prices)
                 elif strategy == "equal_weight":
                     self._execute_equal_weight_strategy(current_prices)
+                elif strategy == "random" and random_strategy:
+                    self._execute_random_strategy(current_prices, random_strategy)
                 # buy_and_hold: do nothing after initial purchase
             
             # Record daily result
@@ -275,6 +329,33 @@ class BacktestEngine:
         
         for ticker, price in current_prices.items():
             self.portfolio.buy(ticker, pct_per_ticker, price)
+    
+    def _execute_random_strategy(
+        self,
+        current_prices: Dict[str, float],
+        random_strategy: RandomStrategy
+    ):
+        """Execute random baseline trading strategy."""
+        decisions = random_strategy.generate_decisions(
+            tickers=list(current_prices.keys()),
+            portfolio=self.portfolio,
+            current_prices=current_prices
+        )
+        
+        for action in decisions:
+            ticker = action.get("ticker")
+            action_type = action.get("action")
+            pct = action.get("pct", 0)
+            
+            if ticker not in current_prices:
+                continue
+            
+            price = current_prices[ticker]
+            
+            if action_type == "buy":
+                self.portfolio.buy(ticker, pct, price)
+            elif action_type == "sell":
+                self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
     def _record_daily_result(self, date: datetime, prices: Dict[str, float]):
         """Record daily portfolio state."""
@@ -432,7 +513,7 @@ def run_comparison_backtest(
     """
     tickers = tickers or ["SPY", "QQQ", "GLD"]
     
-    strategies = ["buy_and_hold", "equal_weight"]
+    strategies = ["buy_and_hold", "equal_weight", "random"]
     if include_llm:
         strategies.append("llm")
     
@@ -451,7 +532,10 @@ def run_comparison_backtest(
         )
         
         use_llm = (strategy == "llm")
-        result = engine.run_backtest(use_llm=use_llm, strategy=strategy)
+        kwargs = {"use_llm": use_llm, "strategy": strategy}
+        if strategy == "random":
+            kwargs["random_seed"] = 42
+        result = engine.run_backtest(**kwargs)
         results[strategy] = result
         
         print_backtest_report(result, strategy)

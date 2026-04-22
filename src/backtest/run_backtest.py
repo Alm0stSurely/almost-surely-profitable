@@ -71,7 +71,7 @@ Examples:
     parser.add_argument(
         "--strategy",
         type=str,
-        choices=["buy_and_hold", "equal_weight", "llm"],
+        choices=["buy_and_hold", "equal_weight", "llm", "random"],
         default="buy_and_hold",
         help="Trading strategy to test (default: buy_and_hold)"
     )
@@ -138,7 +138,7 @@ Examples:
     if args.compare:
         # Run comparison of all strategies
         results = {}
-        for strategy in ["buy_and_hold", "equal_weight", "llm"]:
+        for strategy in ["buy_and_hold", "equal_weight", "random", "llm"]:
             if strategy == "llm":
                 print(f"\n⚠️  LLM strategy may take longer due to API calls...")
             
@@ -150,11 +150,15 @@ Examples:
                 rebalance_frequency=args.frequency
             )
             
-            result = engine.run_backtest(
-                use_llm=(strategy == "llm"),
-                strategy=strategy,
-                benchmark=args.benchmark
-            )
+            kwargs = {
+                "use_llm": (strategy == "llm"),
+                "strategy": strategy,
+                "benchmark": args.benchmark
+            }
+            if strategy == "random":
+                kwargs["random_seed"] = 42
+            
+            result = engine.run_backtest(**kwargs)
             results[strategy] = result
             print_backtest_report(result, strategy)
         
@@ -185,11 +189,15 @@ Examples:
             rebalance_frequency=args.frequency
         )
         
-        result = engine.run_backtest(
-            use_llm=(args.strategy == "llm"),
-            strategy=args.strategy,
-            benchmark=args.benchmark
-        )
+        kwargs = {
+            "use_llm": (args.strategy == "llm"),
+            "strategy": args.strategy,
+            "benchmark": args.benchmark
+        }
+        if args.strategy == "random":
+            kwargs["random_seed"] = 42
+        
+        result = engine.run_backtest(**kwargs)
         
         print_backtest_report(result, args.strategy)
         
