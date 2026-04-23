@@ -95,16 +95,22 @@ class BacktestEngine:
         
     def fetch_historical_data(self) -> Dict[str, pd.DataFrame]:
         """Fetch historical data for backtest period."""
-        period = f"{(self.end_date - self.start_date).days + 60}d"
-        logger.info(f"Fetching data for {len(self.tickers)} tickers, period: {period}")
+        # Use start/end dates for absolute date range (not relative period)
+        start_str = self.start_date.strftime("%Y-%m-%d")
+        end_str = self.end_date.strftime("%Y-%m-%d")
+        logger.info(f"Fetching data for {len(self.tickers)} tickers, from {start_str} to {end_str}")
         
-        data = fetch_historical_data(self.tickers, period=period)
+        data = fetch_historical_data(
+            self.tickers,
+            start=start_str,
+            end=end_str,
+            interval="1d"
+        )
         
-        # Filter to backtest date range
+        # Filter to backtest date range using datetime comparison
         filtered_data = {}
         for ticker, df in data.items():
-            df = df[(df.index >= self.start_date.strftime("%Y-%m-%d")) & 
-                    (df.index <= self.end_date.strftime("%Y-%m-%d"))]
+            df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
             if not df.empty:
                 filtered_data[ticker] = df
         
@@ -119,8 +125,8 @@ class BacktestEngine:
         market_data = {}
         
         for ticker, df in data.items():
-            # Get data up to current date
-            mask = df.index <= current_date.strftime("%Y-%m-%d %H:%M:%S")
+            # Get data up to current date (normalize to date for daily data)
+            mask = df.index.date <= current_date.date()
             hist = df[mask]
             
             if len(hist) < 20:
@@ -143,9 +149,8 @@ class BacktestEngine:
             return []
         
         df = data[benchmark_ticker]
-        # Filter to backtest period
-        df = df[(df.index >= self.start_date.strftime("%Y-%m-%d")) & 
-                (df.index <= self.end_date.strftime("%Y-%m-%d"))]
+        # Filter to backtest period using datetime comparison
+        df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
         
         closes = df['Close'].values
         returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]

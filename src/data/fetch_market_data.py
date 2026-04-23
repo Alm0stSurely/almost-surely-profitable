@@ -66,7 +66,9 @@ ALL_TICKERS = get_all_tickers()
 def fetch_historical_data(
     tickers: Optional[List[str]] = None,
     period: str = "30d",
-    interval: str = "1d"
+    interval: str = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None
 ) -> Dict[str, pd.DataFrame]:
     """
     Fetch historical market data for specified tickers.
@@ -75,6 +77,8 @@ def fetch_historical_data(
         tickers: List of ticker symbols (default: all from universe config)
         period: Data period (default: "30d")
         interval: Data interval (default: "1d")
+        start: Start date string YYYY-MM-DD (overrides period if provided)
+        end: End date string YYYY-MM-DD (overrides period if provided)
 
     Returns:
         Dict mapping ticker to DataFrame with OHLCV data
@@ -95,11 +99,19 @@ def fetch_historical_data(
         try:
             logger.info(f"Fetching data for {ticker}...")
             stock = yf.Ticker(ticker)
-            hist = stock.history(period=period, interval=interval)
+            if start and end:
+                hist = stock.history(start=start, end=end, interval=interval)
+            else:
+                hist = stock.history(period=period, interval=interval)
 
             if hist.empty:
                 logger.warning(f"No data returned for {ticker}")
                 continue
+
+            # Normalize timezone-aware index to naive UTC to avoid
+            # offset-naive vs offset-aware comparison errors in backtest
+            if hist.index.tz is not None:
+                hist.index = hist.index.tz_convert("UTC").tz_localize(None)
 
             results[ticker] = hist
             logger.info(f"  {ticker}: {len(hist)} rows")
