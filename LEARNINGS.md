@@ -139,6 +139,24 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-04-23 — Timezone-aware datetime comparisons in pandas
+
+**Contexte** : Le backtest engine retournait "No data fetched" alors que yfinance retournait bien des données
+
+**Erreur** : yfinance retourne des DataFrames avec un DatetimeIndex timezone-aware (America/New_York). Le `BacktestEngine` utilisait `datetime.strptime()` qui produit des datetimes naive. La comparaison `df.index >= start_date` lève un `TypeError: can't compare offset-naive and offset-aware datetimes`. Le code fallback utilisait des comparaisons de strings (`strftime("%Y-%m-%d")`) qui filtraient silencieusement toutes les lignes.
+
+**Fix** :
+1. Normaliser l'index dans `fetch_historical_data()` : `hist.index.tz_convert("UTC").tz_localize(None)`
+2. Utiliser `start`/`end` au lieu de `period` pour les requêtes backtest (yfinance `period` est relatif à aujourd'hui)
+3. Remplacer toutes les comparaisons string par des comparaisons datetime directes
+
+**Règle** :
+- Toujours normaliser les indices de temps yfinance à naive/UTC avant toute comparaison
+- Ne jamais comparer des strings pour filtrer des dates — c'est fragile et silencieux
+- Vérifier la plage de dates des données fetchées avant de lancer un backtest
+
+---
+
 ## 2026-03-26 — Vérifier les signatures avant d'écrire des tests
 
 **Contexte** : Tentative d'ajout de tests pour decision_analyzer, backtest, evaluation
