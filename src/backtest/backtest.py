@@ -219,7 +219,8 @@ class BacktestEngine:
                     self._execute_equal_weight_strategy(current_prices)
                 elif strategy == "random" and random_strategy:
                     self._execute_random_strategy(current_prices, random_strategy)
-                # buy_and_hold: do nothing after initial purchase
+                elif strategy == "buy_and_hold":
+                    self._execute_buy_and_hold_strategy(current_prices)
             
             # Record daily result
             self._record_daily_result(current_date, current_prices)
@@ -321,6 +322,22 @@ class BacktestEngine:
     
     def _execute_equal_weight_strategy(self, current_prices: Dict[str, float]):
         """Execute equal weight buy-and-hold strategy."""
+        # Only execute once at start
+        if self.portfolio.positions:
+            return
+        
+        # Buy equal weight in all available tickers
+        n_tickers = len(current_prices)
+        if n_tickers == 0:
+            return
+        
+        pct_per_ticker = 90.0 / n_tickers  # 90% invested, 10% cash buffer
+        
+        for ticker, price in current_prices.items():
+            self.portfolio.buy(ticker, pct_per_ticker, price)
+    
+    def _execute_buy_and_hold_strategy(self, current_prices: Dict[str, float]):
+        """Execute pure buy-and-hold strategy: buy equal weight once, never rebalance."""
         # Only execute once at start
         if self.portfolio.positions:
             return
