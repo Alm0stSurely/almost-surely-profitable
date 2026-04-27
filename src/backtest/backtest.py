@@ -321,20 +321,55 @@ class BacktestEngine:
                 self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
     def _execute_equal_weight_strategy(self, current_prices: Dict[str, float]):
-        """Execute equal weight buy-and-hold strategy."""
-        # Only execute once at start
-        if self.portfolio.positions:
-            return
+        """
+        Execute equal weight strategy with periodic rebalancing.
         
-        # Buy equal weight in all available tickers
+        Buys equal weight on first day, then rebalances periodically
+        to maintain equal allocation across all tickers.
+        """
         n_tickers = len(current_prices)
         if n_tickers == 0:
             return
         
-        pct_per_ticker = 90.0 / n_tickers  # 90% invested, 10% cash buffer
+        target_pct_per_ticker = 90.0 / n_tickers
         
+        if not self.portfolio.positions:
+            # Initial purchase: buy equal weight in all tickers
+            for ticker, price in current_prices.items():
+                self.portfolio.buy(ticker, target_pct_per_ticker, price)
+            return
+        
+        # Rebalance: check if any position deviates significantly from target
+        total_value = self.portfolio.total_value
+        if total_value <= 0:
+            return
+        
+        # Calculate target dollar amount per ticker
+        target_value_per_ticker = total_value * (target_pct_per_ticker / 100)
+        
+        # First, sell positions that are overweight
+        for ticker, pos in list(self.portfolio.positions.items()):
+            if ticker not in current_prices:
+                continue
+            current_value = pos.market_value
+            if current_value > target_value_per_ticker * 1.05:  # 5% tolerance
+                overweight_pct = ((current_value - target_value_per_ticker) / current_value) * 100
+                self.portfolio.sell(ticker, current_prices[ticker], pct=overweight_pct)
+        
+        # Then, buy positions that are underweight
         for ticker, price in current_prices.items():
-            self.portfolio.buy(ticker, pct_per_ticker, price)
+            if ticker in self.portfolio.positions:
+                current_value = self.portfolio.positions[ticker].market_value
+            else:
+                current_value = 0
+            
+            if current_value < target_value_per_ticker * 0.95:  # 5% tolerance
+                underweight_value = target_value_per_ticker - current_value
+                # Convert to percentage of available cash
+                if self.portfolio.cash > 0:
+                    buy_pct = min((underweight_value / self.portfolio.cash) * 100, 100)
+                    if buy_pct > 1:  # Only buy if meaningful
+                        self.portfolio.buy(ticker, buy_pct, price)
     
     def _execute_buy_and_hold_strategy(self, current_prices: Dict[str, float]):
         """Execute pure buy-and-hold strategy: buy equal weight once, never rebalance."""
