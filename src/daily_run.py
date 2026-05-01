@@ -44,7 +44,7 @@ def run_daily_pipeline(dry_run: bool = False):
     
     # Step 1: Fetch market data
     print("\n[1/7] Fetching market data...")
-    market_data_raw = fetch_historical_data(ALL_TICKERS, period="30d")
+    market_data_raw = fetch_historical_data(ALL_TICKERS, period="30d", max_workers=8)
     print(f"  ✓ Fetched data for {len(market_data_raw)} assets")
     
     # Step 2: Calculate indicators
@@ -96,7 +96,7 @@ def run_daily_pipeline(dry_run: bool = False):
     portfolio = Portfolio(data_dir="data")
     
     # Update current prices in portfolio
-    current_prices = fetch_current_prices(list(portfolio.positions.keys()))
+    current_prices = fetch_current_prices(list(portfolio.positions.keys()), max_workers=4)
     portfolio.update_prices(current_prices)
     portfolio.save_state()
     

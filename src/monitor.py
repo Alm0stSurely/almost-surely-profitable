@@ -530,7 +530,7 @@ def run_monitor():
     
     # Fetch current prices
     print(f"Fetching prices for {len(tickers_to_monitor)} tickers...")
-    current_prices = fetch_current_prices(tickers_to_monitor)
+    current_prices = fetch_current_prices(tickers_to_monitor, max_workers=4)
     
     # Load reference prices
     reference_prices = load_previous_close(portfolio)
