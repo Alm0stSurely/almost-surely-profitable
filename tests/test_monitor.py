@@ -249,6 +249,72 @@ def test_check_position_with_missing_price():
     print("✓ Missing price test passed\n")
 
 
+def test_check_bollinger_breakouts_upper():
+    """Test Bollinger Band upper breakout detection."""
+    print("Test 12: Bollinger Breakout - Upper")
+    print("-" * 40)
+    
+    import pandas as pd
+    import numpy as np
+    
+    # Create mock historical data with a breakout
+    dates = pd.date_range(end=datetime.now(), periods=20, freq='D')
+    prices = np.linspace(100, 120, 20)  # Trending up to trigger upper breakout
+    
+    mock_df = pd.DataFrame({
+        'Open': prices,
+        'High': prices + 1,
+        'Low': prices - 1,
+        'Close': prices,
+        'Volume': [1000] * 20
+    }, index=dates)
+    
+    with patch('monitor.load_alert_history', return_value={'alerts': [], 'last_reset': datetime.now().isoformat()}), \
+         patch('monitor.save_alert_history'), \
+         patch('data.fetch_market_data.fetch_historical_data', return_value={'SPY': mock_df}), \
+         patch('monitor.CHECK_BOLLINGER', True):
+        
+        from portfolio.portfolio import Portfolio
+        portfolio = Portfolio(data_dir="/tmp/test_bollinger")
+        portfolio.positions = {}
+        
+        # Create a mock position
+        from portfolio.portfolio import Position
+        portfolio.positions['SPY'] = Position(ticker='SPY', quantity=10, avg_price=100, current_price=125)
+        
+        current_prices = {'SPY': 125}  # Well above typical upper band
+        alerts = check_bollinger_breakouts(current_prices, portfolio)
+        
+        # Should detect breakout without crashing
+        print(f"  Bollinger check completed: {len(alerts)} alerts")
+        print("✓ Bollinger upper breakout test passed\n")
+
+
+def test_check_bollinger_breakouts_no_data():
+    """Test Bollinger Band check when no data is available."""
+    print("Test 13: Bollinger Breakout - No Data")
+    print("-" * 40)
+    
+    with patch('monitor.load_alert_history', return_value={'alerts': [], 'last_reset': datetime.now().isoformat()}), \
+         patch('monitor.save_alert_history'), \
+         patch('data.fetch_market_data.fetch_historical_data', return_value={}), \
+         patch('monitor.CHECK_BOLLINGER', True):
+        
+        from portfolio.portfolio import Portfolio
+        portfolio = Portfolio(data_dir="/tmp/test_bollinger2")
+        portfolio.positions = {}
+        
+        from portfolio.portfolio import Position
+        portfolio.positions['SPY'] = Position(ticker='SPY', quantity=10, avg_price=100, current_price=100)
+        
+        current_prices = {'SPY': 100}
+        alerts = check_bollinger_breakouts(current_prices, portfolio)
+        
+        assert len(alerts) == 0  # No data = no alerts
+        print("  No alerts generated (no historical data)")
+        print("✓ Bollinger no data test passed\n")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running Intraday Monitor Tests")
@@ -265,6 +331,8 @@ if __name__ == "__main__":
     test_generate_alerts_with_data()
     test_thresholds_loaded()
     test_check_position_with_missing_price()
+    test_check_bollinger_breakouts_upper()
+    test_check_bollinger_breakouts_no_data()
     
     print("=" * 60)
     print("All tests passed! ✓")

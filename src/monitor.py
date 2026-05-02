@@ -243,7 +243,7 @@ def check_bollinger_breakouts(
     try:
         from data.indicators import calculate_bollinger_bands
         import pandas as pd
-        from data.fetch_market_data import fetch_market_data
+        from data.fetch_market_data import fetch_historical_data
     except ImportError:
         return alerts
     
@@ -256,11 +256,11 @@ def check_bollinger_breakouts(
         
         try:
             # Fetch recent data for Bollinger calculation
-            df = fetch_market_data(ticker, period='20d')
-            if df is None or len(df) < 20:
+            df = fetch_historical_data([ticker], period='20d')
+            if not df or ticker not in df or len(df[ticker]) < 20:
                 continue
             
-            upper, middle, lower = calculate_bollinger_bands(df['Close'])
+            upper, middle, lower = calculate_bollinger_bands(df[ticker]['Close'])
             
             if upper is None or lower is None:
                 continue
