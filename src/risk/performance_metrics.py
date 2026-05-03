@@ -74,7 +74,8 @@ def calculate_sharpe_ratio(
     mean_excess = np.mean(excess_returns)
     std_excess = np.std(excess_returns, ddof=1)
     
-    if std_excess == 0 or np.isnan(std_excess):
+    # Guard against numerical precision issues with near-zero volatility
+    if std_excess < 1e-15 or np.isnan(std_excess):
         return 0.0
     
     sharpe = mean_excess / std_excess
@@ -121,9 +122,9 @@ def calculate_beta_alpha(
     
     # Calculate covariance and variance
     covariance = np.cov(portfolio_returns, benchmark_returns)[0, 1]
-    benchmark_variance = np.var(benchmark_returns)
+    benchmark_variance = np.var(benchmark_returns, ddof=1)
     
-    if benchmark_variance == 0:
+    if benchmark_variance == 0 or benchmark_variance < 1e-15:
         return None, None
     
     beta = covariance / benchmark_variance
