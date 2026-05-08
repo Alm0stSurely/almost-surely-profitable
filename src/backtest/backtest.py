@@ -152,9 +152,12 @@ class BacktestEngine:
         # Filter to backtest period using datetime comparison
         df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
         
+        # Vectorized return calculation via numpy
         closes = df['Close'].values
-        returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-        return returns
+        if len(closes) < 2:
+            return []
+        returns = np.diff(closes) / closes[:-1]
+        return returns.tolist()
 
     def run_backtest(
         self,
@@ -181,6 +184,10 @@ class BacktestEngine:
         if not data:
             logger.error("No data fetched")
             return {}
+        
+        # Pre-compute price lookups for fast O(1) date access
+        logger.info("Pre-computing price lookups...")
+        self._precompute_price_lookups(data)
         
         # Initialize portfolio
         self.portfolio = Portfolio(
@@ -261,6 +268,22 @@ class BacktestEngine:
         dates = pd.to_datetime(data[first_ticker].index).tolist()
         return [d for d in dates if self.start_date <= d <= self.end_date]
     
+    def _precompute_price_lookups(self, data: Dict[str, pd.DataFrame]) -> None:
+        """
+        Pre-compute price lookups for O(1) date access during backtest.
+        
+        The original approach called strftime() on the entire DataFrame index
+        for every ticker on every day -- O(n_tickers * n_days * n_rows) overall.
+        Pre-computing a nested dict reduces _get_prices_for_date to O(n_tickers).
+        """
+        self._price_lookups = {}
+        for ticker, df in data.items():
+            # Build {date_obj: close_price} using vectorized index access
+            self._price_lookups[ticker] = {
+                idx.date(): float(row['Close'])
+                for idx, row in df.iterrows()
+            }
+    
     def _get_prices_for_date(
         self,
         data: Dict[str, pd.DataFrame],
@@ -268,14 +291,12 @@ class BacktestEngine:
     ) -> Dict[str, float]:
         """Get closing prices for all tickers on given date."""
         prices = {}
-        date_str = date.strftime("%Y-%m-%d")
+        date_only = date.date() if hasattr(date, 'date') else date
         
-        for ticker, df in data.items():
-            # Find row for this date
-            mask = df.index.strftime("%Y-%m-%d") == date_str
-            rows = df[mask]
-            if not rows.empty:
-                prices[ticker] = float(rows['Close'].iloc[-1])
+        for ticker, lookup in self._price_lookups.items():
+            price = lookup.get(date_only)
+            if price is not None:
+                prices[ticker] = price
         
         return prices
     
