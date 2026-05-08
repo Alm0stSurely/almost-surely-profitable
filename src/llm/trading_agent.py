@@ -388,7 +388,7 @@ class TradingAgent:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,
+            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
             "max_tokens": 16000,
         }
         
