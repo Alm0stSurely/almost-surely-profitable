@@ -165,11 +165,11 @@ def generate_weekly_report():
         print(f"\n🔄 No trades this week")
     
     # Save report
-    report_file = f"results/weekly-{today.strftime('%Y-W%W')}.md"
+    report_file = f"results/weekly-{today.strftime('%G-W%V')}.md"
     Path("results").mkdir(exist_ok=True)
     
     with open(report_file, 'w') as f:
-        f.write(f"# Weekly Report — Week {today.strftime('%Y-W%W')}\n\n")
+        f.write(f"# Weekly Report — Week {today.strftime('%G-W%V')}\n\n")
         f.write(f"**Period:** {week_start.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')}\n\n")
         
         # Portfolio Summary
