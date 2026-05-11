@@ -17,6 +17,7 @@ from data.fetch_market_data import fetch_historical_data
 from data.indicators import calculate_all_indicators, get_latest_indicators
 from portfolio.portfolio import Portfolio
 from llm.trading_agent import TradingAgent
+from backtest.backtest_cooldown import BacktestCooldownManager, CooldownConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -82,13 +83,17 @@ class BacktestEngine:
         end_date: str,
         initial_capital: float = 10000.0,
         tickers: Optional[List[str]] = None,
-        rebalance_frequency: str = "daily"  # daily, weekly
+        rebalance_frequency: str = "daily",  # daily, weekly
+        cooldown_config: Optional[CooldownConfig] = None,
+        enable_cooldowns: bool = False,
     ):
         self.start_date = datetime.strptime(start_date, "%Y-%m-%d")
         self.end_date = datetime.strptime(end_date, "%Y-%m-%d")
         self.initial_capital = initial_capital
         self.tickers = tickers or ["SPY", "QQQ", "GLD"]
         self.rebalance_frequency = rebalance_frequency
+        self.enable_cooldowns = enable_cooldowns
+        self.cooldown_manager = BacktestCooldownManager(config=cooldown_config) if enable_cooldowns else None
         
         self.portfolio = None
         self.results = []
@@ -177,7 +182,7 @@ class BacktestEngine:
             Backtest results dictionary
         """
         logger.info(f"Starting backtest from {self.start_date.date()} to {self.end_date.date()}")
-        logger.info(f"Strategy: {strategy}, Use LLM: {use_llm}")
+        logger.info(f"Strategy: {strategy}, Use LLM: {use_llm}, Cooldowns: {self.enable_cooldowns}")
         
         # Fetch data
         data = self.fetch_historical_data()
@@ -223,11 +228,11 @@ class BacktestEngine:
                 if strategy == "llm" and use_llm:
                     self._execute_llm_strategy(data, current_date, agent, current_prices)
                 elif strategy == "equal_weight":
-                    self._execute_equal_weight_strategy(current_prices)
+                    self._execute_equal_weight_strategy(current_date, current_prices)
                 elif strategy == "random" and random_strategy:
-                    self._execute_random_strategy(current_prices, random_strategy)
+                    self._execute_random_strategy(current_date, current_prices, random_strategy)
                 elif strategy == "buy_and_hold":
-                    self._execute_buy_and_hold_strategy(current_prices)
+                    self._execute_buy_and_hold_strategy(current_date, current_prices)
             
             # Record daily result
             self._record_daily_result(current_date, current_prices)
@@ -236,7 +241,7 @@ class BacktestEngine:
         benchmark_returns = self._get_benchmark_returns(data, benchmark)
         metrics = self._calculate_metrics(benchmark_returns)
         
-        return {
+        result = {
             "start_date": self.start_date.strftime("%Y-%m-%d"),
             "end_date": self.end_date.strftime("%Y-%m-%d"),
             "strategy": strategy,
@@ -260,6 +265,18 @@ class BacktestEngine:
             "daily_returns": metrics["daily_returns"],
             "daily_results": self.results
         }
+        
+        # Add cooldown metrics if enabled
+        if self.enable_cooldowns and self.cooldown_manager:
+            result["cooldown_metrics"] = self.cooldown_manager.get_metrics()
+            result["cooldown_config"] = {
+                "min_hold_days": self.cooldown_manager.config.min_hold_days,
+                "flip_cooldown_days": self.cooldown_manager.config.flip_cooldown_days,
+                "max_trades_per_week": self.cooldown_manager.config.max_trades_per_week,
+                "stop_loss_threshold_pct": self.cooldown_manager.config.stop_loss_threshold_pct,
+            }
+        
+        return result
     
     def _get_trading_dates(self, data: Dict[str, pd.DataFrame]) -> List[datetime]:
         """Get list of trading dates from data."""
@@ -325,7 +342,7 @@ class BacktestEngine:
         # Get LLM decision
         decision = agent.get_trading_decision(market_data, portfolio_summary)
         
-        # Execute actions
+        # Execute actions with cooldown checks
         for action in decision.get("actions", []):
             ticker = action.get("ticker")
             action_type = action.get("action")
@@ -337,11 +354,25 @@ class BacktestEngine:
             price = current_prices[ticker]
             
             if action_type == "buy":
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_buy(ticker, current_date)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked BUY {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_entry(ticker, current_date)
                 self.portfolio.buy(ticker, pct, price)
             elif action_type == "sell":
+                pos = self.portfolio.positions.get(ticker)
+                avg_price = pos.avg_price if pos else 0
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_sell(ticker, current_date, price, avg_price)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked SELL {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_exit(ticker, current_date)
                 self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
-    def _execute_equal_weight_strategy(self, current_prices: Dict[str, float]):
+    def _execute_equal_weight_strategy(self, current_date: datetime, current_prices: Dict[str, float]):
         """
         Execute equal weight strategy with periodic rebalancing.
         
@@ -357,6 +388,8 @@ class BacktestEngine:
         if not self.portfolio.positions:
             # Initial purchase: buy equal weight in all tickers
             for ticker, price in current_prices.items():
+                if self.enable_cooldowns and self.cooldown_manager:
+                    self.cooldown_manager.record_entry(ticker, current_date)
                 self.portfolio.buy(ticker, target_pct_per_ticker, price)
             return
         
@@ -375,6 +408,12 @@ class BacktestEngine:
             current_value = pos.market_value
             if current_value > target_value_per_ticker * 1.05:  # 5% tolerance
                 overweight_pct = ((current_value - target_value_per_ticker) / current_value) * 100
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_sell(ticker, current_date, current_prices[ticker], pos.avg_price)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked rebalance SELL {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_exit(ticker, current_date)
                 self.portfolio.sell(ticker, current_prices[ticker], pct=overweight_pct)
         
         # Then, buy positions that are underweight
@@ -390,9 +429,15 @@ class BacktestEngine:
                 if self.portfolio.cash > 0:
                     buy_pct = min((underweight_value / self.portfolio.cash) * 100, 100)
                     if buy_pct > 1:  # Only buy if meaningful
+                        if self.enable_cooldowns and self.cooldown_manager:
+                            allowed, reason = self.cooldown_manager.can_buy(ticker, current_date)
+                            if not allowed:
+                                logger.debug(f"Cooldown blocked rebalance BUY {ticker}: {reason}")
+                                continue
+                            self.cooldown_manager.record_entry(ticker, current_date)
                         self.portfolio.buy(ticker, buy_pct, price)
     
-    def _execute_buy_and_hold_strategy(self, current_prices: Dict[str, float]):
+    def _execute_buy_and_hold_strategy(self, current_date: datetime, current_prices: Dict[str, float]):
         """Execute pure buy-and-hold strategy: buy equal weight once, never rebalance."""
         # Only execute once at start
         if self.portfolio.positions:
@@ -406,10 +451,13 @@ class BacktestEngine:
         pct_per_ticker = 90.0 / n_tickers  # 90% invested, 10% cash buffer
         
         for ticker, price in current_prices.items():
+            if self.enable_cooldowns and self.cooldown_manager:
+                self.cooldown_manager.record_entry(ticker, current_date)
             self.portfolio.buy(ticker, pct_per_ticker, price)
     
     def _execute_random_strategy(
         self,
+        current_date: datetime,
         current_prices: Dict[str, float],
         random_strategy: RandomStrategy
     ):
@@ -431,8 +479,22 @@ class BacktestEngine:
             price = current_prices[ticker]
             
             if action_type == "buy":
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_buy(ticker, current_date)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked BUY {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_entry(ticker, current_date)
                 self.portfolio.buy(ticker, pct, price)
             elif action_type == "sell":
+                pos = self.portfolio.positions.get(ticker)
+                avg_price = pos.avg_price if pos else 0
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_sell(ticker, current_date, price, avg_price)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked SELL {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_exit(ticker, current_date)
                 self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
     def _record_daily_result(self, date: datetime, prices: Dict[str, float]):

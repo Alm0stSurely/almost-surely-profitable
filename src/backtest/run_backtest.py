@@ -111,9 +111,27 @@ Examples:
         help="Generate visualization plots"
     )
     parser.add_argument(
-        "--compare",
+        "--cooldowns",
         action="store_true",
-        help="Compare all strategies"
+        help="Enable position cooldown guardrails (min_hold, flip_cooldown, weekly_cap)"
+    )
+    parser.add_argument(
+        "--min-hold-days",
+        type=int,
+        default=5,
+        help="Minimum holding period in days (default: 5)"
+    )
+    parser.add_argument(
+        "--flip-cooldown-days",
+        type=int,
+        default=10,
+        help="Flip cooldown in days (default: 10)"
+    )
+    parser.add_argument(
+        "--max-trades-per-week",
+        type=int,
+        default=2,
+        help="Maximum trades per week (default: 2)"
     )
     
     args = parser.parse_args()
@@ -133,7 +151,18 @@ Examples:
     print(f"Tickers: {', '.join(args.tickers)}")
     print(f"Initial Capital: €{args.capital:,.2f}")
     print(f"Frequency: {args.frequency}")
+    print(f"Cooldowns: {'Enabled' if args.cooldowns else 'Disabled'}")
     print(f"{'='*70}\n")
+    
+    # Build cooldown config if enabled
+    cooldown_config = None
+    if args.cooldowns:
+        from backtest.backtest_cooldown import CooldownConfig
+        cooldown_config = CooldownConfig(
+            min_hold_days=args.min_hold_days,
+            flip_cooldown_days=args.flip_cooldown_days,
+            max_trades_per_week=args.max_trades_per_week
+        )
     
     if args.compare:
         # Run comparison of all strategies
@@ -147,7 +176,9 @@ Examples:
                 end_date=args.end,
                 initial_capital=args.capital,
                 tickers=args.tickers,
-                rebalance_frequency=args.frequency
+                rebalance_frequency=args.frequency,
+                enable_cooldowns=args.cooldowns,
+                cooldown_config=cooldown_config
             )
             
             kwargs = {
@@ -186,7 +217,9 @@ Examples:
             end_date=args.end,
             initial_capital=args.capital,
             tickers=args.tickers,
-            rebalance_frequency=args.frequency
+            rebalance_frequency=args.frequency,
+            enable_cooldowns=args.cooldowns,
+            cooldown_config=cooldown_config
         )
         
         kwargs = {
