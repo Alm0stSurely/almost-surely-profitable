@@ -98,6 +98,14 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with added indicator columns
     """
+    # Drop rows with NaN Close prices to avoid indicator corruption
+    # This handles cases where yfinance returns a row for today before market close
+    df = df.dropna(subset=['Close']).copy()
+    
+    if df.empty:
+        logger.warning("DataFrame is empty after dropping NaN Close prices")
+        return df
+    
     prices = df['Close']
     
     # Moving averages

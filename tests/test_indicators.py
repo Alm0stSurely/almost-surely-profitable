@@ -206,6 +206,35 @@ def test_correlation_matrix():
     print("✓ Correlation matrix test passed\n")
 
 
+def test_nan_handling():
+    """Test that NaN Close prices are handled gracefully."""
+    print("Test 8: NaN Close Price Handling")
+    print("-" * 40)
+    
+    from data.indicators import calculate_all_indicators, get_latest_indicators
+    
+    # Create DataFrame with NaN at the end (simulates yfinance pre-market data)
+    prices = pd.DataFrame({
+        'Close': [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, np.nan]
+    })
+    
+    df_with_indicators = calculate_all_indicators(prices)
+    latest = get_latest_indicators(df_with_indicators)
+    
+    # Should drop NaN row and use last valid price (105.0)
+    assert not pd.isna(latest['price']), "Price should not be NaN after dropping NaN rows"
+    assert latest['price'] == 105.0, f"Expected price 105.0, got {latest['price']}"
+    assert not pd.isna(latest['rsi_14']), "RSI should not be NaN"
+    assert not pd.isna(latest['bb_position']), "Bollinger position should not be NaN"
+    assert not pd.isna(latest['drawdown']), "Drawdown should not be NaN"
+    
+    print(f"  Input: 7 rows with last Close = NaN")
+    print(f"  Output price: {latest['price']:.2f} (expected 105.00)")
+    print(f"  RSI(14): {latest['rsi_14']:.2f}")
+    print(f"  Bollinger position: {latest['bb_position']:.2f}")
+    print("✓ NaN handling test passed\n")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Technical Indicators Test Suite")

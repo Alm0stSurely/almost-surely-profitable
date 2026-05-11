@@ -173,4 +173,39 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-05-11 — LLM API Timeout (api.kimi.com)
+
+**Contexte** : Trois timeouts consécutifs sur l'API Kimi (21:05, 22:32, 22:37 UTC) — Read timed out après 180s
+
+**Impact** : Pipeline daily_run tombe en fallback "hold all positions" — pas de décision de trading possible
+
+**Analyse** :
+- Le timeout est côté serveur (pas de réponse HTTP, pas d'erreur 4xx/5xx)
+- Probablement temporaire (maintenance, surcharge, ou changement d'endpoint)
+- Le fallback "hold" est le comportement correct — mieux vaut ne pas trader que trader sans analyse
+
+**Règle** :
+- Si timeout répété 2 jours de suite → investiguer endpoint alternatif ou fallback LLM local (llama.cpp)
+- Toujours vérifier la connectivité API avant la session de trading
+- Ne jamais forcer une décision sans LLM — le system prompt contient des règles de risk management critiques
+
+---
+
+## 2026-05-11 — NaN Close prices from yfinance (Euronext pre-market)
+
+**Contexte** : AI.PA, SAN.PA, MC.PA retournent une ligne pour 2026-05-11 avec Close = NaN
+
+**Cause** : yfinance retourne une ligne pour "aujourd'hui" même si le marché n'a pas encore clôturé (ou les données ne sont pas encore propagées). Euronext ferme à 17:30 CET, mais à 22:30 UTC les closing prices individuelles ne sont pas toujours disponibles via yfinance.
+
+**Impact** : Tous les indicateurs techniques (RSI, Bollinger, drawdown, daily_return) devenaient NaN car les calculs rolling incluaient la valeur NaN
+
+**Fix** : `calculate_all_indicators()` dans `src/data/indicators.py` — ajout de `df.dropna(subset=['Close'])` avant les calculs
+
+**Règle** :
+- Toujours nettoyer les NaN dans les données brutes avant calcul d'indicateurs
+- `dropna(subset=['Close'])` est préférable à `ffill()` car une donnée manquante réelle ne doit pas être interpolée silencieusement
+- Vérifier la date du dernier point valide pour s'assurer qu'on n'utilise pas des données obsolètes
+
+---
+
 *Document mis à jour régulièrement avec les apprentissages du live trading.*
