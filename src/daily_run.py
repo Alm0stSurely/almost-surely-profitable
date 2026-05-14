@@ -123,9 +123,16 @@ def run_daily_pipeline(dry_run: bool = False):
     
     if position_returns and len(position_returns) > 0:
         cvar_result = calculate_portfolio_cvar(position_returns, portfolio_weights)
+        
+        # Align returns for tail risk analysis (same min length)
+        min_len = min(len(r) for r in position_returns.values())
+        aligned_portfolio_returns = np.zeros(min_len)
+        for ticker, returns in position_returns.items():
+            weight = portfolio_weights.get(ticker, 0.0)
+            aligned_portfolio_returns += returns[-min_len:] * weight
+        
         tail_risk = tail_risk_analysis(
-            np.array([sum(position_returns[t] * portfolio_weights[t] 
-                         for t in position_returns if t in portfolio_weights)]),
+            aligned_portfolio_returns,
             benchmark_returns=None
         )
         

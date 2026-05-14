@@ -207,7 +207,8 @@ def analyze_market_data(data_dict: Dict[str, pd.DataFrame]) -> Dict:
             results[ticker] = {
                 "dataframe": df_with_indicators,
                 "latest": get_latest_indicators(df_with_indicators),
-                "total_return": (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0
+                "total_return": (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0,
+                "returns": df_with_indicators['Daily_Return'].dropna().tolist()
             }
         except Exception as e:
             logger.error(f"Error calculating indicators for {ticker}: {e}")
