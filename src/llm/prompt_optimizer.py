@@ -247,8 +247,8 @@ Respond in JSON format:
             print(f"\nBacktesting: {variant.name}")
             print(f"Description: {variant.description}")
         
-        # Initialize portfolio
-        portfolio = Portfolio(initial_capital=self.initial_capital)
+        # Initialize portfolio (ephemeral backtest, no persistence)
+        portfolio = Portfolio(state_file="backtest_state.json", trades_file="backtest_trades.json", data_dir="/tmp/backtest")
         
         # Get trading dates from market data
         # Use SPY as reference for dates
@@ -264,9 +264,10 @@ Respond in JSON format:
         if len(trading_dates) == 0:
             raise ValueError(f"No trading dates found between {self.start_date} and {self.end_date}")
         
-        # Track trades
+        # Track trades and portfolio peak
         all_trades = []
         daily_values = []
+        peak_value = self.initial_capital
         
         # Simulate each trading day
         for i, date in enumerate(trading_dates):
@@ -276,6 +277,7 @@ Respond in JSON format:
             historical_slice = {
                 ticker: df[df.index <= date] 
                 for ticker, df in market_data.items()
+                if not df.empty
             }
             
             # Calculate indicators
@@ -289,8 +291,13 @@ Respond in JSON format:
             }
             portfolio.update_prices(current_prices)
             
+            # Track peak for drawdown
+            current_total = portfolio.total_value
+            if current_total > peak_value:
+                peak_value = current_total
+            
             # Build prompt context
-            context = self._build_context(portfolio, market_analysis, date_str)
+            context = self._build_context(portfolio, market_analysis, date_str, peak_value)
             
             # Get LLM decision (using the variant's system prompt)
             # Note: This requires API calls - for actual backtest we'd use cached decisions
@@ -305,15 +312,15 @@ Respond in JSON format:
             # Record daily value
             daily_values.append({
                 "date": date_str,
-                "value": portfolio.get_total_value(),
+                "value": portfolio.total_value,
                 "cash": portfolio.cash
             })
             
             if verbose and i % 10 == 0:
-                print(f"  {date_str}: Portfolio = ${portfolio.get_total_value():.2f}")
+                print(f"  {date_str}: Portfolio = ${portfolio.total_value:.2f}")
         
         # Calculate final metrics
-        final_value = portfolio.get_total_value()
+        final_value = portfolio.total_value
         total_return = (final_value - self.initial_capital) / self.initial_capital
         
         # Calculate Sharpe and other metrics from daily values
@@ -340,7 +347,7 @@ Respond in JSON format:
             total_trades=len(all_trades),
             buy_trades=sum(1 for t in all_trades if t["action"] == "buy"),
             sell_trades=sum(1 for t in all_trades if t["action"] == "sell"),
-            avg_trades_per_day=len(all_trades) / len(trading_dates) if trading_dates.any() else 0,
+            avg_trades_per_day=len(all_trades) / len(trading_dates) if len(trading_dates) > 0 else 0,
             volatility=returns.std() * np.sqrt(252) * 100 if len(returns) > 1 else 0,
             calmar_ratio=(total_return * 100) / abs(max_drawdown * 100) if max_drawdown != 0 else 0,
             final_portfolio_value=final_value,
@@ -349,13 +356,15 @@ Respond in JSON format:
         
         return result
     
-    def _build_context(self, portfolio: Portfolio, market_analysis: Dict, date: str) -> Dict:
+    def _build_context(self, portfolio: Portfolio, market_analysis: Dict, date: str, peak_value: float) -> Dict:
         """Build the context dictionary for LLM prompting."""
+        current_total = portfolio.total_value
+        drawdown = (current_total - peak_value) / peak_value if peak_value > 0 else 0.0
         return {
             "cash": portfolio.cash,
             "positions": portfolio.positions,
-            "total_value": portfolio.get_total_value(),
-            "drawdown": portfolio.get_drawdown(),
+            "total_value": current_total,
+            "drawdown": drawdown,
             "market_summary": market_analysis,
             "date": date
         }
