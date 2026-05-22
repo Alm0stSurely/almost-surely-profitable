@@ -288,5 +288,35 @@
     "total_value": 5000.0,
     "fees": 0.0,
     "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-22T10:02:42.230941",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 50.0,
+    "price": 100.0,
+    "total_value": 5000.0,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-22T10:10:27.621601",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 25.0,
+    "price": 100.0,
+    "total_value": 2500.0,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-22T22:33:00.015929",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 12.5,
+    "price": 100.0,
+    "total_value": 1250.0,
+    "fees": 0.0,
+    "realized_pnl": 0.0
   }
 ]

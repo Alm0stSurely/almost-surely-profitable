@@ -239,6 +239,8 @@ class Portfolio:
         )
         self.save_trade(trade)
         
+        self.save_state()
+        
         print(f"✓ BUY {ticker}: {quantity:.4f} @ €{current_price:.2f} = €{total_cost:.2f}")
         return True
     
@@ -305,6 +307,8 @@ class Portfolio:
             # Reduce position
             pos.quantity -= quantity_to_sell
             pos.current_price = current_price
+        
+        self.save_state()
         
         return True
     

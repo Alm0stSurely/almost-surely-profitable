@@ -1,0 +1,13 @@
+{
+  "cash": 1250.0,
+  "total_realized_pnl": 0.0,
+  "positions": {
+    "SPY": {
+      "quantity": 87.5,
+      "avg_price": 100.0,
+      "current_price": 100.0
+    }
+  },
+  "last_updated": "2026-05-22T22:33:00.017127",
+  "total_value": 10000.0
+}
