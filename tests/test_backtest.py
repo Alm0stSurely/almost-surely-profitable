@@ -16,21 +16,25 @@ from portfolio.portfolio import Portfolio
 class TestRandomStrategy:
     """Tests for the RandomStrategy baseline."""
 
-    def test_init_with_seed(self):
+    def _make_portfolio(self, tmp_path):
+        """Create an isolated Portfolio using a temporary directory."""
+        return Portfolio(state_file="test_random.json", data_dir=str(tmp_path))
+
+    def test_init_with_seed(self, tmp_path):
         """Test that RandomStrategy initializes with a seed."""
         rs = RandomStrategy(seed=42)
         assert rs.rng is not None
         assert rs.max_position_pct == 30.0
 
-    def test_init_custom_max_position(self):
+    def test_init_custom_max_position(self, tmp_path):
         """Test custom max position percentage."""
         rs = RandomStrategy(seed=42, max_position_pct=20.0)
         assert rs.max_position_pct == 20.0
 
-    def test_generate_decisions_respects_weights(self):
+    def test_generate_decisions_respects_weights(self, tmp_path):
         """Test that decisions respect action probabilities."""
         rs = RandomStrategy(seed=42)
-        portfolio = Portfolio(state_file="test_random.json", data_dir="data/test")
+        portfolio = self._make_portfolio(tmp_path)
 
         prices = {"SPY": 100.0, "QQQ": 200.0, "GLD": 150.0}
 
@@ -48,10 +52,10 @@ class TestRandomStrategy:
         assert buy_count > 0, "Expected some buy decisions over 300 samples"
         assert actions.count("sell") == 0, "Should not sell without positions"
 
-    def test_generate_decisions_sell_only_with_positions(self):
+    def test_generate_decisions_sell_only_with_positions(self, tmp_path):
         """Test that sell only happens when we have positions."""
         rs = RandomStrategy(seed=42)
-        portfolio = Portfolio(state_file="test_random.json", data_dir="data/test")
+        portfolio = self._make_portfolio(tmp_path)
         portfolio.buy("SPY", 50.0, 100.0)
 
         prices = {"SPY": 100.0}
@@ -72,10 +76,10 @@ class TestRandomStrategy:
         # (25% probability * 200 = expected 50 sells)
         assert sell_found, "Expected at least one sell decision with positions"
 
-    def test_generate_decisions_buy_range(self):
+    def test_generate_decisions_buy_range(self, tmp_path):
         """Test that buy pct is within expected range."""
         rs = RandomStrategy(seed=42, max_position_pct=30.0)
-        portfolio = Portfolio(state_file="test_random.json", data_dir="data/test")
+        portfolio = self._make_portfolio(tmp_path)
         prices = {"SPY": 100.0}
 
         for _ in range(100):
@@ -84,11 +88,11 @@ class TestRandomStrategy:
                 if d["action"] == "buy":
                     assert 5.0 <= d["pct"] <= 30.0
 
-    def test_reproducibility_with_same_seed(self):
+    def test_reproducibility_with_same_seed(self, tmp_path):
         """Test that same seed produces identical decisions."""
         rs1 = RandomStrategy(seed=123)
         rs2 = RandomStrategy(seed=123)
-        portfolio = Portfolio(state_file="test_random.json", data_dir="data/test")
+        portfolio = self._make_portfolio(tmp_path)
         prices = {"SPY": 100.0, "QQQ": 200.0}
 
         for _ in range(50):
@@ -100,11 +104,11 @@ class TestRandomStrategy:
                 assert a["action"] == b["action"]
                 assert a["pct"] == b["pct"]
 
-    def test_different_seeds_produce_different_decisions(self):
+    def test_different_seeds_produce_different_decisions(self, tmp_path):
         """Test that different seeds produce different sequences."""
         rs1 = RandomStrategy(seed=1)
         rs2 = RandomStrategy(seed=999)
-        portfolio = Portfolio(state_file="test_random.json", data_dir="data/test")
+        portfolio = self._make_portfolio(tmp_path)
         prices = {"SPY": 100.0, "QQQ": 200.0, "GLD": 150.0}
 
         d1 = rs1.generate_decisions(["SPY", "QQQ", "GLD"], portfolio, prices)
@@ -119,10 +123,10 @@ class TestRandomStrategy:
         assert actions1 != actions2 or d1[0]["pct"] != d2[0]["pct"], \
             "Expected different decisions with different seeds"
 
-    def test_skips_tickers_without_prices(self):
+    def test_skips_tickers_without_prices(self, tmp_path):
         """Test that tickers without prices are skipped."""
         rs = RandomStrategy(seed=42)
-        portfolio = Portfolio(state_file="test_random.json", data_dir="data/test")
+        portfolio = self._make_portfolio(tmp_path)
         prices = {"SPY": 100.0}  # QQQ not in prices
 
         # Run multiple times to ensure SPY shows up (it might be skipped
