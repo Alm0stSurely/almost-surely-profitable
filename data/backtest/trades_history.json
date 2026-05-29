@@ -4788,5 +4788,1045 @@
     "total_value": 1051.0358867678253,
     "fees": 0.0,
     "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:33:55.804609",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 2.6432099470277106,
+    "price": 680.9901733398438,
+    "total_value": 1799.9999999999998,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:33:55.815848",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 2.4577768400409297,
+    "price": 600.542724609375,
+    "total_value": 1476.0,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:33:55.822402",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 2.7004015328784337,
+    "price": 448.20001220703125,
+    "total_value": 1210.32,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:33:55.833035",
+    "ticker": "TLT",
+    "action": "buy",
+    "quantity": 11.165381634082953,
+    "price": 88.88745880126953,
+    "total_value": 992.4624,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:33:55.844361",
+    "ticker": "^FCHI",
+    "action": "buy",
+    "quantity": 0.09654956045947512,
+    "price": 8429.0302734375,
+    "total_value": 813.819168,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.848956",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 2.6432099470277106,
+    "price": 680.9901733398438,
+    "total_value": 1799.9999999999998,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.854447",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 2.4577768400409297,
+    "price": 600.542724609375,
+    "total_value": 1476.0,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.859243",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 2.7004015328784337,
+    "price": 448.20001220703125,
+    "total_value": 1210.32,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.863859",
+    "ticker": "TLT",
+    "action": "buy",
+    "quantity": 11.165381634082953,
+    "price": 88.88745880126953,
+    "total_value": 992.4624,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.868560",
+    "ticker": "^FCHI",
+    "action": "buy",
+    "quantity": 0.09654956045947512,
+    "price": 8429.0302734375,
+    "total_value": 813.819168,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.873072",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.529385444092248,
+    "price": 605.027099609375,
+    "total_value": 320.2925398145537,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.877617",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 1.2432882149737234,
+    "price": 458.2799987792969,
+    "total_value": 569.7741216404721,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.882897",
+    "ticker": "TLT",
+    "action": "buy",
+    "quantity": 9.244447862475385,
+    "price": 88.55116271972656,
+    "total_value": 818.6066069240861,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.887962",
+    "ticker": "^FCHI",
+    "action": "buy",
+    "quantity": 0.11863813037076784,
+    "price": 8398.7802734375,
+    "total_value": 996.4155890355113,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.892902",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6689933949735942,
+    "price": 687.5523071289062,
+    "total_value": 459.96795216809437,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.898001",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.7581514435789636,
+    "price": 608.0433349609375,
+    "total_value": 460.9889321592021,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.903182",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.1736005529122523,
+    "price": 468.6199951171875,
+    "total_value": 81.35269025808071,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.908246",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.632815571655654,
+    "price": 680.531494140625,
+    "total_value": 430.650926494276,
+    "fees": 0.0,
+    "realized_pnl": -1.1289988017920791
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.913333",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7096025703875771,
+    "price": 600.652587890625,
+    "total_value": 426.2246202771376,
+    "fees": 0.0,
+    "realized_pnl": -1.449227910551656
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.918430",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.32862722031170716,
+    "price": 481.2799987792969,
+    "total_value": 158.16170819046215,
+    "fees": 0.0,
+    "realized_pnl": 9.587756181603481
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.923597",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6759011714859213,
+    "price": 684.1216430664062,
+    "total_value": 462.3986199874573,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.928316",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.7488401777070331,
+    "price": 606.5252075195312,
+    "total_value": 454.19044418272097,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.933386",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.20351047192082164,
+    "price": 483.75,
+    "total_value": 98.44819079169747,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.938091",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6967113810114188,
+    "price": 684.5106201171875,
+    "total_value": 476.90633945882837,
+    "fees": 0.0,
+    "realized_pnl": 1.275830812191714
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.942970",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7880882950227176,
+    "price": 607.32421875,
+    "total_value": 478.62510808069146,
+    "fees": 0.0,
+    "realized_pnl": 3.0510264447578948
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.948480",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.27824584872731445,
+    "price": 490.0,
+    "total_value": 136.3404658763841,
+    "fees": 0.0,
+    "realized_pnl": 10.095312339697571
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.955160",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6766762236660702,
+    "price": 670.5487060546875,
+    "total_value": 453.74436619725566,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.961506",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.7372096404117201,
+    "price": 598.9946899414062,
+    "total_value": 441.5846599802339,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.967173",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.41507652042181314,
+    "price": 473.510009765625,
+    "total_value": 196.54288723841438,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.971907",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6703289835166437,
+    "price": 676.4227294921875,
+    "total_value": 453.4257606880517,
+    "fees": 0.0,
+    "realized_pnl": -2.5442497797387773
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.977183",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.763933539546455,
+    "price": 606.99462890625,
+    "total_value": 463.7035553460385,
+    "fees": 0.0,
+    "realized_pnl": 3.378178809131441
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.982995",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.3141867258773749,
+    "price": 472.5299987792969,
+    "total_value": 148.46265319530724,
+    "fees": 0.0,
+    "realized_pnl": 5.285360770004246
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.987773",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6735115251891457,
+    "price": 660.4862060546875,
+    "total_value": 444.8450720062849,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.992801",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.7488007981076074,
+    "price": 592.9722900390625,
+    "total_value": 444.0181240369456,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:05.998106",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.3834926972280163,
+    "price": 460.8399963378906,
+    "total_value": 176.72877318616685,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.003810",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6750150039820653,
+    "price": 667.2078857421875,
+    "total_value": 450.375333651128,
+    "fees": 0.0,
+    "realized_pnl": -6.095070680960532
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.009456",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7549227363346761,
+    "price": 599.6239013671875,
+    "total_value": 452.6697163917911,
+    "fees": 0.0,
+    "realized_pnl": -0.7665815887622784
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.015231",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.3387533953005386,
+    "price": 460.42999267578125,
+    "total_value": 155.97222331712302,
+    "fees": 0.0,
+    "realized_pnl": 1.4409000708995734
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.020773",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.20729012799109872,
+    "price": 426.4100036621094,
+    "total_value": 88.39058423580353,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.026191",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6288069309113392,
+    "price": 648.5700073242188,
+    "total_value": 407.82531578668676,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.031636",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.7094284834389237,
+    "price": 581.3269653320312,
+    "total_value": 412.4099073976547,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.036925",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.36380924128764014,
+    "price": 413.3800048828125,
+    "total_value": 150.391465939897,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.042993",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6765465489435116,
+    "price": 655.3800048828125,
+    "total_value": 443.3950805500486,
+    "fees": 0.0,
+    "realized_pnl": -10.535867263650857
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.047848",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7576281894293723,
+    "price": 588.0,
+    "total_value": 445.4853753844709,
+    "fees": 0.0,
+    "realized_pnl": -6.749910813813187
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.053568",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.28152316177983616,
+    "price": 416.2900085449219,
+    "total_value": 117.19527942292142,
+    "fees": 0.0,
+    "realized_pnl": -9.847600434334879
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.059049",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.725965439276043,
+    "price": 634.0900268554688,
+    "total_value": 460.3274448866882,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.064235",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.8509891700320613,
+    "price": 562.5800170898438,
+    "total_value": 478.749501819909,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.069601",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.16155964957482497,
+    "price": 414.70001220703125,
+    "total_value": 66.99878865084361,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.074770",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6525151802763438,
+    "price": 631.969970703125,
+    "total_value": 412.3699993625853,
+    "fees": 0.0,
+    "realized_pnl": -20.21142473167646
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.080672",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7223238430465125,
+    "price": 558.280029296875,
+    "total_value": 403.25897625783836,
+    "fees": 0.0,
+    "realized_pnl": -22.300173903981033
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.086280",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.21148212362009852,
+    "price": 414.5799865722656,
+    "total_value": 87.67625597069467,
+    "fees": 0.0,
+    "realized_pnl": -7.469368668272608
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.091779",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6339600020020407,
+    "price": 655.8300170898438,
+    "total_value": 415.7699989472757,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.097689",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.6814864830999307,
+    "price": 584.97998046875,
+    "total_value": 398.65594957351453,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.103445",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.20698000119313648,
+    "price": 429.4100036621094,
+    "total_value": 88.87928307032814,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.109203",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6767305911792905,
+    "price": 658.9299926757812,
+    "total_value": 445.91808348924695,
+    "fees": 0.0,
+    "realized_pnl": -1.7983032430541357
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.115041",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7624989910827977,
+    "price": 588.5,
+    "total_value": 448.7306562522265,
+    "fees": 0.0,
+    "realized_pnl": 0.0842240766551754
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.120535",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.2286343424278605,
+    "price": 427.6499938964844,
+    "total_value": 97.77547514380126,
+    "fees": 0.0,
+    "realized_pnl": -4.861753282895862
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.126097",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6385015634233951,
+    "price": 679.4600219726562,
+    "total_value": 433.83628631323546,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.131688",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.6894294255564131,
+    "price": 611.0700073242188,
+    "total_value": 421.2896441242893,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.137467",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.3140902772953266,
+    "price": 437.1300048828125,
+    "total_value": 137.29828444775006,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.142622",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.667425078151722,
+    "price": 686.0999755859375,
+    "total_value": 457.9203298253389,
+    "fees": 0.0,
+    "realized_pnl": 14.041692264819119
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.147622",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.743764567803628,
+    "price": 617.3900146484375,
+    "total_value": 459.19281741127065,
+    "fees": 0.0,
+    "realized_pnl": 18.385421273083068
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.152566",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.2667289031473447,
+    "price": 435.3599853515625,
+    "total_value": 116.12309136706632,
+    "fees": 0.0,
+    "realized_pnl": -3.3905280073495305
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.158297",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6150387040160469,
+    "price": 710.1400146484375,
+    "total_value": 436.7635942793115,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.165523",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.6290794838319844,
+    "price": 648.8499755859375,
+    "total_value": 408.17820772599725,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.171684",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.4222511149530794,
+    "price": 445.92999267578125,
+    "total_value": 188.29443659836716,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.176976",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6592205284802954,
+    "price": 708.719970703125,
+    "total_value": 467.20275363145356,
+    "fees": 0.0,
+    "realized_pnl": 23.126478216787973
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.182266",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7181699448459146,
+    "price": 646.7899780273438,
+    "total_value": 464.50512284678774,
+    "fees": 0.0,
+    "realized_pnl": 31.692689812681408
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.189041",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.42194993257716656,
+    "price": 442.0899963378906,
+    "total_value": 186.53984414781277,
+    "fees": 0.0,
+    "realized_pnl": -2.439985236873099
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.196196",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6202610732616342,
+    "price": 713.9400024414062,
+    "total_value": 442.82919215872033,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.202981",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.6146801582693157,
+    "price": 663.8800048828125,
+    "total_value": 408.07386647320124,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.208510",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.6170678868877842,
+    "price": 433.25,
+    "total_value": 267.34466199413254,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.215593",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6509273658943329,
+    "price": 715.1699829101562,
+    "total_value": 465.52371314240304,
+    "fees": 0.0,
+    "realized_pnl": 21.938846277683524
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.220731",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.6967431355706243,
+    "price": 664.22998046875,
+    "total_value": 462.7976793318114,
+    "fees": 0.0,
+    "realized_pnl": 35.26397261130944
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.225902",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.5124050370284914,
+    "price": 429.8900146484375,
+    "total_value": 220.27780887411132,
+    "fees": 0.0,
+    "realized_pnl": -8.23943244859791
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.231185",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6142716738028906,
+    "price": 718.6599731445312,
+    "total_value": 441.45246459863165,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.236269",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.660013097597541,
+    "price": 667.739990234375,
+    "total_value": 440.7171393443416,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.241401",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.6288759738996835,
+    "price": 423.6600036621094,
+    "total_value": 266.4295974053525,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.246752",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.640723119708021,
+    "price": 718.010009765625,
+    "total_value": 460.04561343861786,
+    "fees": 0.0,
+    "realized_pnl": 18.777477314576743
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.252085",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.7126993542396736,
+    "price": 672.8800048828125,
+    "total_value": 479.56114496076884,
+    "fees": 0.0,
+    "realized_pnl": 34.74324851027313
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.257003",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.5024302116280471,
+    "price": 414.7099914550781,
+    "total_value": 208.3628287710405,
+    "fees": 0.0,
+    "realized_pnl": -14.255119548049066
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.263094",
+    "ticker": "TLT",
+    "action": "buy",
+    "quantity": 1.0870537910801163,
+    "price": 85.6500015258789,
+    "total_value": 93.10615886472442,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.268266",
+    "ticker": "^FCHI",
+    "action": "buy",
+    "quantity": 0.011769750064903333,
+    "price": 8112.56982421875,
+    "total_value": 95.48291921513146,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.273449",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6276196373949484,
+    "price": 737.6199951171875,
+    "total_value": 462.94479387071283,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.278712",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.5755108251807853,
+    "price": 711.22998046875,
+    "total_value": 409.32055295288416,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.283771",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.20083261745484352,
+    "price": 433.7699890136719,
+    "total_value": 87.11516226697444,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.288735",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6406207770370317,
+    "price": 739.2999877929688,
+    "total_value": 473.6109326433997,
+    "fees": 0.0,
+    "realized_pnl": 26.157155141134297
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.293849",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.6659926341314326,
+    "price": 713.2899780273438,
+    "total_value": 475.04587136598235,
+    "fees": 0.0,
+    "realized_pnl": 49.13995953755318
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.298841",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.2995520288302745,
+    "price": 434.6499938964844,
+    "total_value": 130.20028750275833,
+    "fees": 0.0,
+    "realized_pnl": -2.402989351900942
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.304063",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.5859702900247044,
+    "price": 739.1699829101562,
+    "total_value": 433.13164926342,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.309069",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.6264621886420251,
+    "price": 708.9299926757812,
+    "total_value": 444.11783480564475,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.314039",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.48313547728131684,
+    "price": 417.2900085449219,
+    "total_value": 201.6076074430756,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.319129",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6164585844589994,
+    "price": 738.6500244140625,
+    "total_value": 455.34714846089827,
+    "fees": 0.0,
+    "realized_pnl": 20.01052773407855
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.324128",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.6334358828414923,
+    "price": 705.8800048828125,
+    "total_value": 447.1297240731013,
+    "fees": 0.0,
+    "realized_pnl": 33.49067404884528
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.329609",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.37580263782481993,
+    "price": 418.42999267578125,
+    "total_value": 157.24709499257867,
+    "fees": 0.0,
+    "realized_pnl": -8.13809565593607
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.335459",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6138762633408579,
+    "price": 745.6400146484375,
+    "total_value": 457.73070598980536,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.340627",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.619958511562199,
+    "price": 717.5399780273438,
+    "total_value": 444.84501676420507,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.345715",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.379750234380151,
+    "price": 413.82000732421875,
+    "total_value": 157.14824477256786,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.350804",
+    "ticker": "SPY",
+    "action": "sell",
+    "quantity": 0.6127410608469146,
+    "price": 750.5900268554688,
+    "total_value": 459.91732931653405,
+    "fees": 0.0,
+    "realized_pnl": 22.39825635218409
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.355872",
+    "ticker": "QQQ",
+    "action": "sell",
+    "quantity": 0.6648154049891578,
+    "price": 730.280029296875,
+    "total_value": 485.501413432496,
+    "fees": 0.0,
+    "realized_pnl": 43.07883292006926
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.360961",
+    "ticker": "GLD",
+    "action": "sell",
+    "quantity": 0.25967255117445187,
+    "price": 414.0,
+    "total_value": 107.50443618622307,
+    "fees": 0.0,
+    "realized_pnl": -6.227738362945857
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.366571",
+    "ticker": "SPY",
+    "action": "buy",
+    "quantity": 0.6101751016788495,
+    "price": 754.5999755859375,
+    "total_value": 460.4381168300067,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.372190",
+    "ticker": "QQQ",
+    "action": "buy",
+    "quantity": 0.6210324549080714,
+    "price": 735.5999755859375,
+    "total_value": 456.8314586684521,
+    "fees": 0.0,
+    "realized_pnl": 0.0
+  },
+  {
+    "timestamp": "2026-05-29T22:34:06.377803",
+    "ticker": "GLD",
+    "action": "buy",
+    "quantity": 0.3286421180012222,
+    "price": 412.7699890136719,
+    "total_value": 135.65360343679436,
+    "fees": 0.0,
+    "realized_pnl": 0.0
   }
 ]

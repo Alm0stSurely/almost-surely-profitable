@@ -133,16 +133,21 @@ Examples:
         default=2,
         help="Maximum trades per week (default: 2)"
     )
-    
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Run comparison of all strategies (buy_and_hold, equal_weight, random, llm)"
+    )
+
     args = parser.parse_args()
-    
+
     # Validate date range
     start_dt = datetime.strptime(args.start, "%Y-%m-%d")
     end_dt = datetime.strptime(args.end, "%Y-%m-%d")
     if start_dt >= end_dt:
         print("Error: Start date must be before end date")
         sys.exit(1)
-    
+
     print(f"\n{'='*70}")
     print(f"TRADING AGENT BACKTEST")
     print(f"{'='*70}")
@@ -153,7 +158,7 @@ Examples:
     print(f"Frequency: {args.frequency}")
     print(f"Cooldowns: {'Enabled' if args.cooldowns else 'Disabled'}")
     print(f"{'='*70}\n")
-    
+
     # Build cooldown config if enabled
     cooldown_config = None
     if args.cooldowns:
@@ -163,8 +168,8 @@ Examples:
             flip_cooldown_days=args.flip_cooldown_days,
             max_trades_per_week=args.max_trades_per_week
         )
-    
-    if args.compare:
+
+    if getattr(args, 'compare', False):
         # Run comparison of all strategies
         results = {}
         for strategy in ["buy_and_hold", "equal_weight", "random", "llm"]:
