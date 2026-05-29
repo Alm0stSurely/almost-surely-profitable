@@ -94,14 +94,18 @@ class DeflatedSharpeRatio:
         mean_return = np.mean(excess_returns)
         std_return = np.std(excess_returns, ddof=1)
         
-        if std_return == 0:
+        if std_return < 1e-15:
             sharpe_ratio = 0.0
         else:
             sharpe_ratio = mean_return / std_return * np.sqrt(self.annualization_factor)
         
         # Calculate moments for non-normality adjustment
-        skewness = stats.skew(returns)
-        kurtosis = stats.kurtosis(returns, fisher=False)  # Normal = 3.0
+        if n_obs < 3 or std_return < 1e-15:
+            skewness = 0.0
+            kurtosis = 3.0
+        else:
+            skewness = stats.skew(returns)
+            kurtosis = stats.kurtosis(returns, fisher=False)  # Normal = 3.0
         
         # Calculate Deflated Sharpe Ratio
         deflated_sharpe = self._calculate_dsr(
