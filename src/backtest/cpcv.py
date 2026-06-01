@@ -126,7 +126,7 @@ class CombinatorialPurgedCV:
             test_indices = np.concatenate(test_indices_list)
             
             # Calculate embargo
-            embargo_size = max(1, int(len(test_indices) * self.embargo_pct))
+            embargo_size = max(0, int(len(test_indices) * self.embargo_pct))
             
             # Get train indices (all splits not in test, with purging and embargo)
             train_indices_list = []
