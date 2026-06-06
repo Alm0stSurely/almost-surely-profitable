@@ -22,6 +22,7 @@ from evaluation import (
     load_recent_results,
     calculate_performance_trends,
     generate_comprehensive_report,
+    _get_benchmark_return,
 )
 
 
@@ -407,3 +408,141 @@ class TestGenerateComprehensiveReport:
         generate_comprehensive_report()
         captured = capsys.readouterr()
         assert "Missing files:" in captured.out
+
+
+class TestGetBenchmarkReturn:
+    """Tests for _get_benchmark_return helper."""
+
+    @patch("evaluation.fetch_historical_data")
+    def test_successful_fetch(self, mock_fetch):
+        """Should calculate return from fetched historical data."""
+        import pandas as pd
+        mock_fetch.return_value = {
+            "SPY": pd.DataFrame({"Close": [400.0, 420.0]}, index=pd.date_range("2026-01-01", periods=2))
+        }
+        result = _get_benchmark_return("2026-01-01", "2026-01-02")
+        assert result is not None
+        assert result == pytest.approx(0.05, abs=1e-6)  # 420/400 - 1 = 5%
+
+    @patch("evaluation.fetch_historical_data")
+    def test_empty_dataframe(self, mock_fetch):
+        """Empty DataFrame should return None."""
+        import pandas as pd
+        mock_fetch.return_value = {"SPY": pd.DataFrame()}
+        result = _get_benchmark_return("2026-01-01", "2026-01-02")
+        assert result is None
+
+    @patch("evaluation.fetch_historical_data")
+    def test_single_price(self, mock_fetch):
+        """Single price point cannot compute return — return None."""
+        import pandas as pd
+        mock_fetch.return_value = {
+            "SPY": pd.DataFrame({"Close": [400.0]}, index=pd.to_datetime(["2026-01-01"]))
+        }
+        result = _get_benchmark_return("2026-01-01", "2026-01-02")
+        assert result is None
+
+    @patch("evaluation.fetch_historical_data")
+    def test_fetch_exception(self, mock_fetch):
+        """Exception during fetch should return None, not crash."""
+        mock_fetch.side_effect = Exception("Network error")
+        result = _get_benchmark_return("2026-01-01", "2026-01-02")
+        assert result is None
+
+    @patch("evaluation.fetch_historical_data")
+    def test_ticker_not_found(self, mock_fetch):
+        """Requested ticker missing from results should return None."""
+        mock_fetch.return_value = {"QQQ": None}
+        result = _get_benchmark_return("2026-01-01", "2026-01-02", benchmark="SPY")
+        assert result is None
+
+    @patch("evaluation.fetch_historical_data")
+    def test_custom_benchmark(self, mock_fetch):
+        """Should use the requested benchmark ticker."""
+        import pandas as pd
+        mock_fetch.return_value = {
+            "CAC.PA": pd.DataFrame({"Close": [100.0, 105.0]}, index=pd.date_range("2026-01-01", periods=2))
+        }
+        result = _get_benchmark_return("2026-01-01", "2026-01-02", benchmark="CAC.PA")
+        assert result == pytest.approx(0.05, abs=1e-6)
+        mock_fetch.assert_called_once()
+        args = mock_fetch.call_args[1]
+        assert args.get("start") == "2026-01-01"
+        assert args.get("end") == "2026-01-02"
+
+
+class TestReportBenchmarkComparison:
+    """Tests for the buy-and-hold comparison in the summary."""
+
+    @patch("evaluation.fetch_historical_data")
+    def test_report_shows_benchmark_comparison(self, mock_fetch, tmp_path, monkeypatch, capsys):
+        """Summary should show actual benchmark comparison when data available."""
+        import pandas as pd
+        monkeypatch.chdir(tmp_path)
+
+        # Portfolio
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        portfolio = {
+            "cash": 5000.0,
+            "total_value": 10500.0,
+            "total_realized_pnl": 0.0,
+            "positions": {}
+        }
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            json.dump(portfolio, f)
+
+        # Daily results
+        results_dir = tmp_path / "results" / "daily"
+        results_dir.mkdir(parents=True)
+        for date_str in ["2026-01-01", "2026-01-02", "2026-01-03"]:
+            with open(results_dir / f"{date_str}.json", "w") as f:
+                json.dump({
+                    "date": date_str,
+                    "portfolio_after": {"total_value": 10000, "cash": 5000, "num_positions": 0}
+                }, f)
+
+        # Mock SPY up 3% over the period
+        mock_fetch.return_value = {
+            "SPY": pd.DataFrame({
+                "Close": [400.0, 412.0]
+            }, index=pd.date_range("2026-01-01", periods=2))
+        }
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "vs Buy & Hold (SPY):" in captured.out
+        # Total return = +5%, SPY = +3%, alpha = +2%
+        assert "+2.00%" in captured.out
+
+    @patch("evaluation.fetch_historical_data")
+    def test_report_omits_benchmark_when_fetch_fails(self, mock_fetch, tmp_path, monkeypatch, capsys):
+        """Summary should omit benchmark line when fetch fails."""
+        monkeypatch.chdir(tmp_path)
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        portfolio = {
+            "cash": 5000.0,
+            "total_value": 9500.0,
+            "total_realized_pnl": -500.0,
+            "positions": {}
+        }
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            json.dump(portfolio, f)
+
+        results_dir = tmp_path / "results" / "daily"
+        results_dir.mkdir(parents=True)
+        for date_str in ["2026-01-01", "2026-01-02"]:
+            with open(results_dir / f"{date_str}.json", "w") as f:
+                json.dump({
+                    "date": date_str,
+                    "portfolio_after": {"total_value": 9500, "cash": 5000, "num_positions": 0}
+                }, f)
+
+        mock_fetch.side_effect = Exception("API down")
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "vs Buy & Hold" not in captured.out
+        assert "Total Return:" in captured.out

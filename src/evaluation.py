@@ -14,12 +14,14 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent / ".."))
 
 from analysis.decision_analyzer import DecisionAnalyzer
 from risk.performance_metrics import calculate_all_metrics
 from risk.cvar import calculate_portfolio_cvar
+from data.fetch_market_data import fetch_historical_data
 
 
 def load_portfolio_data():
@@ -49,6 +51,21 @@ def load_recent_results(days=30):
             continue
     
     return results
+
+
+def _get_benchmark_return(start_date: str, end_date: str, benchmark: str = "SPY") -> Optional[float]:
+    """Fetch benchmark buy-and-hold return for a date range."""
+    try:
+        data = fetch_historical_data([benchmark], start=start_date, end=end_date)
+        if benchmark in data and not data[benchmark].empty:
+            closes = data[benchmark]["Close"].values.flatten()
+            if len(closes) >= 2:
+                start_price = float(closes[0])
+                end_price = float(closes[-1])
+                return (end_price / start_price) - 1
+    except Exception:
+        pass
+    return None
 
 
 def calculate_performance_trends(results):
@@ -193,7 +210,15 @@ def generate_comprehensive_report():
     if portfolio:
         total_return = (portfolio['total_value'] - 10000) / 10000 * 100
         print(f"Total Return: {total_return:+.2f}%")
-        print(f"vs Buy & Hold: {'+' if total_return > 0 else ''}{total_return - 2:.2f}% (est.)")
+        
+        # Compare to benchmark if we have date range from results
+        if results:
+            dates = [r.get('date') for r in results if r.get('date')]
+            if dates:
+                bench_return = _get_benchmark_return(min(dates), max(dates))
+                if bench_return is not None:
+                    alpha = total_return - bench_return * 100
+                    print(f"vs Buy & Hold (SPY): {'+' if alpha >= 0 else ''}{alpha:.2f}%")
     
     print("\n✓ Evaluation complete.")
     print("="*70)
