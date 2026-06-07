@@ -113,6 +113,32 @@ def test_check_position_movements_alert():
     print("✓ Alert triggered test passed\n")
 
 
+def test_check_position_movements_no_false_positive():
+    """Test that POSITION_MOVEMENT uses previous close, not avg_price, as reference.
+    
+    This guards against false positives when the market is flat intraday
+    but the position has unrealized P&L since entry.
+    """
+    print("Test 4b: Check Position Movements - No False Positive")
+    print("-" * 40)
+    
+    positions = {
+        "AI.PA": {"quantity": 10, "avg_price": 150.0, "current_price": 180.0},  # +20% since entry
+    }
+    
+    # Market is flat: previous_close == current_price
+    previous_close = {"AI.PA": 180.0}
+    current_prices = {"AI.PA": 180.0}
+    
+    with patch('monitor.load_alert_history', return_value={'alerts': [], 'last_reset': datetime.now().isoformat()}):
+        alerts = check_position_movements(positions, previous_close, current_prices, threshold_pct=2.0)
+    
+    # No alert expected: intraday movement is 0%, even though unrealized P&L is +20%
+    assert len(alerts) == 0
+    print("  No false positive: flat intraday price does not alert")
+    print("✓ False-positive guard test passed\n")
+
+
 def test_check_portfolio_drawdown_normal():
     """Test portfolio drawdown check with normal value."""
     print("Test 5: Check Portfolio Drawdown - Normal")

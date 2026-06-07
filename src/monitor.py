@@ -341,8 +341,9 @@ def check_movements(
         if ticker in stop_loss_tickers:
             continue
         
-        # Use position average price as reference
-        reference_price = position.avg_price
+        # Use previous close as reference for intraday movement detection;
+        # fall back to avg_price if previous close unavailable
+        reference_price = reference_prices.get(ticker, position.avg_price)
         
         if reference_price > 0:
             movement_pct = ((current_price - reference_price) / reference_price) * 100
