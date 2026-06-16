@@ -687,8 +687,8 @@ class TestEdgeCases:
 
     def test_large_numbers(self, tmp_path):
         records = [
-            make_record(pnl_pct=999.0, holding_period_days=999),
-            make_record(pnl_pct=-999.0, holding_period_days=1),
+            make_record(date="2026-06-15", pnl_pct=999.0, holding_period_days=999),
+            make_record(date="2026-06-15", pnl_pct=-999.0, holding_period_days=1),
         ]
         path = make_memory_file(tmp_path, records)
         mem = DecisionMemory(memory_file=path)
