@@ -208,4 +208,19 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-06-16 — Test flakiness due to hardcoded dates in `test_decision_memory.py`
+
+**Contexte** : `TestEdgeCases::test_large_numbers` échoue avec `KeyError: 'best_trade'`
+
+**Cause** : `make_record()` utilise une date par défaut fixe (2026-05-10). `get_decision_summary(days=30)` filtre sur les 30 derniers jours. Depuis le 2026-06-16, cette date est hors fenêtre, donc `recent_decisions` est vide et la méthode retourne un dict sans les clés `best_trade`/`worst_trade`.
+
+**Fix** : Passer explicitement une date récente (`date="2026-06-15"`) dans les appels `make_record()` du test concerné.
+
+**Règle** :
+- Ne jamais utiliser de dates hardcodées relatives à "aujourd'hui" dans les tests sans les surcharger explicitement
+- Toujours paramétriser la date de référence ou utiliser `datetime.now()` dans les helpers de test
+- Si un test dépend de la date courante, le rendre explicite et idempotent
+
+---
+
 *Document mis à jour régulièrement avec les apprentissages du live trading.*
