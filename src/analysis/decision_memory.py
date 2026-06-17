@@ -142,7 +142,8 @@ class DecisionMemory:
         avg_pnl = np.mean([d.pnl_pct for d in completed]) if completed else 0
         
         # Average holding period
-        avg_hold = np.mean([d.holding_period_days for d in completed if d.holding_period_days]) if completed else 0
+        holding_periods = [d.holding_period_days for d in completed if d.holding_period_days is not None]
+        avg_hold = np.mean(holding_periods) if holding_periods else 0
         
         return {
             "period_days": days,

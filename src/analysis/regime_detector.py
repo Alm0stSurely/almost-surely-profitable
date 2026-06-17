@@ -89,11 +89,10 @@ class RegimeDetector:
         avg_historical_vols = rolling_vols.mean(axis=1)
         
         # Percentile
+        n = len(avg_historical_vols)
         percentile = (
-            (avg_historical_vols < avg_current_vol).sum()
-            / len(avg_historical_vols)
-            * 100
-        )
+            (avg_historical_vols < avg_current_vol).sum() / n * 100
+        ) if n > 0 else 50.0
         
         if percentile >= self.vol_percentile_threshold_high:
             regime = "high"
@@ -217,7 +216,8 @@ class RegimeDetector:
         
         # Moyenne des corrélations (hors diagonale)
         mask = ~np.eye(corr_matrix.shape[0], dtype=bool)
-        avg_corr = corr_matrix.values[mask].mean()
+        corr_values = corr_matrix.values[mask]
+        avg_corr = corr_values.mean() if len(corr_values) > 0 else 0.0
         
         if avg_corr > 0.7:
             regime = "high_correlation"
