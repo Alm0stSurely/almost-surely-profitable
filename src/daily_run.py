@@ -204,7 +204,7 @@ def run_daily_pipeline(dry_run: bool = False):
     agent = TradingAgent()
     portfolio_summary = portfolio.get_summary()
     
-    decision = agent.get_trading_decision(market_analysis, portfolio_summary)
+    decision = agent.get_trading_decision(market_analysis, portfolio_summary, cooldown_status=cooldown_status)
     
     print(f"\n  Reasoning: {decision['reasoning'][:200]}...")
     print(f"  Actions: {len(decision['actions'])}")

@@ -175,7 +175,8 @@ class TradingAgent:
         self,
         market_data: Dict,
         portfolio_summary: Dict,
-        recent_decisions: Optional[List[Dict]] = None
+        recent_decisions: Optional[List[Dict]] = None,
+        cooldown_status: Optional[Dict] = None
     ) -> str:
         """
         Build the complete prompt for the LLM.
@@ -184,6 +185,7 @@ class TradingAgent:
             market_data: Dict with asset indicators and correlations
             portfolio_summary: Current portfolio state
             recent_decisions: List of recent trading decisions
+            cooldown_status: Dict with position cooldown guardrail status
         
         Returns:
             Formatted prompt string
@@ -310,6 +312,36 @@ class TradingAgent:
                 actions = d.get('actions', [])
                 for a in actions:
                     prompt_parts.append(f"  - {a['ticker']}: {a['action']} {a.get('pct', 0)}%")
+        
+        # Cooldown guardrails
+        if cooldown_status:
+            prompt_parts.append("\n\n=== COOLDOWN GUARDRAILS ===")
+            prompt_parts.append(f"Weekly trades used: {cooldown_status.get('trades_this_week', 0)}/{cooldown_status.get('weekly_cap', 2)}")
+            
+            active_entries = cooldown_status.get('active_entries', {})
+            if active_entries:
+                prompt_parts.append("\nActive positions (holding period):")
+                for ticker, info in active_entries.items():
+                    hold_days = info.get('hold_days', 0)
+                    min_hold = cooldown_status.get('config', {}).get('min_hold_days', 5)
+                    status = "✓ can sell" if hold_days >= min_hold else f"✗ hold {min_hold - hold_days:.1f} more days"
+                    prompt_parts.append(f"  {ticker}: held {hold_days:.1f} days — {status}")
+            
+            recent_exits = cooldown_status.get('recent_exits', {})
+            if recent_exits:
+                prompt_parts.append("\nRecent exits (flip cooldown):")
+                for ticker, info in recent_exits.items():
+                    days_since = info.get('days_since_exit', 0)
+                    flip_days = cooldown_status.get('config', {}).get('flip_cooldown_days', 10)
+                    status = "✓ can re-buy" if days_since >= flip_days else f"✗ wait {flip_days - days_since:.1f} more days"
+                    prompt_parts.append(f"  {ticker}: exited {days_since:.1f} days ago — {status}")
+            
+            if cooldown_status.get('trades_this_week', 0) >= cooldown_status.get('weekly_cap', 2):
+                prompt_parts.append("\n⚠️ WEEKLY TRADE CAP REACHED — No new buys or sells allowed (except stop-loss overrides).")
+                prompt_parts.append("Recommend HOLD for all positions. Do not suggest any new trades.")
+            else:
+                remaining = cooldown_status.get('weekly_cap', 2) - cooldown_status.get('trades_this_week', 0)
+                prompt_parts.append(f"\nYou have {remaining} trade(s) remaining this week. Use them wisely.")
         
         prompt_parts.append("\n\n=== YOUR DECISION ===")
         prompt_parts.append("Based on the above market state and portfolio, what actions should we take?")
@@ -486,7 +518,8 @@ class TradingAgent:
     def get_trading_decision(
         self,
         market_data: Dict,
-        portfolio_summary: Dict
+        portfolio_summary: Dict,
+        cooldown_status: Optional[Dict] = None
     ) -> Dict:
         """
         Get trading decision from LLM.
@@ -494,6 +527,7 @@ class TradingAgent:
         Args:
             market_data: Market indicators and correlations
             portfolio_summary: Current portfolio state
+            cooldown_status: Optional position cooldown guardrail status
         
         Returns:
             Decision dict with actions and metadata
@@ -502,7 +536,7 @@ class TradingAgent:
         recent_decisions = self.load_recent_decisions(days=5)
         
         # Build prompt
-        prompt = self.build_prompt(market_data, portfolio_summary, recent_decisions)
+        prompt = self.build_prompt(market_data, portfolio_summary, recent_decisions, cooldown_status)
         
         # Call LLM
         response = self.call_llm(prompt)

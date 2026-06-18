@@ -352,6 +352,125 @@ def test_load_recent_days_filter():
         print("✓ Recent days filter test passed\n")
 
 
+def test_build_prompt_with_cooldown_status():
+    """Test that cooldown status is included in prompt when provided."""
+    print("Test 12: Build Prompt with Cooldown Status")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+        
+        market_data = {
+            "assets": {
+                "SPY": {
+                    "latest": {
+                        "price": 400.0,
+                        "rsi_14": 45.0,
+                        "bb_position": 0.5,
+                        "sma_20": 395.0,
+                        "sma_50": 390.0,
+                        "volatility_annual": 0.15,
+                        "drawdown": -0.02,
+                        "daily_return": 0.005
+                    }
+                }
+            },
+            "correlations": pd.DataFrame(),
+            "regime": None
+        }
+        
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": 10000.0,
+            "total_return_pct": 0.0,
+            "total_pnl": 0.0,
+            "positions": [
+                {
+                    "ticker": "SPY",
+                    "quantity": 5,
+                    "avg_price": 390.0,
+                    "current_price": 400.0,
+                    "unrealized_pnl_pct": 2.56,
+                    "market_value": 2000.0
+                }
+            ]
+        }
+        
+        cooldown_status = {
+            "trades_this_week": 2,
+            "weekly_cap": 2,
+            "active_entries": {
+                "SPY": {"entry_date": "2026-06-16T21:00:00", "hold_days": 2.0}
+            },
+            "recent_exits": {
+                "GLD": {"exit_date": "2026-06-18T16:00:00", "days_since_exit": 0.5}
+            },
+            "config": {"min_hold_days": 5, "flip_cooldown_days": 10}
+        }
+        
+        prompt = agent.build_prompt(market_data, portfolio, cooldown_status=cooldown_status)
+        
+        assert "COOLDOWN GUARDRAILS" in prompt
+        assert "Weekly trades used: 2/2" in prompt
+        assert "WEEKLY TRADE CAP REACHED" in prompt
+        assert "SPY: held 2.0 days" in prompt
+        assert "GLD: exited 0.5 days ago" in prompt
+        
+        print(f"  Prompt length: {len(prompt)} chars")
+        print("  ✓ Contains cooldown guardrails section")
+        print("  ✓ Shows weekly trade cap reached")
+        print("  ✓ Shows active entry hold periods")
+        print("  ✓ Shows recent exit flip cooldowns")
+        print("✓ Cooldown status prompt test passed\n")
+
+
+def test_build_prompt_without_cooldown_status():
+    """Test that prompt works normally when no cooldown status provided."""
+    print("Test 13: Build Prompt without Cooldown Status")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+        
+        market_data = {
+            "assets": {
+                "SPY": {
+                    "latest": {
+                        "price": 400.0,
+                        "rsi_14": 45.0,
+                        "bb_position": 0.5,
+                        "sma_20": 395.0,
+                        "sma_50": 390.0,
+                        "volatility_annual": 0.15,
+                        "drawdown": -0.02,
+                        "daily_return": 0.005
+                    }
+                }
+            },
+            "correlations": pd.DataFrame(),
+            "regime": None
+        }
+        
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": 10000.0,
+            "total_return_pct": 0.0,
+            "total_pnl": 0.0,
+            "positions": []
+        }
+        
+        prompt = agent.build_prompt(market_data, portfolio)
+        
+        assert "COOLDOWN GUARDRAILS" not in prompt
+        assert "MARKET STATE" in prompt
+        
+        print(f"  Prompt length: {len(prompt)} chars")
+        print("  ✓ No cooldown section when not provided")
+        print("✓ No cooldown status test passed\n")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running LLM Trading Agent Tests")
@@ -363,6 +482,8 @@ if __name__ == "__main__":
     test_save_and_load_decisions()
     test_load_decisions_empty_file()
     test_build_prompt_structure()
+    test_build_prompt_with_cooldown_status()
+    test_build_prompt_without_cooldown_status()
     test_api_call_mock_success()
     test_api_call_mock_error()
     test_api_call_network_error()
