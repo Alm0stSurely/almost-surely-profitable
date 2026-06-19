@@ -111,14 +111,20 @@ class TestFetchBenchmarkReturns:
                 "history": {
                     "close": [400.0, 402.0, 401.0, 405.0]
                 }
+            },
+            "CAC.PA": {
+                "history": {
+                    "close": [7000.0, 7100.0, 7050.0, 7200.0]
+                }
             }
         }
-        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmark="SPY")
+        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
         assert result is not None
-        assert len(result) == 3
+        assert "SPY" in result
+        assert len(result["SPY"]) == 3
         expected = [0.005, -0.002487562, 0.009975062]
         for i, exp in enumerate(expected):
-            assert result[i] == pytest.approx(exp, abs=1e-6)
+            assert result["SPY"][i] == pytest.approx(exp, abs=1e-6)
 
     @patch("weekly_report.fetch_historical_data")
     def test_insufficient_data(self, mock_fetch):
@@ -127,6 +133,11 @@ class TestFetchBenchmarkReturns:
             "SPY": {
                 "history": {
                     "close": [400.0]
+                }
+            },
+            "CAC.PA": {
+                "history": {
+                    "close": [7000.0]
                 }
             }
         }
@@ -138,6 +149,11 @@ class TestFetchBenchmarkReturns:
         """Empty history should return None."""
         mock_fetch.return_value = {
             "SPY": {
+                "history": {
+                    "close": []
+                }
+            },
+            "CAC.PA": {
                 "history": {
                     "close": []
                 }
@@ -156,7 +172,7 @@ class TestFetchBenchmarkReturns:
                 }
             }
         }
-        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmark="SPY")
+        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
         assert result is None
 
     @patch("weekly_report.fetch_historical_data")
@@ -165,6 +181,9 @@ class TestFetchBenchmarkReturns:
         mock_fetch.return_value = {
             "SPY": {
                 "prices": [400.0, 405.0]
+            },
+            "CAC.PA": {
+                "prices": [7000.0, 7100.0]
             }
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10")
@@ -178,12 +197,17 @@ class TestFetchBenchmarkReturns:
         assert result is None
 
     @patch("weekly_report.fetch_historical_data")
-    def test_default_benchmark_spy(self, mock_fetch):
-        """Default benchmark should be SPY."""
+    def test_default_benchmarks(self, mock_fetch):
+        """Default benchmarks should include SPY and CAC.PA."""
         mock_fetch.return_value = {
             "SPY": {
                 "history": {
                     "close": [400.0, 405.0]
+                }
+            },
+            "CAC.PA": {
+                "history": {
+                    "close": [7000.0, 7100.0]
                 }
             }
         }
@@ -191,7 +215,10 @@ class TestFetchBenchmarkReturns:
         assert result is not None
         mock_fetch.assert_called_once()
         args = mock_fetch.call_args[0][0]
-        assert args == ["SPY"]
+        assert "SPY" in args
+        assert "CAC.PA" in args
+        assert "SPY" in result
+        assert "CAC.PA" in result
 
 
 class TestWeeklyReportImports:
