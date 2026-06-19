@@ -30,18 +30,39 @@ def calculate_weekly_returns(week_results):
     return np.array(returns)
 
 
-def fetch_benchmark_returns(start_date, end_date, benchmark='SPY'):
-    """Fetch benchmark returns for comparison."""
+def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
+    """Fetch benchmark returns for comparison.
+    
+    Args:
+        start_date: Start date string
+        end_date: End date string
+        benchmarks: List of benchmark tickers, or single string. Defaults to ['SPY', 'CAC.PA'].
+    
+    Returns:
+        Dict mapping benchmark ticker to returns array, or None for failed fetches.
+    """
+    if benchmarks is None:
+        benchmarks = ['SPY', 'CAC.PA']
+    if isinstance(benchmarks, str):
+        benchmarks = [benchmarks]
+    
+    result = {}
     try:
-        data = fetch_historical_data([benchmark], period="1mo")
-        if benchmark in data and 'history' in data[benchmark]:
-            closes = data[benchmark]['history']['close']
-            if len(closes) >= 2:
-                returns = np.diff(closes) / closes[:-1]
-                return returns
+        data = fetch_historical_data(benchmarks, period="1mo")
+        for benchmark in benchmarks:
+            if benchmark in data and 'history' in data[benchmark]:
+                closes = data[benchmark]['history']['close']
+                if len(closes) >= 2:
+                    returns = np.diff(closes) / closes[:-1]
+                    result[benchmark] = returns
+                else:
+                    print(f"  ⚠ Not enough data for benchmark {benchmark}")
+            else:
+                print(f"  ⚠ Could not fetch benchmark {benchmark}")
     except Exception as e:
-        print(f"  ⚠ Could not fetch benchmark: {e}")
-    return None
+        print(f"  ⚠ Could not fetch benchmarks: {e}")
+    
+    return result if result else None
 
 
 def generate_weekly_report():
@@ -104,21 +125,32 @@ def generate_weekly_report():
     if len(portfolio_returns) >= 2:
         print(f"\n📊 Performance Metrics (Week):")
         
-        # Calculate metrics
-        metrics = calculate_all_metrics(portfolio_returns, benchmark_returns)
+        # Calculate metrics against each benchmark
+        spy_returns = benchmark_returns.get('SPY') if benchmark_returns else None
+        metrics = calculate_all_metrics(portfolio_returns, spy_returns)
         
         print(f"   Sharpe Ratio: {metrics.sharpe_ratio:.2f}")
         print(f"   Sortino Ratio: {metrics.sortino_ratio:.2f}")
         
         if metrics.beta is not None:
-            print(f"   Beta: {metrics.beta:.2f}")
-            print(f"   Alpha: {metrics.alpha:.2%}")
+            print(f"   Beta (vs SPY): {metrics.beta:.2f}")
+            print(f"   Alpha (vs SPY): {metrics.alpha:.2%}")
         
         print(f"   Max Drawdown: {metrics.max_drawdown:.2%}")
         print(f"   Volatility: {metrics.volatility:.2%}")
         
         if metrics.information_ratio is not None:
-            print(f"   Information Ratio: {metrics.information_ratio:.2f}")
+            print(f"   Information Ratio (vs SPY): {metrics.information_ratio:.2f}")
+        
+        # Compare against CAC.PA if available
+        cac_returns = benchmark_returns.get('CAC.PA') if benchmark_returns else None
+        if cac_returns is not None and len(cac_returns) == len(portfolio_returns):
+            cac_metrics = calculate_all_metrics(portfolio_returns, cac_returns)
+            if cac_metrics.beta is not None:
+                print(f"   Beta (vs CAC.PA): {cac_metrics.beta:.2f}")
+                print(f"   Alpha (vs CAC.PA): {cac_metrics.alpha:.2%}")
+        elif cac_returns is not None:
+            print(f"   ⚠ CAC.PA data length mismatch, skipping comparison")
         
         # Risk metrics (CVaR)
         cvar_result = calculate_portfolio_cvar(
@@ -128,8 +160,8 @@ def generate_weekly_report():
         print(f"   CVaR 95%: {cvar_result.cvar_95:.2%}")
         print(f"   VaR 95%: {cvar_result.var_95:.2%}")
         
-        # Tail risk analysis
-        tail = tail_risk_analysis(portfolio_returns, benchmark_returns)
+        # Tail risk analysis (vs SPY as primary benchmark)
+        tail = tail_risk_analysis(portfolio_returns, spy_returns)
         print(f"   Skewness: {tail.get('skewness', 0):.2f}")
         print(f"   Kurtosis: {tail.get('kurtosis', 0):.2f}")
     
@@ -223,6 +255,20 @@ def generate_weekly_report():
             f.write(f"| VaR 95% | {cvar_result.var_95:.2%} |\n")
             f.write(f"| Skewness | {tail.get('skewness', 0):.2f} |\n")
             f.write(f"| Kurtosis | {tail.get('kurtosis', 0):.2f} |\n")
+            
+            # CAC.PA comparison
+            if cac_returns is not None and len(cac_returns) == len(portfolio_returns):
+                f.write(f"\n## Benchmark Comparison: CAC 40\n\n")
+                f.write(f"| Metric | Value | Interpretation |\n")
+                f.write(f"|--------|-------|----------------|\n")
+                if cac_metrics.beta is not None:
+                    cac_beta_interp = "Neutral" if 0.9 < cac_metrics.beta < 1.1 else ("Defensive" if cac_metrics.beta < 0.9 else "Aggressive")
+                    f.write(f"| Beta (vs CAC.PA) | {cac_metrics.beta:.2f} | {cac_beta_interp} |\n")
+                    cac_alpha_interp = "Outperform" if cac_metrics.alpha and cac_metrics.alpha > 0 else "Underperform"
+                    f.write(f"| Alpha (vs CAC.PA) | {cac_metrics.alpha:.2%} | {cac_alpha_interp} |\n")
+                if cac_metrics.information_ratio is not None:
+                    cac_ir_interp = "Good" if cac_metrics.information_ratio > 0.5 else "Neutral"
+                    f.write(f"| Information Ratio (vs CAC.PA) | {cac_metrics.information_ratio:.2f} | {cac_ir_interp} |\n")
         
         # Positions
         f.write(f"\n## Positions\n\n")
