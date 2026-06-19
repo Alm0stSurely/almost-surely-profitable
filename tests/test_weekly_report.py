@@ -106,17 +106,10 @@ class TestFetchBenchmarkReturns:
     @patch("weekly_report.fetch_historical_data")
     def test_successful_fetch(self, mock_fetch):
         """Successful benchmark data fetch."""
+        import pandas as pd
         mock_fetch.return_value = {
-            "SPY": {
-                "history": {
-                    "close": [400.0, 402.0, 401.0, 405.0]
-                }
-            },
-            "CAC.PA": {
-                "history": {
-                    "close": [7000.0, 7100.0, 7050.0, 7200.0]
-                }
-            }
+            "SPY": pd.DataFrame({"Close": [400.0, 402.0, 401.0, 405.0]}),
+            "CAC.PA": pd.DataFrame({"Close": [7000.0, 7100.0, 7050.0, 7200.0]})
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
         assert result is not None
@@ -129,17 +122,10 @@ class TestFetchBenchmarkReturns:
     @patch("weekly_report.fetch_historical_data")
     def test_insufficient_data(self, mock_fetch):
         """Only one close price — cannot compute returns."""
+        import pandas as pd
         mock_fetch.return_value = {
-            "SPY": {
-                "history": {
-                    "close": [400.0]
-                }
-            },
-            "CAC.PA": {
-                "history": {
-                    "close": [7000.0]
-                }
-            }
+            "SPY": pd.DataFrame({"Close": [400.0]}),
+            "CAC.PA": pd.DataFrame({"Close": [7000.0]})
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10")
         assert result is None
@@ -147,17 +133,10 @@ class TestFetchBenchmarkReturns:
     @patch("weekly_report.fetch_historical_data")
     def test_empty_history(self, mock_fetch):
         """Empty history should return None."""
+        import pandas as pd
         mock_fetch.return_value = {
-            "SPY": {
-                "history": {
-                    "close": []
-                }
-            },
-            "CAC.PA": {
-                "history": {
-                    "close": []
-                }
-            }
+            "SPY": pd.DataFrame({"Close": []}),
+            "CAC.PA": pd.DataFrame({"Close": []})
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10")
         assert result is None
@@ -165,26 +144,20 @@ class TestFetchBenchmarkReturns:
     @patch("weekly_report.fetch_historical_data")
     def test_ticker_not_found(self, mock_fetch):
         """Requested ticker not in returned data."""
+        import pandas as pd
         mock_fetch.return_value = {
-            "QQQ": {
-                "history": {
-                    "close": [400.0, 405.0]
-                }
-            }
+            "QQQ": pd.DataFrame({"Close": [400.0, 405.0]})
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
         assert result is None
 
     @patch("weekly_report.fetch_historical_data")
     def test_missing_history_key(self, mock_fetch):
-        """Data exists but 'history' key is missing."""
+        """Data exists but 'Close' column is missing."""
+        import pandas as pd
         mock_fetch.return_value = {
-            "SPY": {
-                "prices": [400.0, 405.0]
-            },
-            "CAC.PA": {
-                "prices": [7000.0, 7100.0]
-            }
+            "SPY": pd.DataFrame({"Open": [400.0, 405.0]}),
+            "CAC.PA": pd.DataFrame({"Open": [7000.0, 7100.0]})
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10")
         assert result is None
@@ -199,17 +172,10 @@ class TestFetchBenchmarkReturns:
     @patch("weekly_report.fetch_historical_data")
     def test_default_benchmarks(self, mock_fetch):
         """Default benchmarks should include SPY and CAC.PA."""
+        import pandas as pd
         mock_fetch.return_value = {
-            "SPY": {
-                "history": {
-                    "close": [400.0, 405.0]
-                }
-            },
-            "CAC.PA": {
-                "history": {
-                    "close": [7000.0, 7100.0]
-                }
-            }
+            "SPY": pd.DataFrame({"Close": [400.0, 405.0]}),
+            "CAC.PA": pd.DataFrame({"Close": [7000.0, 7100.0]})
         }
         result = fetch_benchmark_returns("2026-01-01", "2026-01-10")
         assert result is not None

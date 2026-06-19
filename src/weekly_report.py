@@ -50,9 +50,10 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
     try:
         data = fetch_historical_data(benchmarks, period="1mo")
         for benchmark in benchmarks:
-            if benchmark in data and 'history' in data[benchmark]:
-                closes = data[benchmark]['history']['close']
-                if len(closes) >= 2:
+            if benchmark in data:
+                df = data[benchmark]
+                if 'Close' in df.columns and len(df) >= 2:
+                    closes = df['Close'].values
                     returns = np.diff(closes) / closes[:-1]
                     result[benchmark] = returns
                 else:
