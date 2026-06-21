@@ -36,13 +36,13 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
     Args:
         start_date: Start date string
         end_date: End date string
-        benchmarks: List of benchmark tickers, or single string. Defaults to ['SPY', 'CAC.PA'].
+        benchmarks: List of benchmark tickers, or single string. Defaults to ['SPY', 'CAC.PA', 'FEZ'].
     
     Returns:
         Dict mapping benchmark ticker to returns array, or None for failed fetches.
     """
     if benchmarks is None:
-        benchmarks = ['SPY', 'CAC.PA']
+        benchmarks = ['SPY', 'CAC.PA', 'FEZ']
     if isinstance(benchmarks, str):
         benchmarks = [benchmarks]
     
