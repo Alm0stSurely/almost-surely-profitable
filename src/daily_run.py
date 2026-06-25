@@ -22,6 +22,7 @@ from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 from risk.performance_metrics import calculate_all_metrics, format_metrics_report
 from risk.position_cooldown import PositionCooldownManager, CooldownConfig
 from analysis.regime_detector import RegimeDetector, format_regime_for_llm
+from benchmark import LiveEqualWeightBenchmark
 
 
 def setup_directories():
@@ -138,12 +139,20 @@ def run_daily_pipeline(dry_run: bool = False):
     portfolio.update_prices(current_prices)
     portfolio.save_state()
     
-    # Step 3b: Initialize position cooldown manager
+    # Step 3b: Initialize position cooldown manager with adaptive regime
     print("\n[3b/7] Initializing position cooldown guardrails...")
-    cooldown_mgr = PositionCooldownManager(data_dir="data")
+    
+    # Determine regime for adaptive parameters
+    vol_regime = "normal"
+    if market_analysis.get('regime') and market_analysis['regime'].get('state'):
+        vol_regime = market_analysis['regime']['state'].get('volatility_regime', 'normal')
+    
+    cooldown_config = CooldownConfig(current_vol_regime=vol_regime)
+    cooldown_mgr = PositionCooldownManager(data_dir="data", config=cooldown_config)
     backpopulate_cooldown_entries(cooldown_mgr, portfolio)
     cooldown_status = cooldown_mgr.get_status()
     print(f"  ✓ Cooldown manager active — trades this week: {cooldown_status['trades_this_week']}/{cooldown_status['weekly_cap']}")
+    print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {cooldown_status['adaptive_stop_loss']:.1f}%")
     if cooldown_status['active_entries']:
         print(f"  Active entries: {', '.join(cooldown_status['active_entries'].keys())}")
     
@@ -302,6 +311,19 @@ def run_daily_pipeline(dry_run: bool = False):
             elif action_type == 'hold':
                 print(f"  • {ticker}: HOLD")
     
+    # Step 5.5: Update live equal-weight benchmark
+    print("\n[5.5/7] Updating equal-weight benchmark...")
+    try:
+        benchmark = LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir="data")
+        # Get all current prices for benchmark universe
+        benchmark_prices = fetch_current_prices(ALL_TICKERS, max_workers=8)
+        benchmark_summary = benchmark.rebalance(benchmark_prices)
+        print(f"  Benchmark value: €{benchmark_summary['total_value']:.2f} ({benchmark_summary['total_return_pct']:+.2f}%)")
+        print(f"  Benchmark positions: {benchmark_summary['num_positions']}")
+    except Exception as e:
+        print(f"  ⚠ Benchmark update failed: {e}")
+        benchmark_summary = None
+
     # Step 6: Save portfolio state
     print("\n[6/7] Saving portfolio state...")
     portfolio.save_state()
@@ -366,6 +388,8 @@ def run_daily_pipeline(dry_run: bool = False):
     # Step 7: Log results
     print("\n[7/7] Logging results...")
     
+    portfolio_after_summary = portfolio.get_summary() if not dry_run else portfolio_summary
+    
     result = {
         'date': datetime.now().strftime('%Y-%m-%d'),
         'timestamp': datetime.now().isoformat(),
@@ -385,8 +409,9 @@ def run_daily_pipeline(dry_run: bool = False):
             'error': decision.get('error', False)
         },
         'executed_trades': executed_trades,
-        'portfolio_after': portfolio.get_summary() if not dry_run else portfolio_summary,
+        'portfolio_after': portfolio_after_summary,
         'performance_metrics': performance_metrics,
+        'equalweight_benchmark': benchmark_summary,
         'cooldown': {
             'status': cooldown_mgr.get_status() if not dry_run else None,
             'blocked_count': len([t for t in executed_trades if t.get('status') == 'blocked_by_cooldown'])
@@ -394,7 +419,11 @@ def run_daily_pipeline(dry_run: bool = False):
     }
     
     # Save to daily results
-    result_file = f"results/daily/{datetime.now().strftime('%Y-%m-%d')}.json"
+    date_str = datetime.now().strftime('%Y-%m-%d')
+    if dry_run:
+        result_file = f"results/daily/{date_str}_dry_run.json"
+    else:
+        result_file = f"results/daily/{date_str}.json"
     with open(result_file, 'w') as f:
         json.dump(result, f, indent=2, default=str)
     
@@ -404,8 +433,11 @@ def run_daily_pipeline(dry_run: bool = False):
     print("\n" + "="*70)
     print("DAILY RUN COMPLETE")
     print("="*70)
-    print(f"Total Value: €{portfolio.get_summary()['total_value']:.2f}")
-    print(f"Total Return: {portfolio.get_summary()['total_return_pct']:.2f}%")
+    print(f"Strategy Value: €{portfolio_after_summary['total_value']:.2f} ({portfolio_after_summary['total_return_pct']:.2f}%)")
+    if benchmark_summary:
+        print(f"Benchmark Value: €{benchmark_summary['total_value']:.2f} ({benchmark_summary['total_return_pct']:.2f}%)")
+        gap = portfolio_after_summary['total_return_pct'] - benchmark_summary['total_return_pct']
+        print(f"Gap vs Benchmark: {gap:+.2f}%")
     print(f"Trades Executed: {len([t for t in executed_trades if t.get('status') == 'executed'])}")
     print("="*70)
     

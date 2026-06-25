@@ -24,7 +24,17 @@ class CooldownConfig:
     flip_cooldown_days: int = 10
     max_trades_per_week: int = 2
     allow_stop_loss_override: bool = True
+    # Adaptive stop-loss: base threshold, adjusted by regime
     stop_loss_threshold_pct: float = 5.0
+    stop_loss_high_vol: float = 3.0
+    stop_loss_normal_vol: float = 5.0
+    stop_loss_low_vol: float = 7.0
+    # Dynamic trade cap by regime
+    max_trades_high_vol: int = 2
+    max_trades_normal_vol: int = 3
+    max_trades_low_vol: int = 4
+    # Current regime (updated by daily_run)
+    current_vol_regime: str = "normal"  # "high", "normal", "low"
 
 
 class PositionCooldownManager:
@@ -103,6 +113,24 @@ class PositionCooldownManager:
         self.weekly_trades = [t for t in self.weekly_trades if t > cutoff]
         self.weekly_trades.append(now)
 
+    def _get_dynamic_stop_loss(self) -> float:
+        """Return stop-loss threshold adjusted for current volatility regime."""
+        regime = self.config.current_vol_regime
+        if regime == "high":
+            return self.config.stop_loss_high_vol
+        elif regime == "low":
+            return self.config.stop_loss_low_vol
+        return self.config.stop_loss_normal_vol
+
+    def _get_dynamic_trade_cap(self) -> int:
+        """Return weekly trade cap adjusted for current volatility regime."""
+        regime = self.config.current_vol_regime
+        if regime == "high":
+            return self.config.max_trades_high_vol
+        elif regime == "low":
+            return self.config.max_trades_low_vol
+        return self.config.max_trades_normal_vol
+
     def can_sell(
         self,
         ticker: str,
@@ -115,11 +143,12 @@ class PositionCooldownManager:
         Returns:
             (allowed: bool, reason: str)
         """
-        # Check weekly trade cap
-        if len(self.weekly_trades) >= self.config.max_trades_per_week:
+        # Check weekly trade cap (dynamic based on regime)
+        trade_cap = self._get_dynamic_trade_cap()
+        if len(self.weekly_trades) >= trade_cap:
             return (
                 False,
-                f"Weekly trade cap reached ({self.config.max_trades_per_week})"
+                f"Weekly trade cap reached ({len(self.weekly_trades)}/{trade_cap} in {self.config.current_vol_regime} vol regime)"
             )
 
         # Check minimum holding period
@@ -129,13 +158,14 @@ class PositionCooldownManager:
 
         hold_days = (datetime.now() - entry_time).total_seconds() / 86400
         if hold_days < self.config.min_hold_days:
-            # Check stop-loss override
+            # Check stop-loss override with adaptive threshold
             if self.config.allow_stop_loss_override and avg_price > 0:
                 drawdown_pct = ((current_price - avg_price) / avg_price) * 100
-                if drawdown_pct <= -self.config.stop_loss_threshold_pct:
+                adaptive_stop = self._get_dynamic_stop_loss()
+                if drawdown_pct <= -adaptive_stop:
                     return (
                         True,
-                        f"Stop-loss override (drawdown {drawdown_pct:.1f}%)"
+                        f"Stop-loss override (drawdown {drawdown_pct:.1f}%, adaptive threshold {adaptive_stop:.1f}%)"
                     )
             return (
                 False,
@@ -151,11 +181,12 @@ class PositionCooldownManager:
         Returns:
             (allowed: bool, reason: str)
         """
-        # Check weekly trade cap
-        if len(self.weekly_trades) >= self.config.max_trades_per_week:
+        # Check weekly trade cap (dynamic based on regime)
+        trade_cap = self._get_dynamic_trade_cap()
+        if len(self.weekly_trades) >= trade_cap:
             return (
                 False,
-                f"Weekly trade cap reached ({self.config.max_trades_per_week})"
+                f"Weekly trade cap reached ({len(self.weekly_trades)}/{trade_cap} in {self.config.current_vol_regime} vol regime)"
             )
 
         # Check flip cooldown
@@ -173,6 +204,7 @@ class PositionCooldownManager:
     def get_status(self) -> Dict:
         """Return current cooldown status for reporting."""
         now = datetime.now()
+        trade_cap = self._get_dynamic_trade_cap()
         return {
             "active_entries": {
                 k: {
@@ -190,7 +222,9 @@ class PositionCooldownManager:
                 if (now - v).total_seconds() / 86400 < self.config.flip_cooldown_days * 2
             },
             "trades_this_week": len(self.weekly_trades),
-            "weekly_cap": self.config.max_trades_per_week,
+            "weekly_cap": trade_cap,
+            "current_vol_regime": self.config.current_vol_regime,
+            "adaptive_stop_loss": self._get_dynamic_stop_loss(),
             "config": asdict(self.config),
         }
 

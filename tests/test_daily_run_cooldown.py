@@ -259,7 +259,12 @@ class TestCooldownExecutionLoop:
         """Weekly trade cap should block trades beyond limit."""
         mgr = PositionCooldownManager(
             data_dir=str(self.test_dir),
-            config=CooldownConfig(max_trades_per_week=2)
+            config=CooldownConfig(
+                max_trades_per_week=2,
+                max_trades_high_vol=2,
+                max_trades_normal_vol=2,
+                max_trades_low_vol=2,
+            )
         )
         mgr.record_entry("A")
         mgr.record_entry("B")
