@@ -375,32 +375,38 @@ class BacktestEngine:
     def _execute_equal_weight_strategy(self, current_date: datetime, current_prices: Dict[str, float]):
         """
         Execute equal weight strategy with periodic rebalancing.
-        
+
         Buys equal weight on first day, then rebalances periodically
         to maintain equal allocation across all tickers.
         """
         n_tickers = len(current_prices)
         if n_tickers == 0:
             return
-        
+
         target_pct_per_ticker = 90.0 / n_tickers
-        
+
         if not self.portfolio.positions:
-            # Initial purchase: buy equal weight in all tickers
+            # Initial purchase: buy equal weight in all tickers.
+            # We must recalculate the percentage of *current* cash needed
+            # to hit the target dollar amount, because buy() uses pct_of_cash.
             for ticker, price in current_prices.items():
-                if self.enable_cooldowns and self.cooldown_manager:
-                    self.cooldown_manager.record_entry(ticker, current_date)
-                self.portfolio.buy(ticker, target_pct_per_ticker, price)
+                target_value = self.portfolio.total_value * (target_pct_per_ticker / 100)
+                if self.portfolio.cash > 0 and target_value > 0:
+                    buy_pct = min((target_value / self.portfolio.cash) * 100, 100.0)
+                    if buy_pct > 1:
+                        if self.enable_cooldowns and self.cooldown_manager:
+                            self.cooldown_manager.record_entry(ticker, current_date)
+                        self.portfolio.buy(ticker, buy_pct, price)
             return
-        
+
         # Rebalance: check if any position deviates significantly from target
         total_value = self.portfolio.total_value
         if total_value <= 0:
             return
-        
+
         # Calculate target dollar amount per ticker
         target_value_per_ticker = total_value * (target_pct_per_ticker / 100)
-        
+
         # First, sell positions that are overweight
         for ticker, pos in list(self.portfolio.positions.items()):
             if ticker not in current_prices:
@@ -415,14 +421,14 @@ class BacktestEngine:
                         continue
                     self.cooldown_manager.record_exit(ticker, current_date)
                 self.portfolio.sell(ticker, current_prices[ticker], pct=overweight_pct)
-        
+
         # Then, buy positions that are underweight
         for ticker, price in current_prices.items():
             if ticker in self.portfolio.positions:
                 current_value = self.portfolio.positions[ticker].market_value
             else:
                 current_value = 0
-            
+
             if current_value < target_value_per_ticker * 0.95:  # 5% tolerance
                 underweight_value = target_value_per_ticker - current_value
                 # Convert to percentage of available cash
@@ -442,19 +448,25 @@ class BacktestEngine:
         # Only execute once at start
         if self.portfolio.positions:
             return
-        
-        # Buy equal weight in all available tickers
+
+        # Buy equal weight in all available tickers.
+        # Recalculate the percentage of *current* cash needed to hit the
+        # target dollar amount, because buy() uses pct_of_cash.
         n_tickers = len(current_prices)
         if n_tickers == 0:
             return
-        
+
         pct_per_ticker = 90.0 / n_tickers  # 90% invested, 10% cash buffer
-        
+
         for ticker, price in current_prices.items():
-            if self.enable_cooldowns and self.cooldown_manager:
-                self.cooldown_manager.record_entry(ticker, current_date)
-            self.portfolio.buy(ticker, pct_per_ticker, price)
-    
+            target_value = self.portfolio.total_value * (pct_per_ticker / 100)
+            if self.portfolio.cash > 0 and target_value > 0:
+                buy_pct = min((target_value / self.portfolio.cash) * 100, 100.0)
+                if buy_pct > 1:
+                    if self.enable_cooldowns and self.cooldown_manager:
+                        self.cooldown_manager.record_entry(ticker, current_date)
+                    self.portfolio.buy(ticker, buy_pct, price)
+
     def _execute_random_strategy(
         self,
         current_date: datetime,
