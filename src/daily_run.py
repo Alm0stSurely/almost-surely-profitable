@@ -278,9 +278,8 @@ def run_daily_pipeline(dry_run: bool = False):
                     })
             elif action_type == 'sell':
                 # Check cooldown before selling
-                avg_price = portfolio.positions.get(ticker, type('obj', (object,), {'avg_price': 0.0}))().avg_price
-                if ticker in portfolio.positions:
-                    avg_price = portfolio.positions[ticker].avg_price
+                position = portfolio.positions.get(ticker)
+                avg_price = position.avg_price if position else 0.0
                 
                 can_sell, sell_reason = cooldown_mgr.can_sell(ticker, current_price, avg_price)
                 if not can_sell:
