@@ -424,6 +424,27 @@ class TestCalculatePurgedCVScore:
         assert scores["mean"] == scores["scores"][0]
         assert scores["std"] == 0.0
 
+    def test_empty_folds_returns_nan(self):
+        """When all folds are skipped, statistics should be NaN, not raise."""
+        results = pd.DataFrame(
+            {
+                "actual": [],
+                "predicted": [],
+                "fold": [],
+                "combination_id": [],
+            }
+        )
+
+        def mse(y_true, y_pred):
+            return np.mean((y_true - y_pred) ** 2)
+
+        scores = calculate_purged_cv_score(results, mse)
+        assert len(scores["scores"]) == 0
+        assert np.isnan(scores["mean"])
+        assert np.isnan(scores["std"])
+        assert np.isnan(scores["min"])
+        assert np.isnan(scores["max"])
+
     def test_many_folds(self):
         np.random.seed(42)
         n = 100

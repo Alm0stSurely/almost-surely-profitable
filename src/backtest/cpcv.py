@@ -254,10 +254,10 @@ def calculate_purged_cv_score(
         fold_scores.append(score)
     
     return {
-        'mean': np.mean(fold_scores),
-        'std': np.std(fold_scores),
-        'min': np.min(fold_scores),
-        'max': np.max(fold_scores),
+        'mean': np.mean(fold_scores) if fold_scores else float('nan'),
+        'std': np.std(fold_scores) if fold_scores else float('nan'),
+        'min': np.min(fold_scores) if fold_scores else float('nan'),
+        'max': np.max(fold_scores) if fold_scores else float('nan'),
         'scores': fold_scores
     }
 
