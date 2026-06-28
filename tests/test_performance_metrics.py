@@ -143,10 +143,18 @@ def test_calmar_ratio_basic():
 
 
 def test_calmar_ratio_no_drawdown():
-    """Calmar = 0 when drawdown is zero or positive."""
+    """Calmar = inf when there is no drawdown and returns are positive; 0 for invalid positive drawdown."""
     returns = np.full(252, 0.001)
-    assert calculate_calmar_ratio(returns, max_drawdown=0.0) == 0.0
+    assert calculate_calmar_ratio(returns, max_drawdown=0.0) == float('inf')
     assert calculate_calmar_ratio(returns, max_drawdown=0.05) == 0.0
+
+
+def test_calmar_ratio_no_drawdown_negative_returns():
+    """Calmar = 0 when there is no drawdown but returns are negative or zero."""
+    returns = np.full(252, -0.001)
+    assert calculate_calmar_ratio(returns, max_drawdown=0.0) == 0.0
+    returns_zero = np.full(252, 0.0)
+    assert calculate_calmar_ratio(returns_zero, max_drawdown=0.0) == 0.0
 
 
 def test_calmar_ratio_auto_drawdown():

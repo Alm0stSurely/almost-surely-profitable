@@ -220,7 +220,9 @@ def calculate_calmar_ratio(
         drawdowns = (cumulative - rolling_max) / rolling_max
         max_drawdown = np.min(drawdowns)
     
-    if max_drawdown >= 0 or max_drawdown == 0:
+    if max_drawdown == 0:
+        return float('inf') if annualized_return > 0 else 0.0
+    if max_drawdown > 0:
         return 0.0
     
     calmar = annualized_return / abs(max_drawdown)
