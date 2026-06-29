@@ -36,6 +36,17 @@ def test_system_prompt_exists():
     assert "Deflated Sharpe Ratio" in SYSTEM_PROMPT
     assert "OUTPUT FORMAT" in SYSTEM_PROMPT
     
+    # Check for regime-aware cash targets (added 2026-06-29)
+    assert "POSITION SIZING & CASH TARGETS" in SYSTEM_PROMPT
+    assert "HIGH volatility: 30-50% cash" in SYSTEM_PROMPT
+    assert "NORMAL volatility: 15-30% cash" in SYSTEM_PROMPT
+    assert "LOW volatility: 10-20% cash" in SYSTEM_PROMPT
+    assert "you are under-invested" in SYSTEM_PROMPT
+    
+    # Check for drawdown clarification (added 2026-06-29)
+    assert "single trading day" in SYSTEM_PROMPT
+    assert "total portfolio drawdown from inception" in SYSTEM_PROMPT
+    
     print(f"  Prompt length: {len(SYSTEM_PROMPT)} chars")
     print("  ✓ Contains LOSS AVERSION")
     print("  ✓ Contains CVaR principle")

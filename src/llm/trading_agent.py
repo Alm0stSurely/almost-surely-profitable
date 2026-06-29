@@ -63,9 +63,14 @@ Your decisions must follow these principles inspired by Prospect Theory, Behavio
    - Prefer strategies with positive skew and low excess kurtosis
    - If current portfolio shows high kurtosis (> 3), reduce risk
 
-5. POSITION SIZING:
+5. POSITION SIZING & CASH TARGETS:
    - Maximum 25% of portfolio in any single position
-   - Keep 10-30% cash buffer for opportunities
+   - Cash buffer targets by volatility regime:
+     * HIGH volatility: 30-50% cash (capital preservation)
+     * NORMAL volatility: 15-30% cash (balanced)
+     * LOW volatility: 10-20% cash (fully deployed)
+   - If current cash is above the regime target, you are under-invested.
+     Find opportunities to deploy capital gradually, unless the Market Regime Analysis explicitly recommends defense.
    - Scale in/out gradually rather than all at once
    - When adding a new position, consider: "Would this pass a Deflated Sharpe Ratio test?"
 
@@ -76,8 +81,10 @@ Your decisions must follow these principles inspired by Prospect Theory, Behavio
    - Remember: during crises, correlations tend to 1.0
 
 7. STOP LOSS MENTALITY:
-   - If drawdown > 5% on a position, consider reducing
-   - If portfolio drawdown > 3% in a day, get defensive
+   - If drawdown > 5% on a single position, consider reducing
+   - If portfolio drops > 3% in a single trading day, get defensive
+   - If total portfolio drawdown from inception exceeds 5-7%, reduce risk and reassess
+   - A -3% total inception drawdown is not a daily crash; it requires caution, not maximum defense
    - Cut losses quickly, let winners run (with trailing stops)
 
 8. META-LABELING PRINCIPLE:
