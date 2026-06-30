@@ -52,6 +52,7 @@ class Trade:
     price: float
     total_value: float
     fees: float = 0.0
+    realized_pnl: float = 0.0
 
 
 class Portfolio:
@@ -136,7 +137,9 @@ class Portfolio:
             json.dump(state, f, indent=2)
     
     def save_trade(self, trade: Trade) -> None:
-        """Append trade to history file."""
+        """Append trade to history file and in-memory list."""
+        self.trades.append(trade)
+        
         trades = []
         if self.trades_file.exists():
             try:
@@ -236,16 +239,19 @@ class Portfolio:
         )
         self.save_trade(trade)
         
+        self.save_state()
+        
         print(f"✓ BUY {ticker}: {quantity:.4f} @ €{current_price:.2f} = €{total_cost:.2f}")
         return True
     
-    def sell(self, ticker: str, current_price: float) -> bool:
+    def sell(self, ticker: str, current_price: float, pct: Optional[float] = None) -> bool:
         """
-        Execute a sell order (sells entire position).
+        Execute a sell order.
         
         Args:
             ticker: Asset to sell
             current_price: Current market price
+            pct: Percentage of position to sell (0-100). If None or 100, sells entire position.
         
         Returns:
             True if order executed successfully
@@ -255,8 +261,26 @@ class Portfolio:
             return False
         
         pos = self.positions[ticker]
-        sale_value = pos.quantity * current_price
-        realized_pnl = sale_value - pos.cost_basis
+        
+        # Determine sell percentage
+        sell_pct = 100.0 if pct is None else pct
+        if sell_pct <= 0 or sell_pct > 100:
+            print(f"Invalid sell percentage: {sell_pct}")
+            return False
+        
+        # Calculate quantity to sell
+        quantity_to_sell = pos.quantity * (sell_pct / 100)
+        if quantity_to_sell < 0.001:
+            print(f"Sell quantity too small: {quantity_to_sell}")
+            return False
+        
+        # Ensure we don't sell more than we have (floating point safety)
+        quantity_to_sell = min(quantity_to_sell, pos.quantity)
+        
+        sale_value = quantity_to_sell * current_price
+        # Realized PnL proportional to quantity sold (avg_price unchanged)
+        cost_basis_sold = quantity_to_sell * pos.avg_price
+        realized_pnl = sale_value - cost_basis_sold
         
         # Execute trade
         self.cash += sale_value
@@ -267,16 +291,24 @@ class Portfolio:
             timestamp=datetime.now().isoformat(),
             ticker=ticker,
             action='sell',
-            quantity=pos.quantity,
+            quantity=quantity_to_sell,
             price=current_price,
-            total_value=sale_value
+            total_value=sale_value,
+            realized_pnl=realized_pnl
         )
         self.save_trade(trade)
         
-        print(f"✓ SELL {ticker}: {pos.quantity:.4f} @ €{current_price:.2f} = €{sale_value:.2f} (P&L: €{realized_pnl:+.2f})")
+        if sell_pct >= 99.99:
+            print(f"✓ SELL {ticker}: {quantity_to_sell:.4f} @ €{current_price:.2f} = €{sale_value:.2f} (P&L: €{realized_pnl:+.2f})")
+            # Remove position
+            del self.positions[ticker]
+        else:
+            print(f"✓ SELL {ticker}: {quantity_to_sell:.4f} ({sell_pct:.1f}%) @ €{current_price:.2f} = €{sale_value:.2f} (P&L: €{realized_pnl:+.2f})")
+            # Reduce position
+            pos.quantity -= quantity_to_sell
+            pos.current_price = current_price
         
-        # Remove position
-        del self.positions[ticker]
+        self.save_state()
         
         return True
     

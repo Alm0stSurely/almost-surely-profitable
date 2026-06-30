@@ -1,0 +1,33 @@
+{
+  "cash": 3707.398432,
+  "total_realized_pnl": 0.0,
+  "positions": {
+    "SPY": {
+      "quantity": 2.6432099470277106,
+      "avg_price": 680.9901733398438,
+      "current_price": 680.9901733398438
+    },
+    "QQQ": {
+      "quantity": 2.4577768400409297,
+      "avg_price": 600.542724609375,
+      "current_price": 600.542724609375
+    },
+    "GLD": {
+      "quantity": 2.7004015328784337,
+      "avg_price": 448.20001220703125,
+      "current_price": 448.20001220703125
+    },
+    "TLT": {
+      "quantity": 11.165381634082953,
+      "avg_price": 88.88745880126953,
+      "current_price": 88.88745880126953
+    },
+    "^FCHI": {
+      "quantity": 0.09654956045947512,
+      "avg_price": 8429.0302734375,
+      "current_price": 8429.0302734375
+    }
+  },
+  "last_updated": "2026-05-29T22:33:55.851234",
+  "total_value": 10000.0
+}

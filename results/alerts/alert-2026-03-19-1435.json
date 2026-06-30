@@ -1,0 +1,33 @@
+{
+  "alert_id": "alert-2026-03-19-1435",
+  "timestamp": "2026-03-19T14:35:03Z",
+  "type": "POSITION_MONITORING",
+  "severity": "MEDIUM",
+  "alerts": [
+    {
+      "ticker": "OR.PA",
+      "drawdown_pct": -4.6,
+      "threshold": -5.0,
+      "margin_to_stop": 0.4,
+      "action": "HOLD"
+    },
+    {
+      "ticker": "FEZ",
+      "drawdown_pct": -2.19,
+      "threshold": -5.0,
+      "margin_to_stop": 2.81,
+      "action": "HOLD"
+    },
+    {
+      "ticker": "GLD",
+      "drawdown_pct": -4.84,
+      "threshold": -5.0,
+      "margin_to_stop": 0.16,
+      "action": "WATCH_CLOSELY"
+    }
+  ],
+  "executed_actions": [],
+  "reasoning": "Continued market weakness across European equities and gold. OR.PA at -4.60% and GLD at -4.84% are approaching the 5% stop-loss threshold but have not breached it. FEZ at -2.19% remains comfortably within limits. No action taken \u2014 premature stop-loss activation would violate the CVaR discipline. Monitoring GLD closely as it is only 0.16% from threshold.",
+  "strategy_note": "After stop-loss executions at 12:15 UTC, portfolio has 36% cash (\u20ac3497) providing defensive buffer. Remaining positions allowed to fluctuate within 5% bands. Emotional reaction to intraday volatility is the enemy of systematic trading.",
+  "next_review": "Immediate if GLD or OR.PA breach -5%, otherwise 22:30 UTC daily session"
+}

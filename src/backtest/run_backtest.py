@@ -71,7 +71,7 @@ Examples:
     parser.add_argument(
         "--strategy",
         type=str,
-        choices=["buy_and_hold", "equal_weight", "llm"],
+        choices=["buy_and_hold", "equal_weight", "llm", "random"],
         default="buy_and_hold",
         help="Trading strategy to test (default: buy_and_hold)"
     )
@@ -111,20 +111,43 @@ Examples:
         help="Generate visualization plots"
     )
     parser.add_argument(
+        "--cooldowns",
+        action="store_true",
+        help="Enable position cooldown guardrails (min_hold, flip_cooldown, weekly_cap)"
+    )
+    parser.add_argument(
+        "--min-hold-days",
+        type=int,
+        default=5,
+        help="Minimum holding period in days (default: 5)"
+    )
+    parser.add_argument(
+        "--flip-cooldown-days",
+        type=int,
+        default=10,
+        help="Flip cooldown in days (default: 10)"
+    )
+    parser.add_argument(
+        "--max-trades-per-week",
+        type=int,
+        default=2,
+        help="Maximum trades per week (default: 2)"
+    )
+    parser.add_argument(
         "--compare",
         action="store_true",
-        help="Compare all strategies"
+        help="Run comparison of all strategies (buy_and_hold, equal_weight, random, llm)"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Validate date range
     start_dt = datetime.strptime(args.start, "%Y-%m-%d")
     end_dt = datetime.strptime(args.end, "%Y-%m-%d")
     if start_dt >= end_dt:
         print("Error: Start date must be before end date")
         sys.exit(1)
-    
+
     print(f"\n{'='*70}")
     print(f"TRADING AGENT BACKTEST")
     print(f"{'='*70}")
@@ -133,12 +156,23 @@ Examples:
     print(f"Tickers: {', '.join(args.tickers)}")
     print(f"Initial Capital: €{args.capital:,.2f}")
     print(f"Frequency: {args.frequency}")
+    print(f"Cooldowns: {'Enabled' if args.cooldowns else 'Disabled'}")
     print(f"{'='*70}\n")
-    
-    if args.compare:
+
+    # Build cooldown config if enabled
+    cooldown_config = None
+    if args.cooldowns:
+        from backtest.backtest_cooldown import CooldownConfig
+        cooldown_config = CooldownConfig(
+            min_hold_days=args.min_hold_days,
+            flip_cooldown_days=args.flip_cooldown_days,
+            max_trades_per_week=args.max_trades_per_week
+        )
+
+    if getattr(args, 'compare', False):
         # Run comparison of all strategies
         results = {}
-        for strategy in ["buy_and_hold", "equal_weight", "llm"]:
+        for strategy in ["buy_and_hold", "equal_weight", "random", "llm"]:
             if strategy == "llm":
                 print(f"\n⚠️  LLM strategy may take longer due to API calls...")
             
@@ -147,14 +181,20 @@ Examples:
                 end_date=args.end,
                 initial_capital=args.capital,
                 tickers=args.tickers,
-                rebalance_frequency=args.frequency
+                rebalance_frequency=args.frequency,
+                enable_cooldowns=args.cooldowns,
+                cooldown_config=cooldown_config
             )
             
-            result = engine.run_backtest(
-                use_llm=(strategy == "llm"),
-                strategy=strategy,
-                benchmark=args.benchmark
-            )
+            kwargs = {
+                "use_llm": (strategy == "llm"),
+                "strategy": strategy,
+                "benchmark": args.benchmark
+            }
+            if strategy == "random":
+                kwargs["random_seed"] = 42
+            
+            result = engine.run_backtest(**kwargs)
             results[strategy] = result
             print_backtest_report(result, strategy)
         
@@ -182,14 +222,20 @@ Examples:
             end_date=args.end,
             initial_capital=args.capital,
             tickers=args.tickers,
-            rebalance_frequency=args.frequency
+            rebalance_frequency=args.frequency,
+            enable_cooldowns=args.cooldowns,
+            cooldown_config=cooldown_config
         )
         
-        result = engine.run_backtest(
-            use_llm=(args.strategy == "llm"),
-            strategy=args.strategy,
-            benchmark=args.benchmark
-        )
+        kwargs = {
+            "use_llm": (args.strategy == "llm"),
+            "strategy": args.strategy,
+            "benchmark": args.benchmark
+        }
+        if args.strategy == "random":
+            kwargs["random_seed"] = 42
+        
+        result = engine.run_backtest(**kwargs)
         
         print_backtest_report(result, args.strategy)
         

@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-03-16T08:10:00Z",
+  "alert_time": "2026-03-16T08:05:07Z",
+  "alert_count": 7,
+  "decision": "HOLD",
+  "actions_taken": [],
+  "reasoning": "Alert triggered on market open with carry-over P&L from March 13. No new deterioration. VIX declining (-4.30%) suggests volatility compression. All positions above -5% stop threshold. Awaiting daily close for rebalancing.",
+  "portfolio_value": 9765.87,
+  "cash_pct": 42.7,
+  "max_drawdown_position": -4.30,
+  "ticker": "MC.PA"
+}

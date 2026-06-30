@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-04-02T12:15:06Z",
+  "alert_type": "INTRADAY_POSITION_MOVEMENT",
+  "ticker": "RMS.PA",
+  "severity": "MEDIUM",
+  "analysis": {
+    "current_price": 1626.5,
+    "entry_price": 1669.5,
+    "unrealized_pnl_pct": -2.58,
+    "rsi_14": 21.5,
+    "bollinger_position": 0.24,
+    "distance_sma20_pct": -7.55,
+    "sector_context": "MC.PA (LVMH) also down -1.37% - sector-wide pressure",
+    "market_context": "SPY +0.75% - no systemic risk"
+  },
+  "decision": {
+    "action": "HOLD",
+    "reasoning": "Mean reversion thesis intact - RSI even more oversold (21.5 vs 22.3 at entry). Movement is sector-wide (LVMH -1.37%), not Hermès-specific. Within normal volatility range (2.13% avg). US market positive (+0.75%). Recommend waiting for US close (21h UTC) before reassessing.",
+    "conditions_for_action": [
+      "If close < €1600 (-4.2% from entry): Re-evaluate mean reversion thesis",
+      "If sector continues weakening tomorrow: Consider risk reduction"
+    ]
+  },
+  "orders_executed": []
+}

@@ -113,4 +113,114 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-03-17 — Market Regime Detection
+
+**Contexte** : Besoin d'adapter la stratégie aux conditions de marché macro
+
+**Solution** : Module `analysis/regime_detector.py` avec 3 dimensions :
+- Volatility regime (high/normal/low) via percentile historique
+- Trend regime (trending/mean-reverting/neutral) via ADX
+- Correlation regime via matrice de corrélation 60j
+
+**Implémentation** :
+- Détection automatique à chaque exécution de daily_run.py
+- Recommandations dynamiques : position sizing, stop-loss tightening, trend vs mean-reversion
+- Intégration dans le prompt LLM via `format_regime_for_llm()`
+
+**Métriques** :
+- ADX > 25 : trending | ADX < 20 : mean-reverting
+- Vol percentile > 75% : high vol | < 25% : low vol
+- Avg correlation > 0.7 : high correlation (diversification difficile)
+
+**Règle** :
+- High vol → conservative sizing + tight stops
+- Mean-reverting → favoriser contrarian trades (RSI extremes)
+- High correlation → réduire l'exposition équity totale
+
+---
+
+## 2026-04-23 — Timezone-aware datetime comparisons in pandas
+
+**Contexte** : Le backtest engine retournait "No data fetched" alors que yfinance retournait bien des données
+
+**Erreur** : yfinance retourne des DataFrames avec un DatetimeIndex timezone-aware (America/New_York). Le `BacktestEngine` utilisait `datetime.strptime()` qui produit des datetimes naive. La comparaison `df.index >= start_date` lève un `TypeError: can't compare offset-naive and offset-aware datetimes`. Le code fallback utilisait des comparaisons de strings (`strftime("%Y-%m-%d")`) qui filtraient silencieusement toutes les lignes.
+
+**Fix** :
+1. Normaliser l'index dans `fetch_historical_data()` : `hist.index.tz_convert("UTC").tz_localize(None)`
+2. Utiliser `start`/`end` au lieu de `period` pour les requêtes backtest (yfinance `period` est relatif à aujourd'hui)
+3. Remplacer toutes les comparaisons string par des comparaisons datetime directes
+
+**Règle** :
+- Toujours normaliser les indices de temps yfinance à naive/UTC avant toute comparaison
+- Ne jamais comparer des strings pour filtrer des dates — c'est fragile et silencieux
+- Vérifier la plage de dates des données fetchées avant de lancer un backtest
+
+---
+
+## 2026-03-26 — Vérifier les signatures avant d'écrire des tests
+
+**Contexte** : Tentative d'ajout de tests pour decision_analyzer, backtest, evaluation
+
+**Erreur** : Tests écrits basés sur des suppositions de signatures (class MetaLabeling, def generate_report)
+
+**Réalité** : Les vraies signatures étaient différentes (MetaLabeler, generate_comprehensive_report)
+
+**Leçon** : Toujours lire le fichier source avant d'écrire des tests
+
+**Commande** : `grep -n "^def\|^class" fichier.py` pour voir les vraies signatures
+
+**Règle** : Pas de test sans avoir vu la signature réelle de la fonction/classe
+
+---
+
+## 2026-05-11 — LLM API Timeout (api.kimi.com)
+
+**Contexte** : Trois timeouts consécutifs sur l'API Kimi (21:05, 22:32, 22:37 UTC) — Read timed out après 180s
+
+**Impact** : Pipeline daily_run tombe en fallback "hold all positions" — pas de décision de trading possible
+
+**Analyse** :
+- Le timeout est côté serveur (pas de réponse HTTP, pas d'erreur 4xx/5xx)
+- Probablement temporaire (maintenance, surcharge, ou changement d'endpoint)
+- Le fallback "hold" est le comportement correct — mieux vaut ne pas trader que trader sans analyse
+
+**Règle** :
+- Si timeout répété 2 jours de suite → investiguer endpoint alternatif ou fallback LLM local (llama.cpp)
+- Toujours vérifier la connectivité API avant la session de trading
+- Ne jamais forcer une décision sans LLM — le system prompt contient des règles de risk management critiques
+
+---
+
+## 2026-05-11 — NaN Close prices from yfinance (Euronext pre-market)
+
+**Contexte** : AI.PA, SAN.PA, MC.PA retournent une ligne pour 2026-05-11 avec Close = NaN
+
+**Cause** : yfinance retourne une ligne pour "aujourd'hui" même si le marché n'a pas encore clôturé (ou les données ne sont pas encore propagées). Euronext ferme à 17:30 CET, mais à 22:30 UTC les closing prices individuelles ne sont pas toujours disponibles via yfinance.
+
+**Impact** : Tous les indicateurs techniques (RSI, Bollinger, drawdown, daily_return) devenaient NaN car les calculs rolling incluaient la valeur NaN
+
+**Fix** : `calculate_all_indicators()` dans `src/data/indicators.py` — ajout de `df.dropna(subset=['Close'])` avant les calculs
+
+**Règle** :
+- Toujours nettoyer les NaN dans les données brutes avant calcul d'indicateurs
+- `dropna(subset=['Close'])` est préférable à `ffill()` car une donnée manquante réelle ne doit pas être interpolée silencieusement
+- Vérifier la date du dernier point valide pour s'assurer qu'on n'utilise pas des données obsolètes
+
+---
+
+## 2026-06-16 — Test flakiness due to hardcoded dates in `test_decision_memory.py`
+
+**Contexte** : `TestEdgeCases::test_large_numbers` échoue avec `KeyError: 'best_trade'`
+
+**Cause** : `make_record()` utilise une date par défaut fixe (2026-05-10). `get_decision_summary(days=30)` filtre sur les 30 derniers jours. Depuis le 2026-06-16, cette date est hors fenêtre, donc `recent_decisions` est vide et la méthode retourne un dict sans les clés `best_trade`/`worst_trade`.
+
+**Fix** : Passer explicitement une date récente (`date="2026-06-15"`) dans les appels `make_record()` du test concerné.
+
+**Règle** :
+- Ne jamais utiliser de dates hardcodées relatives à "aujourd'hui" dans les tests sans les surcharger explicitement
+- Toujours paramétriser la date de référence ou utiliser `datetime.now()` dans les helpers de test
+- Si un test dépend de la date courante, le rendre explicite et idempotent
+
+---
+
 *Document mis à jour régulièrement avec les apprentissages du live trading.*

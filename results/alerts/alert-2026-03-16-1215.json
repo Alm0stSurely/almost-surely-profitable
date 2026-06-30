@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-03-16T12:18:00Z",
+  "alert_time": "2026-03-16T12:15:05Z",
+  "alert_count": 8,
+  "decision": "HOLD",
+  "actions_taken": [],
+  "reasoning": "MC.PA at -4.78% is close to -5% stop (0.22% buffer) but not triggered. VIX collapsed -7.43% confirming volatility compression. Mixed signals in portfolio (some positions improving). Daily close discipline maintained.",
+  "watch_list": ["MC.PA"],
+  "portfolio_value": 9765.87,
+  "cash_pct": 42.7,
+  "max_drawdown_position": -4.78,
+  "ticker": "MC.PA",
+  "distance_to_stop_pct": 0.22
+}

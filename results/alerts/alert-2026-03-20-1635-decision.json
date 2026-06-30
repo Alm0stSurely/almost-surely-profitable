@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-03-20T16:35:05Z",
+  "alert_type": "intraday_monitoring",
+  "trigger": "position_movement",
+  "assets": ["GWX", "FEZ", "DG.PA"],
+  "analysis": {
+    "GWX": {
+      "movement_pct_1435": -2.13,
+      "movement_pct_1635": -2.72,
+      "trend": "deteriorating",
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 2.28
+    },
+    "FEZ": {
+      "movement_pct_1435": -3.39,
+      "movement_pct_1635": -4.01,
+      "trend": "critical_approach",
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 0.99,
+      "warning": "Approaching stop-loss threshold - high priority monitoring"
+    },
+    "DG.PA": {
+      "movement_pct_1635": -2.71,
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 2.29
+    }
+  },
+  "decision": {
+    "action": "HOLD",
+    "rationale": [
+      "FEZ at -4.01% is close to stop-loss but threshold not yet breached",
+      "Stop-loss discipline requires -5% trigger, not anticipatory action",
+      "Selling at -4% risks locking in losses before potential rebound",
+      "US market open for 3 more hours - significant time for reversal",
+      "Strategic decisions made at market close (22:30 UTC), not intraday"
+    ],
+    "conditions_for_immediate_action": [
+      "FEZ reaches -5.0% stop-loss threshold",
+      "Any position breaches -5% drawdown"
+    ],
+    "next_evaluation": "2026-03-20T22:30:00Z",
+    "escalation": "If next alert shows FEZ >= -5%, execute stop-loss immediately"
+  },
+  "risk_assessment": {
+    "severity": "ELEVATED",
+    "primary_concern": "FEZ approaching stop-loss (0.99% remaining)",
+    "tail_risk": "MANAGEABLE with close monitoring",
+    "recommendation": "High alert status; prepare for potential stop-loss execution on FEZ"
+  }
+}

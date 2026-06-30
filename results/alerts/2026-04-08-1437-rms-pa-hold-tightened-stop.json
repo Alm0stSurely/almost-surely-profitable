@@ -1,0 +1,46 @@
+{
+  "timestamp": "2026-04-08T14:37:05.050526",
+  "alert_type": "INTRADAY_POSITION_MOVEMENT",
+  "ticker": "RMS.PA",
+  "severity": "HIGH",
+  "market_context": {
+    "current_price": 1771.5,
+    "vs_1215": -0.95,
+    "daily_change_pct": 6.49,
+    "fez_change_pct": 4.37,
+    "interpretation": "Healthy pullback from peak, European rally intact"
+  },
+  "position_analysis": {
+    "remaining_qty": 0.6670573604252217,
+    "avg_price": 1663.4803944596904,
+    "current_price": 1771.5,
+    "unrealized_pnl": 72.06,
+    "unrealized_pnl_pct": 6.49,
+    "vs_1215_pnl": -11.34
+  },
+  "decision": {
+    "action": "HOLD",
+    "previous_stop": 1750.0,
+    "new_trailing_stop": 1755.0,
+    "distance_to_new_stop": 16.5,
+    "reasoning": [
+      "Price remains above original trailing stop (\u20ac1771 > \u20ac1750)",
+      "Pullback of -0.95% from 12:15 peak is healthy consolidation",
+      "FEZ +4.37% confirms European rally still intact",
+      "Tightening stop to \u20ac1755 to protect gains on further retracement",
+      "Exit plan: Sell immediately if price drops below \u20ac1760"
+    ],
+    "framework": "Behavioral_RL",
+    "principles_applied": [
+      "Risk_Management",
+      "Trailing_Stop_Adjustment"
+    ]
+  },
+  "executed_trade": null,
+  "cumulative_position_pnl": {
+    "realized_this_morning": 69.38,
+    "unrealized_now": 72.06,
+    "total_potential": 141.44
+  },
+  "next_check": "Immediate if price < \u20ac1760, else 16:35 UTC"
+}

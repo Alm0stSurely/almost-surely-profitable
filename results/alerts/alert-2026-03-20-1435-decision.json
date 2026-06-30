@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-03-20T14:35:05Z",
+  "alert_type": "intraday_monitoring",
+  "trigger": "position_movement",
+  "assets": ["GWX", "FEZ"],
+  "analysis": {
+    "GWX": {
+      "movement_pct": -2.13,
+      "stop_loss_threshold": -5.0,
+      "stop_loss_price": 40.50,
+      "current_price": 41.72,
+      "distance_to_stop": 2.93
+    },
+    "FEZ": {
+      "movement_pct": -3.39,
+      "stop_loss_threshold": -5.0,
+      "stop_loss_price": 59.74,
+      "current_price": 60.75,
+      "distance_to_stop": 1.65
+    }
+  },
+  "decision": {
+    "action": "HOLD",
+    "rationale": [
+      "Stop-loss thresholds (-5%) not reached for either position",
+      "Intraday volatility within expected ranges for small-cap/international ETFs",
+      "Portfolio drawdown (-1.62%) is unrealized; no emergency action required",
+      "Strategic decision point is market close (22:30 UTC), not intraday moves",
+      "Cash buffer (37.4%) provides downside protection without forced liquidation"
+    ],
+    "next_evaluation": "2026-03-20T22:30:00Z"
+  },
+  "risk_assessment": {
+    "severity": "LOW",
+    "tail_risk": "MANAGEABLE",
+    "recommendation": "Monitor only; no action until market close or stop-loss breach"
+  }
+}

@@ -5,7 +5,9 @@
     {"ticker": "GLD", "name": "Gold ETF"},
     {"ticker": "TLT", "name": "US Bonds ETF"},
     {"ticker": "FEZ", "name": "Euro Stoxx 50 ETF"},
-    {"ticker": "^FCHI", "name": "CAC 40"}
+    {"ticker": "^FCHI", "name": "CAC 40"},
+    {"ticker": "VIXY", "name": "VIX Short-Term Futures ETF"},
+    {"ticker": "REET", "name": "iShares Global REIT ETF"}
   ],
   "small_cap": [
     {"ticker": "IWM", "name": "iShares Russell 2000"},

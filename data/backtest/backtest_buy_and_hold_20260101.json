@@ -1,0 +1,23 @@
+{
+  "cash": 3430.0,
+  "total_realized_pnl": 0.0,
+  "positions": {
+    "SPY": {
+      "quantity": 4.403286267716795,
+      "avg_price": 681.309326171875,
+      "current_price": 681.309326171875
+    },
+    "QQQ": {
+      "quantity": 3.4294230431105936,
+      "avg_price": 612.347900390625,
+      "current_price": 612.347900390625
+    },
+    "GLD": {
+      "quantity": 3.690870755512347,
+      "avg_price": 398.2799987792969,
+      "current_price": 398.2799987792969
+    }
+  },
+  "last_updated": "2026-06-16T22:32:21.088208",
+  "total_value": 10000.0
+}

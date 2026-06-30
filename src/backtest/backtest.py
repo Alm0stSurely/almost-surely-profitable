@@ -17,9 +17,58 @@ from data.fetch_market_data import fetch_historical_data
 from data.indicators import calculate_all_indicators, get_latest_indicators
 from portfolio.portfolio import Portfolio
 from llm.trading_agent import TradingAgent
+from backtest.backtest_cooldown import BacktestCooldownManager, CooldownConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class RandomStrategy:
+    """
+    Random baseline strategy for backtesting.
+    Generates random buy/sell/hold decisions to establish
+    a statistical baseline for strategy comparison.
+    """
+    
+    def __init__(self, seed: Optional[int] = None, max_position_pct: float = 30.0):
+        self.rng = np.random.RandomState(seed)
+        self.max_position_pct = max_position_pct
+        self.actions = ["buy", "sell", "hold"]
+        self.weights = [0.25, 0.25, 0.50]  # More holds than trades
+    
+    def generate_decisions(
+        self,
+        tickers: List[str],
+        portfolio: Portfolio,
+        current_prices: Dict[str, float]
+    ) -> List[Dict]:
+        """Generate random trading decisions for given tickers."""
+        decisions = []
+        
+        for ticker in tickers:
+            if ticker not in current_prices:
+                continue
+            
+            action = self.rng.choice(self.actions, p=self.weights)
+            
+            if action == "hold":
+                decisions.append({"ticker": ticker, "action": "hold", "pct": 0})
+                continue
+            
+            if action == "buy":
+                # Random allocation between 5% and max_position_pct
+                pct = self.rng.uniform(5.0, self.max_position_pct)
+                decisions.append({"ticker": ticker, "action": "buy", "pct": round(pct, 1)})
+            
+            elif action == "sell":
+                # Only sell if we have a position
+                pos = portfolio.positions.get(ticker)
+                if pos is not None and getattr(pos, 'quantity', 0) > 0:
+                    # Random partial or full sell
+                    pct = self.rng.uniform(25.0, 100.0)
+                    decisions.append({"ticker": ticker, "action": "sell", "pct": round(pct, 1)})
+        
+        return decisions
 
 
 class BacktestEngine:
@@ -34,29 +83,39 @@ class BacktestEngine:
         end_date: str,
         initial_capital: float = 10000.0,
         tickers: Optional[List[str]] = None,
-        rebalance_frequency: str = "daily"  # daily, weekly
+        rebalance_frequency: str = "daily",  # daily, weekly
+        cooldown_config: Optional[CooldownConfig] = None,
+        enable_cooldowns: bool = False,
     ):
         self.start_date = datetime.strptime(start_date, "%Y-%m-%d")
         self.end_date = datetime.strptime(end_date, "%Y-%m-%d")
         self.initial_capital = initial_capital
         self.tickers = tickers or ["SPY", "QQQ", "GLD"]
         self.rebalance_frequency = rebalance_frequency
+        self.enable_cooldowns = enable_cooldowns
+        self.cooldown_manager = BacktestCooldownManager(config=cooldown_config) if enable_cooldowns else None
         
         self.portfolio = None
         self.results = []
         
     def fetch_historical_data(self) -> Dict[str, pd.DataFrame]:
         """Fetch historical data for backtest period."""
-        period = f"{(self.end_date - self.start_date).days + 60}d"
-        logger.info(f"Fetching data for {len(self.tickers)} tickers, period: {period}")
+        # Use start/end dates for absolute date range (not relative period)
+        start_str = self.start_date.strftime("%Y-%m-%d")
+        end_str = self.end_date.strftime("%Y-%m-%d")
+        logger.info(f"Fetching data for {len(self.tickers)} tickers, from {start_str} to {end_str}")
         
-        data = fetch_historical_data(self.tickers, period=period)
+        data = fetch_historical_data(
+            self.tickers,
+            start=start_str,
+            end=end_str,
+            interval="1d"
+        )
         
-        # Filter to backtest date range
+        # Filter to backtest date range using datetime comparison
         filtered_data = {}
         for ticker, df in data.items():
-            df = df[(df.index >= self.start_date.strftime("%Y-%m-%d")) & 
-                    (df.index <= self.end_date.strftime("%Y-%m-%d"))]
+            df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
             if not df.empty:
                 filtered_data[ticker] = df
         
@@ -71,8 +130,8 @@ class BacktestEngine:
         market_data = {}
         
         for ticker, df in data.items():
-            # Get data up to current date
-            mask = df.index <= current_date.strftime("%Y-%m-%d %H:%M:%S")
+            # Get data up to current date (normalize to date for daily data)
+            mask = df.index.date <= current_date.date()
             hist = df[mask]
             
             if len(hist) < 20:
@@ -95,19 +154,22 @@ class BacktestEngine:
             return []
         
         df = data[benchmark_ticker]
-        # Filter to backtest period
-        df = df[(df.index >= self.start_date.strftime("%Y-%m-%d")) & 
-                (df.index <= self.end_date.strftime("%Y-%m-%d"))]
+        # Filter to backtest period using datetime comparison
+        df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
         
+        # Vectorized return calculation via numpy
         closes = df['Close'].values
-        returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-        return returns
+        if len(closes) < 2:
+            return []
+        returns = np.diff(closes) / closes[:-1]
+        return returns.tolist()
 
     def run_backtest(
         self,
         use_llm: bool = False,
-        strategy: str = "buy_and_hold",  # buy_and_hold, equal_weight, llm
-        benchmark: str = "SPY"
+        strategy: str = "buy_and_hold",  # buy_and_hold, equal_weight, llm, random
+        benchmark: str = "SPY",
+        random_seed: Optional[int] = None
     ) -> Dict:
         """
         Run the backtest simulation.
@@ -120,13 +182,17 @@ class BacktestEngine:
             Backtest results dictionary
         """
         logger.info(f"Starting backtest from {self.start_date.date()} to {self.end_date.date()}")
-        logger.info(f"Strategy: {strategy}, Use LLM: {use_llm}")
+        logger.info(f"Strategy: {strategy}, Use LLM: {use_llm}, Cooldowns: {self.enable_cooldowns}")
         
         # Fetch data
         data = self.fetch_historical_data()
         if not data:
             logger.error("No data fetched")
             return {}
+        
+        # Pre-compute price lookups for fast O(1) date access
+        logger.info("Pre-computing price lookups...")
+        self._precompute_price_lookups(data)
         
         # Initialize portfolio
         self.portfolio = Portfolio(
@@ -140,6 +206,9 @@ class BacktestEngine:
         
         # Initialize LLM agent if needed
         agent = TradingAgent() if use_llm else None
+        
+        # Initialize random strategy if needed
+        random_strategy = RandomStrategy(seed=random_seed) if strategy == "random" else None
         
         # Run simulation
         for i, current_date in enumerate(trading_dates):
@@ -159,8 +228,11 @@ class BacktestEngine:
                 if strategy == "llm" and use_llm:
                     self._execute_llm_strategy(data, current_date, agent, current_prices)
                 elif strategy == "equal_weight":
-                    self._execute_equal_weight_strategy(current_prices)
-                # buy_and_hold: do nothing after initial purchase
+                    self._execute_equal_weight_strategy(current_date, current_prices)
+                elif strategy == "random" and random_strategy:
+                    self._execute_random_strategy(current_date, current_prices, random_strategy)
+                elif strategy == "buy_and_hold":
+                    self._execute_buy_and_hold_strategy(current_date, current_prices)
             
             # Record daily result
             self._record_daily_result(current_date, current_prices)
@@ -169,7 +241,7 @@ class BacktestEngine:
         benchmark_returns = self._get_benchmark_returns(data, benchmark)
         metrics = self._calculate_metrics(benchmark_returns)
         
-        return {
+        result = {
             "start_date": self.start_date.strftime("%Y-%m-%d"),
             "end_date": self.end_date.strftime("%Y-%m-%d"),
             "strategy": strategy,
@@ -193,6 +265,18 @@ class BacktestEngine:
             "daily_returns": metrics["daily_returns"],
             "daily_results": self.results
         }
+        
+        # Add cooldown metrics if enabled
+        if self.enable_cooldowns and self.cooldown_manager:
+            result["cooldown_metrics"] = self.cooldown_manager.get_metrics()
+            result["cooldown_config"] = {
+                "min_hold_days": self.cooldown_manager.config.min_hold_days,
+                "flip_cooldown_days": self.cooldown_manager.config.flip_cooldown_days,
+                "max_trades_per_week": self.cooldown_manager.config.max_trades_per_week,
+                "stop_loss_threshold_pct": self.cooldown_manager.config.stop_loss_threshold_pct,
+            }
+        
+        return result
     
     def _get_trading_dates(self, data: Dict[str, pd.DataFrame]) -> List[datetime]:
         """Get list of trading dates from data."""
@@ -201,6 +285,22 @@ class BacktestEngine:
         dates = pd.to_datetime(data[first_ticker].index).tolist()
         return [d for d in dates if self.start_date <= d <= self.end_date]
     
+    def _precompute_price_lookups(self, data: Dict[str, pd.DataFrame]) -> None:
+        """
+        Pre-compute price lookups for O(1) date access during backtest.
+        
+        The original approach called strftime() on the entire DataFrame index
+        for every ticker on every day -- O(n_tickers * n_days * n_rows) overall.
+        Pre-computing a nested dict reduces _get_prices_for_date to O(n_tickers).
+        """
+        self._price_lookups = {}
+        for ticker, df in data.items():
+            # Build {date_obj: close_price} using vectorized index access
+            self._price_lookups[ticker] = {
+                idx.date(): float(row['Close'])
+                for idx, row in df.iterrows()
+            }
+    
     def _get_prices_for_date(
         self,
         data: Dict[str, pd.DataFrame],
@@ -208,14 +308,12 @@ class BacktestEngine:
     ) -> Dict[str, float]:
         """Get closing prices for all tickers on given date."""
         prices = {}
-        date_str = date.strftime("%Y-%m-%d")
+        date_only = date.date() if hasattr(date, 'date') else date
         
-        for ticker, df in data.items():
-            # Find row for this date
-            mask = df.index.strftime("%Y-%m-%d") == date_str
-            rows = df[mask]
-            if not rows.empty:
-                prices[ticker] = float(rows['Close'].iloc[-1])
+        for ticker, lookup in self._price_lookups.items():
+            price = lookup.get(date_only)
+            if price is not None:
+                prices[ticker] = price
         
         return prices
     
@@ -244,7 +342,7 @@ class BacktestEngine:
         # Get LLM decision
         decision = agent.get_trading_decision(market_data, portfolio_summary)
         
-        # Execute actions
+        # Execute actions with cooldown checks
         for action in decision.get("actions", []):
             ticker = action.get("ticker")
             action_type = action.get("action")
@@ -256,25 +354,160 @@ class BacktestEngine:
             price = current_prices[ticker]
             
             if action_type == "buy":
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_buy(ticker, current_date)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked BUY {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_entry(ticker, current_date)
                 self.portfolio.buy(ticker, pct, price)
             elif action_type == "sell":
-                self.portfolio.sell(ticker, price)
+                pos = self.portfolio.positions.get(ticker)
+                avg_price = pos.avg_price if pos else 0
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_sell(ticker, current_date, price, avg_price)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked SELL {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_exit(ticker, current_date)
+                self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
-    def _execute_equal_weight_strategy(self, current_prices: Dict[str, float]):
-        """Execute equal weight buy-and-hold strategy."""
-        # Only execute once at start
-        if self.portfolio.positions:
-            return
-        
-        # Buy equal weight in all available tickers
+    def _execute_equal_weight_strategy(self, current_date: datetime, current_prices: Dict[str, float]):
+        """
+        Execute equal weight strategy with periodic rebalancing.
+
+        Buys equal weight on first day, then rebalances periodically
+        to maintain equal allocation across all tickers.
+        """
         n_tickers = len(current_prices)
         if n_tickers == 0:
             return
-        
-        pct_per_ticker = 90.0 / n_tickers  # 90% invested, 10% cash buffer
-        
+
+        target_pct_per_ticker = 90.0 / n_tickers
+
+        if not self.portfolio.positions:
+            # Initial purchase: buy equal weight in all tickers.
+            # We must recalculate the percentage of *current* cash needed
+            # to hit the target dollar amount, because buy() uses pct_of_cash.
+            for ticker, price in current_prices.items():
+                target_value = self.portfolio.total_value * (target_pct_per_ticker / 100)
+                if self.portfolio.cash > 0 and target_value > 0:
+                    buy_pct = min((target_value / self.portfolio.cash) * 100, 100.0)
+                    if buy_pct > 1:
+                        if self.enable_cooldowns and self.cooldown_manager:
+                            self.cooldown_manager.record_entry(ticker, current_date)
+                        self.portfolio.buy(ticker, buy_pct, price)
+            return
+
+        # Rebalance: check if any position deviates significantly from target
+        total_value = self.portfolio.total_value
+        if total_value <= 0:
+            return
+
+        # Calculate target dollar amount per ticker
+        target_value_per_ticker = total_value * (target_pct_per_ticker / 100)
+
+        # First, sell positions that are overweight
+        for ticker, pos in list(self.portfolio.positions.items()):
+            if ticker not in current_prices:
+                continue
+            current_value = pos.market_value
+            if current_value > target_value_per_ticker * 1.05:  # 5% tolerance
+                overweight_pct = ((current_value - target_value_per_ticker) / current_value) * 100
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_sell(ticker, current_date, current_prices[ticker], pos.avg_price)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked rebalance SELL {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_exit(ticker, current_date)
+                self.portfolio.sell(ticker, current_prices[ticker], pct=overweight_pct)
+
+        # Then, buy positions that are underweight
         for ticker, price in current_prices.items():
-            self.portfolio.buy(ticker, pct_per_ticker, price)
+            if ticker in self.portfolio.positions:
+                current_value = self.portfolio.positions[ticker].market_value
+            else:
+                current_value = 0
+
+            if current_value < target_value_per_ticker * 0.95:  # 5% tolerance
+                underweight_value = target_value_per_ticker - current_value
+                # Convert to percentage of available cash
+                if self.portfolio.cash > 0:
+                    buy_pct = min((underweight_value / self.portfolio.cash) * 100, 100)
+                    if buy_pct > 1:  # Only buy if meaningful
+                        if self.enable_cooldowns and self.cooldown_manager:
+                            allowed, reason = self.cooldown_manager.can_buy(ticker, current_date)
+                            if not allowed:
+                                logger.debug(f"Cooldown blocked rebalance BUY {ticker}: {reason}")
+                                continue
+                            self.cooldown_manager.record_entry(ticker, current_date)
+                        self.portfolio.buy(ticker, buy_pct, price)
+    
+    def _execute_buy_and_hold_strategy(self, current_date: datetime, current_prices: Dict[str, float]):
+        """Execute pure buy-and-hold strategy: buy equal weight once, never rebalance."""
+        # Only execute once at start
+        if self.portfolio.positions:
+            return
+
+        # Buy equal weight in all available tickers.
+        # Recalculate the percentage of *current* cash needed to hit the
+        # target dollar amount, because buy() uses pct_of_cash.
+        n_tickers = len(current_prices)
+        if n_tickers == 0:
+            return
+
+        pct_per_ticker = 90.0 / n_tickers  # 90% invested, 10% cash buffer
+
+        for ticker, price in current_prices.items():
+            target_value = self.portfolio.total_value * (pct_per_ticker / 100)
+            if self.portfolio.cash > 0 and target_value > 0:
+                buy_pct = min((target_value / self.portfolio.cash) * 100, 100.0)
+                if buy_pct > 1:
+                    if self.enable_cooldowns and self.cooldown_manager:
+                        self.cooldown_manager.record_entry(ticker, current_date)
+                    self.portfolio.buy(ticker, buy_pct, price)
+
+    def _execute_random_strategy(
+        self,
+        current_date: datetime,
+        current_prices: Dict[str, float],
+        random_strategy: RandomStrategy
+    ):
+        """Execute random baseline trading strategy."""
+        decisions = random_strategy.generate_decisions(
+            tickers=list(current_prices.keys()),
+            portfolio=self.portfolio,
+            current_prices=current_prices
+        )
+        
+        for action in decisions:
+            ticker = action.get("ticker")
+            action_type = action.get("action")
+            pct = action.get("pct", 0)
+            
+            if ticker not in current_prices:
+                continue
+            
+            price = current_prices[ticker]
+            
+            if action_type == "buy":
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_buy(ticker, current_date)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked BUY {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_entry(ticker, current_date)
+                self.portfolio.buy(ticker, pct, price)
+            elif action_type == "sell":
+                pos = self.portfolio.positions.get(ticker)
+                avg_price = pos.avg_price if pos else 0
+                if self.enable_cooldowns and self.cooldown_manager:
+                    allowed, reason = self.cooldown_manager.can_sell(ticker, current_date, price, avg_price)
+                    if not allowed:
+                        logger.debug(f"Cooldown blocked SELL {ticker}: {reason}")
+                        continue
+                    self.cooldown_manager.record_exit(ticker, current_date)
+                self.portfolio.sell(ticker, price, pct=pct if pct > 0 else None)
     
     def _record_daily_result(self, date: datetime, prices: Dict[str, float]):
         """Record daily portfolio state."""
@@ -432,7 +665,7 @@ def run_comparison_backtest(
     """
     tickers = tickers or ["SPY", "QQQ", "GLD"]
     
-    strategies = ["buy_and_hold", "equal_weight"]
+    strategies = ["buy_and_hold", "equal_weight", "random"]
     if include_llm:
         strategies.append("llm")
     
@@ -451,7 +684,10 @@ def run_comparison_backtest(
         )
         
         use_llm = (strategy == "llm")
-        result = engine.run_backtest(use_llm=use_llm, strategy=strategy)
+        kwargs = {"use_llm": use_llm, "strategy": strategy}
+        if strategy == "random":
+            kwargs["random_seed"] = 42
+        result = engine.run_backtest(**kwargs)
         results[strategy] = result
         
         print_backtest_report(result, strategy)

@@ -1,0 +1,66 @@
+{
+  "timestamp": "2026-03-20T17:45:03Z",
+  "alert_type": "intraday_monitoring",
+  "trigger": "position_movement",
+  "market_regime": "risk_off",
+  "assets": ["FEZ", "GWX", "DG.PA", "IWM"],
+  "analysis": {
+    "FEZ": {
+      "movement_pct_1445": -3.39,
+      "movement_pct_1635": -4.01,
+      "movement_pct_1745": -4.29,
+      "trend": "consistent_deterioration",
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 0.71,
+      "status": "CRITICAL_PROXIMITY"
+    },
+    "GWX": {
+      "movement_pct_1745": -2.84,
+      "trend": "gradual_decline",
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 2.16
+    },
+    "DG.PA": {
+      "movement_pct_1745": -2.91,
+      "trend": "stable_decline",
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 2.09
+    },
+    "IWM": {
+      "movement_pct_1745": -2.28,
+      "trend": "new_decline",
+      "stop_loss_threshold": -5.0,
+      "distance_to_stop": 2.72,
+      "note": "New alert in this cycle"
+    }
+  },
+  "market_assessment": {
+    "regime": "RISK_OFF",
+    "breadth": "4/7 positions in decline",
+    "correlation": "high",
+    "interpretation": "Broad market selloff affecting all equity positions"
+  },
+  "decision": {
+    "action": "HOLD",
+    "rationale": [
+      "FEZ at -4.29% is deteriorating but stop-loss threshold not breached",
+      "Market-wide risk-off mode suggests systematic factor, not idiosyncratic risk",
+      "Anticipatory selling risks locking losses before potential reversal",
+      "Strict stop-loss discipline requires -5% trigger, not emotional reaction",
+      "Cash buffer (37.4%) provides portfolio-level protection"
+    ],
+    "emotional_discipline": "Resisting urge to 'rescue' position before rule-based trigger",
+    "conditions_for_immediate_action": [
+      "FEZ reaches -5.0% stop-loss threshold (0.71% remaining)",
+      "Any position breaches -5% drawdown"
+    ],
+    "next_evaluation": "2026-03-20T22:30:00Z"
+  },
+  "risk_assessment": {
+    "severity": "HIGH",
+    "primary_concern": "FEZ approaching stop-loss with consistent downward trend",
+    "secondary_concern": "Broad market selloff affecting multiple positions",
+    "tail_risk": "MANAGEABLE with stop-loss rules",
+    "recommendation": "High alert status; FEZ stop-loss likely to trigger before close or at next alert"
+  }
+}

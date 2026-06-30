@@ -63,9 +63,14 @@ Your decisions must follow these principles inspired by Prospect Theory, Behavio
    - Prefer strategies with positive skew and low excess kurtosis
    - If current portfolio shows high kurtosis (> 3), reduce risk
 
-5. POSITION SIZING:
+5. POSITION SIZING & CASH TARGETS:
    - Maximum 25% of portfolio in any single position
-   - Keep 10-30% cash buffer for opportunities
+   - Cash buffer targets by volatility regime:
+     * HIGH volatility: 30-50% cash (capital preservation)
+     * NORMAL volatility: 15-30% cash (balanced)
+     * LOW volatility: 10-20% cash (fully deployed)
+   - If current cash is above the regime target, you are under-invested.
+     Find opportunities to deploy capital gradually, unless the Market Regime Analysis explicitly recommends defense.
    - Scale in/out gradually rather than all at once
    - When adding a new position, consider: "Would this pass a Deflated Sharpe Ratio test?"
 
@@ -76,8 +81,10 @@ Your decisions must follow these principles inspired by Prospect Theory, Behavio
    - Remember: during crises, correlations tend to 1.0
 
 7. STOP LOSS MENTALITY:
-   - If drawdown > 5% on a position, consider reducing
-   - If portfolio drawdown > 3% in a day, get defensive
+   - If drawdown > 5% on a single position, consider reducing
+   - If portfolio drops > 3% in a single trading day, get defensive
+   - If total portfolio drawdown from inception exceeds 5-7%, reduce risk and reassess
+   - A -3% total inception drawdown is not a daily crash; it requires caution, not maximum defense
    - Cut losses quickly, let winners run (with trailing stops)
 
 8. META-LABELING PRINCIPLE:
@@ -85,6 +92,12 @@ Your decisions must follow these principles inspired by Prospect Theory, Behavio
    - Secondary model (meta-labeling) predicts probability of being right
    - Only trade when you have both: directional edge AND high confidence
    - Current confidence proxy: RSI extremes + Bollinger Band position
+
+9. MARKET REGIME ADAPTATION:
+   - Volatility Regime: In HIGH volatility, prioritize capital preservation, tighten stops, reduce position sizes. In LOW volatility, you can be more aggressive but maintain discipline.
+   - Trend Regime: In TRENDING markets, favor momentum strategies (trend following). In MEAN-REVERTING markets, favor contrarian strategies (buy oversold, sell overbought).
+   - Correlation Regime: In HIGH correlation environments, diversification benefits are limited — reduce overall equity exposure. In LOW correlation, opportunities for risk reduction through diversification are good.
+   - The Market Regime Analysis section provides specific recommendations — follow them unless you have strong evidence to the contrary.
 
 OUTPUT FORMAT:
 Respond with a JSON object containing:
@@ -169,7 +182,8 @@ class TradingAgent:
         self,
         market_data: Dict,
         portfolio_summary: Dict,
-        recent_decisions: Optional[List[Dict]] = None
+        recent_decisions: Optional[List[Dict]] = None,
+        cooldown_status: Optional[Dict] = None
     ) -> str:
         """
         Build the complete prompt for the LLM.
@@ -178,6 +192,7 @@ class TradingAgent:
             market_data: Dict with asset indicators and correlations
             portfolio_summary: Current portfolio state
             recent_decisions: List of recent trading decisions
+            cooldown_status: Dict with position cooldown guardrail status
         
         Returns:
             Formatted prompt string
@@ -201,9 +216,24 @@ class TradingAgent:
         
         # Correlations
         correlations = market_data.get('correlations', {})
-        if not correlations.empty:
+        has_correlations = False
+        if hasattr(correlations, 'empty'):
+            has_correlations = not correlations.empty
+        elif isinstance(correlations, dict):
+            has_correlations = len(correlations) > 0
+        
+        if has_correlations:
             prompt_parts.append("\n=== CORRELATIONS (20-day returns) ===")
-            prompt_parts.append(correlations.to_string())
+            if hasattr(correlations, 'to_string'):
+                prompt_parts.append(correlations.to_string())
+            elif isinstance(correlations, dict):
+                for pair, corr in correlations.items():
+                    prompt_parts.append(f"  {pair}: {corr:.3f}")
+        
+        # Market Regime Analysis
+        regime = market_data.get('regime')
+        if regime and regime.get('formatted'):
+            prompt_parts.append(regime['formatted'])
         
         # Portfolio state
         prompt_parts.append("\n\n=== PORTFOLIO STATE ===")
@@ -290,6 +320,36 @@ class TradingAgent:
                 for a in actions:
                     prompt_parts.append(f"  - {a['ticker']}: {a['action']} {a.get('pct', 0)}%")
         
+        # Cooldown guardrails
+        if cooldown_status:
+            prompt_parts.append("\n\n=== COOLDOWN GUARDRAILS ===")
+            prompt_parts.append(f"Weekly trades used: {cooldown_status.get('trades_this_week', 0)}/{cooldown_status.get('weekly_cap', 2)}")
+            
+            active_entries = cooldown_status.get('active_entries', {})
+            if active_entries:
+                prompt_parts.append("\nActive positions (holding period):")
+                for ticker, info in active_entries.items():
+                    hold_days = info.get('hold_days', 0)
+                    min_hold = cooldown_status.get('config', {}).get('min_hold_days', 5)
+                    status = "✓ can sell" if hold_days >= min_hold else f"✗ hold {min_hold - hold_days:.1f} more days"
+                    prompt_parts.append(f"  {ticker}: held {hold_days:.1f} days — {status}")
+            
+            recent_exits = cooldown_status.get('recent_exits', {})
+            if recent_exits:
+                prompt_parts.append("\nRecent exits (flip cooldown):")
+                for ticker, info in recent_exits.items():
+                    days_since = info.get('days_since_exit', 0)
+                    flip_days = cooldown_status.get('config', {}).get('flip_cooldown_days', 10)
+                    status = "✓ can re-buy" if days_since >= flip_days else f"✗ wait {flip_days - days_since:.1f} more days"
+                    prompt_parts.append(f"  {ticker}: exited {days_since:.1f} days ago — {status}")
+            
+            if cooldown_status.get('trades_this_week', 0) >= cooldown_status.get('weekly_cap', 2):
+                prompt_parts.append("\n⚠️ WEEKLY TRADE CAP REACHED — No new buys or sells allowed (except stop-loss overrides).")
+                prompt_parts.append("Recommend HOLD for all positions. Do not suggest any new trades.")
+            else:
+                remaining = cooldown_status.get('weekly_cap', 2) - cooldown_status.get('trades_this_week', 0)
+                prompt_parts.append(f"\nYou have {remaining} trade(s) remaining this week. Use them wisely.")
+        
         prompt_parts.append("\n\n=== YOUR DECISION ===")
         prompt_parts.append("Based on the above market state and portfolio, what actions should we take?")
         prompt_parts.append("Respond with the JSON format specified in your instructions.")
@@ -367,7 +427,7 @@ class TradingAgent:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,
+            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
             "max_tokens": 16000,
         }
         
@@ -465,7 +525,8 @@ class TradingAgent:
     def get_trading_decision(
         self,
         market_data: Dict,
-        portfolio_summary: Dict
+        portfolio_summary: Dict,
+        cooldown_status: Optional[Dict] = None
     ) -> Dict:
         """
         Get trading decision from LLM.
@@ -473,6 +534,7 @@ class TradingAgent:
         Args:
             market_data: Market indicators and correlations
             portfolio_summary: Current portfolio state
+            cooldown_status: Optional position cooldown guardrail status
         
         Returns:
             Decision dict with actions and metadata
@@ -481,7 +543,7 @@ class TradingAgent:
         recent_decisions = self.load_recent_decisions(days=5)
         
         # Build prompt
-        prompt = self.build_prompt(market_data, portfolio_summary, recent_decisions)
+        prompt = self.build_prompt(market_data, portfolio_summary, recent_decisions, cooldown_status)
         
         # Call LLM
         response = self.call_llm(prompt)

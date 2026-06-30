@@ -10,6 +10,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,7 +35,12 @@ def get_all_tickers() -> List[str]:
     tickers = []
     for category in universe.values():
         for asset in category:
-            tickers.append(asset["ticker"])
+            ticker = asset.get("ticker", "").strip()
+            # Filter out empty tickers
+            if ticker and ticker != ".PA":
+                tickers.append(ticker)
+            elif not ticker or ticker == ".PA":
+                logger.warning(f"Skipping invalid ticker in category: {category}")
     return tickers
 
 
@@ -58,10 +64,40 @@ def get_tickers_by_category(category: str) -> List[str]:
 ALL_TICKERS = get_all_tickers()
 
 
+def _fetch_single_ticker(ticker: str, period: str, interval: str, start: Optional[str], end: Optional[str]) -> tuple:
+    """Fetch data for a single ticker. Returns (ticker, DataFrame or None)."""
+    try:
+        logger.info(f"Fetching data for {ticker}...")
+        stock = yf.Ticker(ticker)
+        if start and end:
+            hist = stock.history(start=start, end=end, interval=interval)
+        else:
+            hist = stock.history(period=period, interval=interval)
+
+        if hist.empty:
+            logger.warning(f"No data returned for {ticker}")
+            return ticker, None
+
+        # Normalize timezone-aware index to naive UTC to avoid
+        # offset-naive vs offset-aware comparison errors in backtest
+        if hist.index.tz is not None:
+            hist.index = hist.index.tz_convert("UTC").tz_localize(None)
+
+        logger.info(f"  {ticker}: {len(hist)} rows")
+        return ticker, hist
+
+    except Exception as e:
+        logger.error(f"Error fetching {ticker}: {e}")
+        return ticker, None
+
+
 def fetch_historical_data(
     tickers: Optional[List[str]] = None,
     period: str = "30d",
-    interval: str = "1d"
+    interval: str = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    max_workers: int = 1
 ) -> Dict[str, pd.DataFrame]:
     """
     Fetch historical market data for specified tickers.
@@ -70,71 +106,107 @@ def fetch_historical_data(
         tickers: List of ticker symbols (default: all from universe config)
         period: Data period (default: "30d")
         interval: Data interval (default: "1d")
+        start: Start date string YYYY-MM-DD (overrides period if provided)
+        end: End date string YYYY-MM-DD (overrides period if provided)
+        max_workers: Number of parallel threads for I/O-bound fetching.
+                     Default 1 (sequential). Set to 4-8 for significant speedup.
 
     Returns:
         Dict mapping ticker to DataFrame with OHLCV data
     """
     if tickers is None:
         tickers = get_all_tickers()
+    
+    # Filter out empty or invalid tickers
+    tickers = [t.strip() for t in tickers if t and t.strip() and t.strip() != ".PA"]
 
     results = {}
 
-    for ticker in tickers:
-        try:
-            logger.info(f"Fetching data for {ticker}...")
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period=period, interval=interval)
-
-            if hist.empty:
-                logger.warning(f"No data returned for {ticker}")
-                continue
-
-            results[ticker] = hist
-            logger.info(f"  {ticker}: {len(hist)} rows")
-
-        except Exception as e:
-            logger.error(f"Error fetching {ticker}: {e}")
-            continue
+    if max_workers > 1:
+        # Parallel execution with ThreadPoolExecutor
+        # yfinance requests are I/O bound, so threads are effective
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ticker = {
+                executor.submit(_fetch_single_ticker, ticker, period, interval, start, end): ticker
+                for ticker in tickers
+            }
+            for future in as_completed(future_to_ticker):
+                ticker, hist = future.result()
+                if hist is not None:
+                    results[ticker] = hist
+    else:
+        # Sequential execution (original behavior)
+        for ticker in tickers:
+            ticker, hist = _fetch_single_ticker(ticker, period, interval, start, end)
+            if hist is not None:
+                results[ticker] = hist
 
     return results
 
 
+def _fetch_single_price(ticker: str) -> tuple:
+    """Fetch current price for a single ticker. Returns (ticker, price or None)."""
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1d", interval="1m")
+
+        if hist.empty:
+            hist = stock.history(period="5d")
+
+        if hist.empty:
+            # Try 1mo for some indices like ^FCHI
+            hist = stock.history(period="1mo")
+        
+        if hist.empty:
+            logger.warning(f"No price data for {ticker} (may be delisted or not available)")
+            return ticker, None
+
+        current_price = float(hist["Close"].iloc[-1])
+        return ticker, current_price
+
+    except Exception as e:
+        logger.warning(f"Could not fetch price for {ticker}: {e}")
+        return ticker, None
+
+
 def fetch_current_prices(
-    tickers: Optional[List[str]] = None
+    tickers: Optional[List[str]] = None,
+    max_workers: int = 1
 ) -> Dict[str, Optional[float]]:
     """
     Fetch current/latest prices for specified tickers.
 
     Args:
         tickers: List of ticker symbols (default: all from universe config)
+        max_workers: Number of parallel threads for I/O-bound fetching.
+                     Default 1 (sequential). Set to 4-8 for significant speedup.
 
     Returns:
         Dict mapping ticker to current price (or None if error)
     """
     if tickers is None:
         tickers = get_all_tickers()
+    
+    # Filter out empty or invalid tickers
+    tickers = [t.strip() for t in tickers if t and t.strip() and t.strip() != ".PA"]
 
     results = {}
 
-    for ticker in tickers:
-        try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1d", interval="1m")
-
-            if hist.empty:
-                hist = stock.history(period="5d")
-
-            if hist.empty:
-                logger.warning(f"No price data for {ticker}")
-                results[ticker] = None
-                continue
-
-            current_price = hist["Close"].iloc[-1]
-            results[ticker] = float(current_price)
-
-        except Exception as e:
-            logger.error(f"Error fetching current price for {ticker}: {e}")
-            results[ticker] = None
+    if max_workers > 1:
+        # Parallel execution with ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ticker = {
+                executor.submit(_fetch_single_price, ticker): ticker
+                for ticker in tickers
+            }
+            for future in as_completed(future_to_ticker):
+                ticker, price = future.result()
+                results[ticker] = price
+    else:
+        # Sequential execution (original behavior)
+        for ticker in tickers:
+            ticker, price = _fetch_single_price(ticker)
+            results[ticker] = price
 
     return results
 

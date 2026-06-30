@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-03-16T14:38:00Z",
+  "alert_time": "2026-03-16T14:35:05Z",
+  "alert_count": 7,
+  "decision": "HOLD",
+  "actions_taken": [],
+  "reasoning": "All European positions improved since 12:15 UTC. MC.PA recovered from -4.78% to -3.56%, escaping stop danger. VIX divergence prediction validated. Morning patience preserved €4.58 in P&L.",
+  "watch_list": [],
+  "mc_pa_recovery": {
+    "previous": -4.78,
+    "current": -3.56,
+    "improvement": 1.22,
+    "distance_to_stop": 1.44
+  },
+  "portfolio_value": 9765.87,
+  "cash_pct": 42.7,
+  "max_drawdown_position": -3.56,
+  "ticker": "MC.PA"
+}

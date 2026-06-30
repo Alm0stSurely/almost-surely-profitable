@@ -58,10 +58,9 @@ class ReportGenerator:
         Returns:
             Weekly report dictionary
         """
-        # Calculate week date range
-        start_of_year = datetime(year, 1, 1)
-        start_of_week = start_of_year + timedelta(weeks=week-1)
-        start_of_week = start_of_week - timedelta(days=start_of_week.weekday())
+        # Calculate week date range using ISO week calendar
+        # ISO week 1 is the week containing the first Thursday of the year
+        start_of_week = datetime.strptime(f"{year}-W{week:02d}-1", "%G-W%V-%u")
         end_of_week = start_of_week + timedelta(days=6)
         
         start_str = start_of_week.strftime("%Y-%m-%d")
@@ -156,11 +155,13 @@ class ReportGenerator:
         """
         start_str = f"{year}-{month:02d}-01"
         
-        # Calculate end of month
+        # Calculate end of month (last day, inclusive)
         if month == 12:
-            end_str = f"{year+1}-01-01"
+            next_month_start = datetime(year + 1, 1, 1)
         else:
-            end_str = f"{year}-{month+1:02d}-01"
+            next_month_start = datetime(year, month + 1, 1)
+        end_of_month = next_month_start - timedelta(days=1)
+        end_str = end_of_month.strftime("%Y-%m-%d")
         
         logger.info(f"Generating monthly report for {year}-{month:02d}")
         
@@ -245,8 +246,10 @@ class ReportGenerator:
             import yfinance as yf
             data = yf.download(ticker, start=start_date, end=end_date, progress=False)
             if not data.empty:
-                start_price = data['Close'].iloc[0]
-                end_price = data['Close'].iloc[-1]
+                # Newer yfinance returns MultiIndex columns; flatten to scalar
+                close_values = data['Close'].values.flatten()
+                start_price = float(close_values[0])
+                end_price = float(close_values[-1])
                 return (end_price / start_price) - 1
         except Exception:
             pass

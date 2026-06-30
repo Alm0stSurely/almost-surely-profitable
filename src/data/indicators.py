@@ -29,6 +29,12 @@ def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
+    
+    # Handle flat prices: when both gain and loss are 0, RSI is neutral (50)
+    # Also handle edge case where loss is 0 but gain > 0 (RSI = 100) via natural division
+    flat_mask = (gain == 0) & (loss == 0)
+    rsi = rsi.where(~flat_mask, 50.0)
+    
     return rsi
 
 
@@ -98,6 +104,14 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with added indicator columns
     """
+    # Drop rows with NaN Close prices to avoid indicator corruption
+    # This handles cases where yfinance returns a row for today before market close
+    df = df.dropna(subset=['Close']).copy()
+    
+    if df.empty:
+        logger.warning("DataFrame is empty after dropping NaN Close prices")
+        return df
+    
     prices = df['Close']
     
     # Moving averages
@@ -111,6 +125,9 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Bollinger Bands
     df['BB_upper'], df['BB_middle'], df['BB_lower'] = calculate_bollinger_bands(prices, 20, 2.0)
     df['BB_position'] = (prices - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'])
+    # Handle flat prices: when bands are equal (std=0), price is at midpoint
+    df['BB_position'] = df['BB_position'].fillna(0.5)
+    df['BB_position'] = df['BB_position'].replace([np.inf, -np.inf], 0.5)
     
     # Volatility
     df['Volatility_20'] = calculate_volatility(prices, 20)
@@ -199,7 +216,8 @@ def analyze_market_data(data_dict: Dict[str, pd.DataFrame]) -> Dict:
             results[ticker] = {
                 "dataframe": df_with_indicators,
                 "latest": get_latest_indicators(df_with_indicators),
-                "total_return": (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0
+                "total_return": (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0,
+                "returns": df_with_indicators['Daily_Return'].dropna().tolist()
             }
         except Exception as e:
             logger.error(f"Error calculating indicators for {ticker}: {e}")

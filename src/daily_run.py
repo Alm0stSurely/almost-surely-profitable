@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 import numpy as np
+import pandas as pd
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -19,12 +20,52 @@ from portfolio.portfolio import Portfolio
 from llm.trading_agent import TradingAgent
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 from risk.performance_metrics import calculate_all_metrics, format_metrics_report
+from risk.position_cooldown import PositionCooldownManager, CooldownConfig
+from analysis.regime_detector import RegimeDetector, format_regime_for_llm
+from benchmark import LiveEqualWeightBenchmark
 
 
 def setup_directories():
     """Create necessary directories."""
     Path("data").mkdir(exist_ok=True)
     Path("results/daily").mkdir(parents=True, exist_ok=True)
+
+
+def backpopulate_cooldown_entries(cooldown_mgr: PositionCooldownManager, portfolio) -> None:
+    """
+    Back-populate cooldown entry records from trade history for existing positions.
+    
+    When the cooldown manager is first introduced, existing positions won't have
+    entry records. We scan trades_history.json to find the most recent buy for
+    each held ticker and record it.
+    """
+    trades_file = portfolio.trades_file
+    if not trades_file.exists():
+        return
+    
+    try:
+        with open(trades_file, 'r') as f:
+            trades = json.load(f)
+    except Exception:
+        return
+    
+    for ticker in portfolio.positions.keys():
+        # Find most recent buy for this ticker
+        ticker_buys = [
+            t for t in trades
+            if t.get('ticker') == ticker and t.get('action') == 'buy'
+        ]
+        if ticker_buys:
+            # Use the most recent buy timestamp
+            last_buy = ticker_buys[-1]
+            try:
+                entry_time = datetime.fromisoformat(last_buy['timestamp'])
+                cooldown_mgr.entries[ticker] = entry_time
+            except Exception:
+                pass
+        else:
+            # No trade history — use portfolio load time as fallback
+            cooldown_mgr.entries[ticker] = datetime.now()
 
 
 def run_daily_pipeline(dry_run: bool = False):
@@ -42,7 +83,7 @@ def run_daily_pipeline(dry_run: bool = False):
     
     # Step 1: Fetch market data
     print("\n[1/7] Fetching market data...")
-    market_data_raw = fetch_historical_data(ALL_TICKERS, period="30d")
+    market_data_raw = fetch_historical_data(ALL_TICKERS, period="30d", max_workers=8)
     print(f"  ✓ Fetched data for {len(market_data_raw)} assets")
     
     # Step 2: Calculate indicators
@@ -50,14 +91,70 @@ def run_daily_pipeline(dry_run: bool = False):
     market_analysis = analyze_market_data(market_data_raw)
     print(f"  ✓ Analysis complete for {len(market_analysis['assets'])} assets")
     
+    # Step 2.5: Market Regime Analysis
+    print("\n[2.5/7] Analyzing market regime...")
+    try:
+        # Build price DataFrame from market data
+        prices_df = pd.DataFrame({
+            ticker: data['history']['close'] 
+            for ticker, data in market_data_raw.items() 
+            if 'history' in data and 'close' in data['history']
+        })
+        
+        if not prices_df.empty:
+            detector = RegimeDetector()
+            regime_state = detector.analyze(prices_df)
+            regime_recommendations = detector.get_strategy_recommendation(regime_state)
+            
+            print(f"  Regime: {regime_state.summary()}")
+            print(f"  Rec: {regime_recommendations['position_sizing']} sizing, "
+                  f"mean_rev={'Y' if regime_recommendations['mean_reversion_opportunities'] else 'N'}, "
+                  f"trend={'Y' if regime_recommendations['trend_following'] else 'N'}")
+            
+            # Add regime info to market_analysis for LLM
+            market_analysis['regime'] = {
+                'state': {
+                    'volatility_regime': regime_state.volatility_regime,
+                    'trend_regime': regime_state.trend_regime,
+                    'correlation_regime': regime_state.correlation_regime,
+                    'volatility_percentile': regime_state.volatility_percentile,
+                    'adx_value': regime_state.adx_value,
+                    'avg_correlation': regime_state.avg_correlation
+                },
+                'recommendations': regime_recommendations,
+                'formatted': format_regime_for_llm(regime_state, regime_recommendations)
+            }
+        else:
+            market_analysis['regime'] = None
+    except Exception as e:
+        print(f"  ⚠ Regime analysis failed: {e}")
+        market_analysis['regime'] = None
+    
     # Step 3: Load portfolio
     print("\n[3/7] Loading portfolio...")
     portfolio = Portfolio(data_dir="data")
     
     # Update current prices in portfolio
-    current_prices = fetch_current_prices(list(portfolio.positions.keys()))
+    current_prices = fetch_current_prices(list(portfolio.positions.keys()), max_workers=4)
     portfolio.update_prices(current_prices)
     portfolio.save_state()
+    
+    # Step 3b: Initialize position cooldown manager with adaptive regime
+    print("\n[3b/7] Initializing position cooldown guardrails...")
+    
+    # Determine regime for adaptive parameters
+    vol_regime = "normal"
+    if market_analysis.get('regime') and market_analysis['regime'].get('state'):
+        vol_regime = market_analysis['regime']['state'].get('volatility_regime', 'normal')
+    
+    cooldown_config = CooldownConfig(current_vol_regime=vol_regime)
+    cooldown_mgr = PositionCooldownManager(data_dir="data", config=cooldown_config)
+    backpopulate_cooldown_entries(cooldown_mgr, portfolio)
+    cooldown_status = cooldown_mgr.get_status()
+    print(f"  ✓ Cooldown manager active — trades this week: {cooldown_status['trades_this_week']}/{cooldown_status['weekly_cap']}")
+    print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {cooldown_status['adaptive_stop_loss']:.1f}%")
+    if cooldown_status['active_entries']:
+        print(f"  Active entries: {', '.join(cooldown_status['active_entries'].keys())}")
     
     portfolio.print_summary()
     
@@ -82,9 +179,16 @@ def run_daily_pipeline(dry_run: bool = False):
     
     if position_returns and len(position_returns) > 0:
         cvar_result = calculate_portfolio_cvar(position_returns, portfolio_weights)
+        
+        # Align returns for tail risk analysis (same min length)
+        min_len = min(len(r) for r in position_returns.values())
+        aligned_portfolio_returns = np.zeros(min_len)
+        for ticker, returns in position_returns.items():
+            weight = portfolio_weights.get(ticker, 0.0)
+            aligned_portfolio_returns += returns[-min_len:] * weight
+        
         tail_risk = tail_risk_analysis(
-            np.array([sum(position_returns[t] * portfolio_weights[t] 
-                         for t in position_returns if t in portfolio_weights)]),
+            aligned_portfolio_returns,
             benchmark_returns=None
         )
         
@@ -109,7 +213,7 @@ def run_daily_pipeline(dry_run: bool = False):
     agent = TradingAgent()
     portfolio_summary = portfolio.get_summary()
     
-    decision = agent.get_trading_decision(market_analysis, portfolio_summary)
+    decision = agent.get_trading_decision(market_analysis, portfolio_summary, cooldown_status=cooldown_status)
     
     print(f"\n  Reasoning: {decision['reasoning'][:200]}...")
     print(f"  Actions: {len(decision['actions'])}")
@@ -148,8 +252,23 @@ def run_daily_pipeline(dry_run: bool = False):
             })
         else:
             if action_type == 'buy':
+                # Check cooldown before buying
+                can_buy, buy_reason = cooldown_mgr.can_buy(ticker)
+                if not can_buy:
+                    print(f"  ✗ {ticker}: BUY BLOCKED — {buy_reason}")
+                    executed_trades.append({
+                        'ticker': ticker,
+                        'action': 'buy',
+                        'pct': pct,
+                        'price': current_price,
+                        'status': 'blocked_by_cooldown',
+                        'cooldown_reason': buy_reason
+                    })
+                    continue
+                
                 success = portfolio.buy(ticker, pct, current_price)
                 if success:
+                    cooldown_mgr.record_entry(ticker)
                     executed_trades.append({
                         'ticker': ticker,
                         'action': 'buy',
@@ -158,22 +277,61 @@ def run_daily_pipeline(dry_run: bool = False):
                         'status': 'executed'
                     })
             elif action_type == 'sell':
-                success = portfolio.sell(ticker, current_price)
-                if success:
+                # Check cooldown before selling
+                position = portfolio.positions.get(ticker)
+                avg_price = position.avg_price if position else 0.0
+                
+                can_sell, sell_reason = cooldown_mgr.can_sell(ticker, current_price, avg_price)
+                if not can_sell:
+                    print(f"  ✗ {ticker}: SELL BLOCKED — {sell_reason}")
                     executed_trades.append({
                         'ticker': ticker,
                         'action': 'sell',
                         'pct': pct,
                         'price': current_price,
-                        'status': 'executed'
+                        'status': 'blocked_by_cooldown',
+                        'cooldown_reason': sell_reason
+                    })
+                    continue
+                
+                success = portfolio.sell(ticker, current_price, pct=pct if pct > 0 else None)
+                if success:
+                    cooldown_mgr.record_exit(ticker)
+                    # Get realized PnL from the most recent trade
+                    realized_pnl = portfolio.trades[-1].realized_pnl if portfolio.trades else 0.0
+                    executed_trades.append({
+                        'ticker': ticker,
+                        'action': 'sell',
+                        'pct': pct,
+                        'price': current_price,
+                        'status': 'executed',
+                        'realized_pnl': realized_pnl
                     })
             elif action_type == 'hold':
                 print(f"  • {ticker}: HOLD")
     
+    # Step 5.5: Update live equal-weight benchmark
+    print("\n[5.5/7] Updating equal-weight benchmark...")
+    try:
+        benchmark = LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir="data")
+        # Get all current prices for benchmark universe
+        benchmark_prices = fetch_current_prices(ALL_TICKERS, max_workers=8)
+        benchmark_summary = benchmark.rebalance(benchmark_prices)
+        print(f"  Benchmark value: €{benchmark_summary['total_value']:.2f} ({benchmark_summary['total_return_pct']:+.2f}%)")
+        print(f"  Benchmark positions: {benchmark_summary['num_positions']}")
+    except Exception as e:
+        print(f"  ⚠ Benchmark update failed: {e}")
+        benchmark_summary = None
+
     # Step 6: Save portfolio state
     print("\n[6/7] Saving portfolio state...")
     portfolio.save_state()
-    print("  ✓ State saved")
+    print("  ✓ Portfolio state saved")
+    
+    # Save cooldown state
+    if not dry_run:
+        cooldown_mgr.save_state()
+        print("  ✓ Cooldown state saved")
     
     # Step 6.5: Calculate performance metrics (Sharpe, Beta, Alpha)
     print("\n[6.5/7] Calculating performance metrics...")
@@ -229,6 +387,8 @@ def run_daily_pipeline(dry_run: bool = False):
     # Step 7: Log results
     print("\n[7/7] Logging results...")
     
+    portfolio_after_summary = portfolio.get_summary() if not dry_run else portfolio_summary
+    
     result = {
         'date': datetime.now().strftime('%Y-%m-%d'),
         'timestamp': datetime.now().isoformat(),
@@ -248,12 +408,21 @@ def run_daily_pipeline(dry_run: bool = False):
             'error': decision.get('error', False)
         },
         'executed_trades': executed_trades,
-        'portfolio_after': portfolio.get_summary() if not dry_run else portfolio_summary,
-        'performance_metrics': performance_metrics
+        'portfolio_after': portfolio_after_summary,
+        'performance_metrics': performance_metrics,
+        'equalweight_benchmark': benchmark_summary,
+        'cooldown': {
+            'status': cooldown_mgr.get_status() if not dry_run else None,
+            'blocked_count': len([t for t in executed_trades if t.get('status') == 'blocked_by_cooldown'])
+        }
     }
     
     # Save to daily results
-    result_file = f"results/daily/{datetime.now().strftime('%Y-%m-%d')}.json"
+    date_str = datetime.now().strftime('%Y-%m-%d')
+    if dry_run:
+        result_file = f"results/daily/{date_str}_dry_run.json"
+    else:
+        result_file = f"results/daily/{date_str}.json"
     with open(result_file, 'w') as f:
         json.dump(result, f, indent=2, default=str)
     
@@ -263,8 +432,11 @@ def run_daily_pipeline(dry_run: bool = False):
     print("\n" + "="*70)
     print("DAILY RUN COMPLETE")
     print("="*70)
-    print(f"Total Value: €{portfolio.get_summary()['total_value']:.2f}")
-    print(f"Total Return: {portfolio.get_summary()['total_return_pct']:.2f}%")
+    print(f"Strategy Value: €{portfolio_after_summary['total_value']:.2f} ({portfolio_after_summary['total_return_pct']:.2f}%)")
+    if benchmark_summary:
+        print(f"Benchmark Value: €{benchmark_summary['total_value']:.2f} ({benchmark_summary['total_return_pct']:.2f}%)")
+        gap = portfolio_after_summary['total_return_pct'] - benchmark_summary['total_return_pct']
+        print(f"Gap vs Benchmark: {gap:+.2f}%")
     print(f"Trades Executed: {len([t for t in executed_trades if t.get('status') == 'executed'])}")
     print("="*70)
     

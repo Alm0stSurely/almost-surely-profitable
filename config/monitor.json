@@ -1,0 +1,23 @@
+{
+  "alert_thresholds": {
+    "position_movement_pct": 2.0,
+    "index_movement_pct": 3.0,
+    "portfolio_drawdown_pct": 1.5,
+    "bollinger_breakout_std": 2.0
+  },
+  "indices": ["SPY", "QQQ", "^FCHI", "FEZ"],
+  "check_stop_losses": true,
+  "stop_loss_threshold_pct": 5.0,
+  "check_bollinger": true,
+  "market_hours": {
+    "us_open_utc": "14:30",
+    "us_close_utc": "21:00",
+    "eu_open_utc": "08:00",
+    "eu_close_utc": "16:30"
+  },
+  "alert_deduplication": {
+    "cooldown_hours": 6,
+    "escalation_threshold_pct": 2.0,
+    "reset_at_market_open": true
+  }
+}

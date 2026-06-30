@@ -1,0 +1,71 @@
+{
+  "alert_id": "alert-2026-03-19-0805",
+  "timestamp": "2026-03-19T08:05:06Z",
+  "triggered_by": "intraday_monitor",
+  "market_context": {
+    "alert_time": "08:05 UTC",
+    "market_status": "European pre-market / Asian afternoon",
+    "broad_market_trend": "Risk-off sentiment",
+    "spy_change": -1.40,
+    "fez_change": -2.14,
+    "gld_change": -3.16
+  },
+  "alerts": [
+    {
+      "ticker": "RMS.PA",
+      "type": "POSITION_MOVEMENT",
+      "severity": "MEDIUM",
+      "current_price": 1849.50,
+      "reference_price": 1916.80,
+      "movement_pct": -3.51,
+      "position_size": 382.09,
+      "unrealized_pnl": -13.16,
+      "drawdown_from_avg": -3.51
+    },
+    {
+      "ticker": "AIR.PA",
+      "type": "POSITION_MOVEMENT",
+      "severity": "MEDIUM",
+      "current_price": 170.30,
+      "reference_price": 175.42,
+      "movement_pct": -2.92,
+      "position_size": 97.36,
+      "unrealized_pnl": -2.68,
+      "drawdown_from_avg": -2.92
+    },
+    {
+      "ticker": "OR.PA",
+      "type": "POSITION_MOVEMENT",
+      "severity": "MEDIUM",
+      "current_price": 350.20,
+      "reference_price": 362.22,
+      "movement_pct": -3.32,
+      "position_size": 511.18,
+      "unrealized_pnl": -19.13,
+      "drawdown_from_avg": -3.32
+    }
+  ],
+  "analysis": {
+    "stop_loss_threshold": -5.0,
+    "max_drawdown_observed": -3.51,
+    "threshold_breached": false,
+    "margin_to_stop_loss": {
+      "RMS.PA": 1.49,
+      "AIR.PA": 2.08,
+      "OR.PA": 1.68
+    }
+  },
+  "decision": {
+    "action": "HOLD_ALL",
+    "reasoning": "Three positions (RMS.PA, AIR.PA, OR.PA) showing intraday weakness (-2.9% to -3.5%) but none have breached the 5% stop-loss threshold defined in the CVaR risk framework. The movement appears consistent with broad risk-off sentiment (SPY -1.40%, FEZ -2.14%) rather than idiosyncratic deterioration. Premature reaction to 3% moves would violate the loss aversion discipline and lead to excessive churn. Positions maintain adequate margin to stop-loss levels (1.5% to 2.1% buffer). Strategy maintains 30% cash buffer for opportunistic deployment if conditions worsen. Awaiting daily close for systematic rebalancing decision per scheduled 22:30 UTC session.",
+    "confidence": "HIGH",
+    "override_scheduled_session": false
+  },
+  "executed_actions": [],
+  "portfolio_impact": {
+    "total_unrealized_pnl_alert": -34.97,
+    "portfolio_value_at_alert": 9726.05,
+    "impact_pct": -0.36
+  },
+  "next_review": "2026-03-19T22:30:00Z"
+}

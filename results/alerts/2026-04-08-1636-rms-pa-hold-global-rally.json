@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-04-08T16:36:28.393644",
+  "alert_type": "INTRADAY_POSITION_MOVEMENT",
+  "ticker": "RMS.PA",
+  "severity": "HIGH",
+  "market_context": {
+    "alert_price": 1765.0,
+    "live_price": 1768.0,
+    "rms_pa_change": 7.25,
+    "lvmh_change": 6.85,
+    "cac40_change": 4.49,
+    "spy_change": 2.45,
+    "interpretation": "US market rallied strongly (+2.45%), making this a global risk-on move"
+  },
+  "position_analysis": {
+    "remaining_qty": 0.6670573604252217,
+    "avg_price": 1663.4803944596904,
+    "alert_price": 1765.0,
+    "unrealized_pnl_at_alert": 67.72,
+    "unrealized_pnl_pct": 6.1,
+    "vs_peak_1215": -1.31
+  },
+  "decision": {
+    "action": "HOLD",
+    "reasoning": [
+      "Price at \u20ac1765 is still above emergency exit \u20ac1760 (\u20ac5 buffer)",
+      "Live data shows price recovering to \u20ac1768",
+      "US market rallied +2.45% \u2014 this is now a GLOBAL risk-on move, not just Europe",
+      "LVMH holding +6.85% confirms sector strength",
+      "Small pullback (-0.37% from 14:35) is normal intraday noise",
+      "With US rallying, expect European close to be strong"
+    ],
+    "framework": "Behavioral_RL",
+    "principles_applied": [
+      "Trend_Following",
+      "Risk_Management"
+    ],
+    "updated_plan": {
+      "maintain_trailing_stop": 1755.0,
+      "emergency_exit_if_below": 1760,
+      "rationale": "US rally provides tailwind, hold through European close"
+    }
+  },
+  "executed_trade": null,
+  "cumulative_position_pnl": {
+    "realized_this_morning": 69.38,
+    "unrealized_at_alert": 67.72,
+    "total_potential": 137.1
+  },
+  "key_insight": "US market +2.45% rally transforms this from European bounce to global risk-on. Hold for European close strength."
+}

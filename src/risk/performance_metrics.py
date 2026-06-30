@@ -74,7 +74,8 @@ def calculate_sharpe_ratio(
     mean_excess = np.mean(excess_returns)
     std_excess = np.std(excess_returns, ddof=1)
     
-    if std_excess == 0:
+    # Guard against numerical precision issues with near-zero volatility
+    if std_excess < 1e-15 or np.isnan(std_excess):
         return 0.0
     
     sharpe = mean_excess / std_excess
@@ -121,9 +122,9 @@ def calculate_beta_alpha(
     
     # Calculate covariance and variance
     covariance = np.cov(portfolio_returns, benchmark_returns)[0, 1]
-    benchmark_variance = np.var(benchmark_returns)
+    benchmark_variance = np.var(benchmark_returns, ddof=1)
     
-    if benchmark_variance == 0:
+    if benchmark_variance == 0 or benchmark_variance < 1e-15:
         return None, None
     
     beta = covariance / benchmark_variance
@@ -174,13 +175,16 @@ def calculate_sortino_ratio(
     
     downside_std = np.std(downside_returns, ddof=1)
     
-    if downside_std == 0:
+    if downside_std == 0 or np.isnan(downside_std):
         return 0.0
     
     sortino = mean_excess / downside_std
     
     if annualized:
         sortino = sortino * np.sqrt(252)
+    
+    if np.isnan(sortino) or np.isinf(sortino):
+        return 0.0
     
     return float(sortino)
 
@@ -216,7 +220,9 @@ def calculate_calmar_ratio(
         drawdowns = (cumulative - rolling_max) / rolling_max
         max_drawdown = np.min(drawdowns)
     
-    if max_drawdown >= 0 or max_drawdown == 0:
+    if max_drawdown == 0:
+        return float('inf') if annualized_return > 0 else 0.0
+    if max_drawdown > 0:
         return 0.0
     
     calmar = annualized_return / abs(max_drawdown)

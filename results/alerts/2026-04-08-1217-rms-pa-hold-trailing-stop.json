@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-04-08T12:17:11.202457",
+  "alert_type": "INTRADAY_POSITION_MOVEMENT",
+  "ticker": "RMS.PA",
+  "severity": "HIGH",
+  "market_context": {
+    "current_price": 1788.5,
+    "daily_change_pct": 8.49,
+    "lvmh_change_pct": 7.49,
+    "cac40_change_pct": 4.85,
+    "spy_change_pct": 0.04,
+    "sector_rally_confirmed": true
+  },
+  "indicators": {
+    "rsi_14": 44.7,
+    "bollinger_position": 0.598,
+    "dist_sma20_pct": 2.65,
+    "interpretation": "Neutral RSI, not overbought despite +8.5% move"
+  },
+  "position_analysis": {
+    "remaining_qty": 0.6670573604252217,
+    "entry_price": 1663.4803944596904,
+    "current_price": 1788.5,
+    "unrealized_pnl": 83.4,
+    "unrealized_pnl_pct": 7.52,
+    "position_weight_pct": 12.4
+  },
+  "decision": {
+    "action": "HOLD",
+    "reasoning": [
+      "50% profits already secured this morning (+\u20ac69.38 realized)",
+      "RSI 44.7 is neutral - not overbought despite large daily move",
+      "Sector rally confirmed (LVMH +7.49%) - not isolated move",
+      "Mean reversion from extreme oversold (RSI 21.5 \u2192 44.7)",
+      "Playing with house money on remaining 50% position"
+    ],
+    "framework": "Behavioral_RL",
+    "principles_applied": [
+      "Prospect_Theory",
+      "Risk_Management",
+      "Position_Sizing"
+    ],
+    "exit_plan": {
+      "trailing_stop": 1750.0,
+      "trailing_stop_pct": -2.15,
+      "alternative_exit": "US close (21:30 UTC) reassessment"
+    }
+  },
+  "executed_trade": null,
+  "cumulative_position_pnl": {
+    "realized_this_morning": 69.38,
+    "unrealized_now": 83.4,
+    "total_potential": 152.78
+  }
+}

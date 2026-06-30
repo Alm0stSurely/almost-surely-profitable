@@ -1,0 +1,39 @@
+{
+  "alert_id": "alert-2026-03-19-1745",
+  "timestamp": "2026-03-19T17:45:03Z",
+  "type": "POSITION_MONITORING",
+  "severity": "MEDIUM",
+  "alerts": [
+    {
+      "ticker": "OR.PA",
+      "drawdown_pct": -4.55,
+      "threshold": -5.0,
+      "margin_to_stop": 0.45,
+      "trend": "STABLE (was -4.60% at 14:35)",
+      "action": "HOLD"
+    },
+    {
+      "ticker": "FEZ",
+      "drawdown_pct": -2.19,
+      "threshold": -5.0,
+      "margin_to_stop": 2.81,
+      "action": "HOLD"
+    }
+  ],
+  "portfolio_summary": {
+    "positions": 7,
+    "cash": 3649.07,
+    "cash_pct": 37.6,
+    "total_value": 9702.32
+  },
+  "executed_actions": [],
+  "reasoning": "OR.PA at -4.55% (improved from -4.60% at 14:35) remains within stop-loss threshold. FEZ stable at -2.19%. No action required. Three stop-losses already executed today (RMS.PA, AIR.PA, GLD) \u2014 discipline maintained. Portfolio holds 37.6% cash providing strong defensive position.",
+  "intraday_summary_2026_03_19": {
+    "stop_losses_executed": 3,
+    "realized_losses": -39.56,
+    "cash_raised": 615.39,
+    "current_cash_position": 3649.07,
+    "positions_remaining": 7
+  },
+  "next_review": "22:30 UTC daily session or immediate if OR.PA breaches -5%"
+}

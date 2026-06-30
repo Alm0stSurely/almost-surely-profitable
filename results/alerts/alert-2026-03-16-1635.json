@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-03-16T16:38:00Z",
+  "alert_time": "2026-03-16T16:35:05Z",
+  "alert_count": 5,
+  "decision": "HOLD",
+  "actions_taken": [],
+  "reasoning": "MC.PA fully recovered from -4.78% to -2.95% (+1.83% total). All positions have comfortable stop buffers (min 1.34%). GLD weakness confirms no safe-haven panic. Awaiting daily close.",
+  "mc_pa_recovery": {
+    "12:15_utc": -4.78,
+    "16:35_utc": -2.95,
+    "total_improvement": 1.83,
+    "pnl_preserved_eur": 6.16
+  },
+  "closest_stop": {
+    "ticker": "SGO.PA",
+    "drawdown": -3.66,
+    "distance_to_stop": 1.34
+  },
+  "portfolio_value": 9765.87,
+  "cash_pct": 42.7
+}

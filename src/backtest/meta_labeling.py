@@ -138,6 +138,11 @@ class MetaLabeler:
         ts = signal.timestamp
         window = self.config.lookback_window
         
+        # Guard against empty or trivial DataFrames
+        if price_data.empty or len(price_data) == 0:
+            logger.warning(f"Empty price data for features at {ts}")
+            return {}
+        
         # Get data up to signal time
         mask = price_data.index <= ts
         available_data = price_data[mask]

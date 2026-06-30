@@ -174,7 +174,8 @@ def calculate_sortino_ratio(
     # Downside volatility
     downside_vol = calculate_downside_volatility(returns)
     
-    if downside_vol == 0:
+    # Guard against numerical precision issues with near-zero downside volatility
+    if downside_vol < 1e-15 or np.isnan(downside_vol):
         return float('inf') if mean_return > risk_free_rate else 0.0
     
     return (mean_return - risk_free_rate) / downside_vol

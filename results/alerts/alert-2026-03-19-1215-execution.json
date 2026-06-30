@@ -1,0 +1,44 @@
+{
+  "alert_id": "alert-2026-03-19-1215",
+  "timestamp": "2026-03-19T12:15:05Z",
+  "type": "STOP_LOSS_EXECUTION",
+  "triggered_alerts": [
+    {
+      "ticker": "RMS.PA",
+      "drawdown_pct": -6.3,
+      "threshold": -5.0
+    },
+    {
+      "ticker": "AIR.PA",
+      "drawdown_pct": -6.44,
+      "threshold": -5.0
+    }
+  ],
+  "executed_trades": [
+    {
+      "ticker": "RMS.PA",
+      "action": "sell",
+      "quantity": 0.206202343694189,
+      "avg_price": 1916.8006415234001,
+      "sell_price": 1796.0,
+      "proceeds": 370.33940927476345,
+      "pnl": -24.909375401886678,
+      "pnl_pct": -6.302201643014498
+    },
+    {
+      "ticker": "AIR.PA",
+      "action": "sell",
+      "quantity": 0.5702717264283192,
+      "avg_price": 175.4199981689453,
+      "sell_price": 164.12,
+      "proceeds": 93.59299574141576,
+      "pnl": -6.444069464441284,
+      "pnl_pct": -6.441681841805965
+    }
+  ],
+  "total_realized_pnl": -31.353444866327962,
+  "new_cash_position": 3497.615120740759,
+  "new_total_value": 9710.52941490112,
+  "reasoning": "CVaR stop-loss triggered on RMS.PA (-6.30%) and AIR.PA (-6.44%), both exceeding the 5% threshold. Executed immediate sell orders to crystallize losses and prevent further downside. OR.PA at -4.67% remains within threshold, position held. Cash raised will be redeployed according to daily strategy at 22:30 UTC session.",
+  "strategy_discipline": "Stop-loss rules exist to protect capital. Emotional attachment to losing positions violates the loss aversion framework. The 5% threshold was chosen based on CVaR analysis; exceeding it triggers automatic exit regardless of market sentiment or recovery hopes."
+}

@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-03-16T17:48:00Z",
+  "alert_time": "2026-03-16T17:45:03Z",
+  "alert_count": 6,
+  "decision": "HOLD",
+  "actions_taken": [],
+  "reasoning": "Portfolio drawdown improved from -2.00% to -1.52%. SGO.PA at -3.96% is closest to stop (1.04% margin) but not critical. Awaiting daily close at 21:05 UTC for systematic rebalancing.",
+  "watch_list": ["SGO.PA"],
+  "portfolio_drawdown": {
+    "previous": -2.00,
+    "current": -1.52,
+    "improvement": 0.48
+  },
+  "closest_stop": {
+    "ticker": "SGO.PA",
+    "drawdown": -3.96,
+    "distance_to_stop": 1.04
+  },
+  "portfolio_value": 9765.87,
+  "cash_pct": 42.7,
+  "time_to_us_close_minutes": 195
+}

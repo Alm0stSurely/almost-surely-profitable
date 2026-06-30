@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-04-08T08:09:14.456246",
+  "alert_type": "INTRADAY_POSITION_MOVEMENT",
+  "ticker": "RMS.PA",
+  "severity": "HIGH",
+  "market_context": {
+    "rms_pa_change_pct": 7.25,
+    "cac40_change_pct": 3.94,
+    "lvmh_change_pct": 6.38,
+    "sector_rally": true
+  },
+  "indicators": {
+    "rsi_14": 42.3,
+    "bollinger_position": 0.556,
+    "previous_rsi": 21.5,
+    "mean_reversion_complete": true
+  },
+  "decision": {
+    "action": "PARTIAL_PROFIT_TAKING",
+    "reasoning": [
+      "Mean reversion thesis fully played out (RSI 21.5 -> 42.3)",
+      "Position reached 24.3% of portfolio, near 25% limit",
+      "Sector-wide luxury rally (+6-7%) with CAC 40 overbought (Bollinger 1.093)",
+      "Locking in 50% of gains (+\u20ac69.50 realized) per Prospect Theory",
+      "Maintaining 50% exposure for continued upside potential"
+    ],
+    "framework": "Behavioral_RL",
+    "principles_applied": [
+      "Prospect_Theory",
+      "CVaR",
+      "Position_Limits"
+    ]
+  },
+  "executed_trade": {
+    "ticker": "RMS.PA",
+    "action": "SELL",
+    "quantity": 0.667,
+    "price": 1767.5,
+    "value": 1178.92,
+    "realized_pnl": 69.38,
+    "realized_pnl_pct": 6.25
+  },
+  "portfolio_after": {
+    "cash": 8022.13,
+    "total_value": 9643.51,
+    "rms_pa_remaining_qty": 0.6671,
+    "total_realized_pnl": -512.24
+  }
+}

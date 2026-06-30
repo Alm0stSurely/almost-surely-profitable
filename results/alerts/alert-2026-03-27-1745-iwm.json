@@ -1,0 +1,53 @@
+{
+  "alert_id": "alert-2026-03-27-1745",
+  "timestamp": "2026-03-27T17:45:03Z",
+  "trigger": "intraday_monitor",
+  "market_context": {
+    "spy_change_pct": -2.61,
+    "qqq_change_pct": -3.27,
+    "iwm_change_pct": -3.11,
+    "vixy_change_pct": 11.02,
+    "tlt_change_pct": -0.67,
+    "gld_change_pct": 0.76,
+    "regime": "risk_off_accelerated"
+  },
+  "alert_details": {
+    "type": "POSITION_MOVEMENT",
+    "ticker": "IWM",
+    "severity": "MEDIUM",
+    "movement_pct": -2.14,
+    "current_price": 243.60,
+    "reference_price": 248.92,
+    "position_value": 622.13,
+    "unrealized_pnl": -13.37
+  },
+  "portfolio_status": {
+    "cash_pct": 86.2,
+    "equity_exposure_pct": 13.8,
+    "iwm_allocation_pct": 6.5
+  },
+  "decision": {
+    "action": "HOLD",
+    "execution": "none",
+    "reasoning": [
+      "Déjà en position défensive: 86% cash après risk-off d'hier (vente 50% SPY + 100% GWX)",
+      "Exposition IWM limitée: 6.5% du portfolio uniquement",
+      "Mouvement aligné avec baisse globale marché (SPY -2.6%, QQQ -3.3%) — pas spécifique à IWM",
+      "VIXY +11% confirme flight-to-safety déjà en cours — réaction tardive si on vend maintenant",
+      "Session complète d'analyse LLM prévue à 22h30 UTC (clôture US) — décision structurée à ce moment",
+      "Overtrading risk: ne pas réagir à chaque mouvement intraday dans un contexte déjà risk-off"
+    ]
+  },
+  "conditions_for_action": {
+    "would_sell_if": [
+      "IWM break sous support technique majeur (220$)",
+      "Divergence négative vs SPY (IWM sous-performe de >3%)",
+      "Alerte système à 22h30 avec recommandation LLM de couper"
+    ],
+    "would_buy_if": [
+      "Rebond intraday >+2% avec confirmation volume",
+      "Setup mean-reversion clair sur indicateurs techniques (RSI <20)"
+    ]
+  },
+  "next_review": "2026-03-27T22:30:00Z"
+}
