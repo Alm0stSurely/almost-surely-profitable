@@ -175,7 +175,7 @@ def calculate_sortino_ratio(
     
     downside_std = np.std(downside_returns, ddof=1)
     
-    if downside_std == 0 or np.isnan(downside_std):
+    if abs(downside_std) < 1e-15 or np.isnan(downside_std):
         return 0.0
     
     sortino = mean_excess / downside_std
@@ -220,7 +220,7 @@ def calculate_calmar_ratio(
         drawdowns = (cumulative - rolling_max) / rolling_max
         max_drawdown = np.min(drawdowns)
     
-    if max_drawdown == 0:
+    if abs(max_drawdown) < 1e-15 or np.isnan(max_drawdown):
         return float('inf') if annualized_return > 0 else 0.0
     if max_drawdown > 0:
         return 0.0
@@ -249,7 +249,7 @@ def calculate_treynor_ratio(
     Returns:
         Treynor ratio or None if beta is invalid
     """
-    if len(returns) < 2 or beta is None or beta == 0:
+    if len(returns) < 2 or beta is None or abs(beta) < 1e-15 or np.isnan(beta):
         return None
     
     daily_rf = risk_free_rate / 252
@@ -288,7 +288,7 @@ def calculate_information_ratio(
     # Tracking error (annualized)
     tracking_error = np.std(active_returns, ddof=1) * np.sqrt(252)
     
-    if tracking_error == 0:
+    if abs(tracking_error) < 1e-15 or np.isnan(tracking_error):
         return None, None
     
     # Information ratio
