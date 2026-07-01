@@ -206,7 +206,9 @@ def calculate_calmar_ratio(prices: pd.Series) -> float:
     # Max drawdown (absolute value)
     max_dd = abs(calculate_max_drawdown(prices))
     
-    if max_dd == 0:
+    # Guard against numerical precision: a monotonic series has zero drawdown,
+    # but floating-point rounding can produce a tiny non-zero value.
+    if max_dd < 1e-15 or np.isnan(max_dd):
         return float('inf') if annualized_return > 0 else 0.0
     
     return annualized_return / max_dd

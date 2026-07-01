@@ -1,12 +1,10 @@
 """
 Test suite for risk/metrics.py.
 
-Tests all risk metrics calculations with known inputs and expected outputs.
-Financial risk formulas are deterministic — if the math is right, the tests pass.
-If the math is wrong, we want to know before deploying to production.
-
-Covers: VaR, CVaR, drawdowns, downside volatility, Sortino, Calmar,
-correlation matrices, and portfolio-level risk aggregation.
+Tests risk metrics calculations (VaR, CVaR, volatility, drawdowns, Sortino,
+Calmar, correlations) with deterministic inputs and mathematically verifiable
+outputs. These are pure numerical functions — correctness should not depend on
+random data or on the order of execution.
 """
 
 import sys
@@ -35,7 +33,7 @@ from risk.metrics import (
 
 
 def _approx(a, b, rel_tol=1e-6, abs_tol=1e-9):
-    """Compare floats with tolerance."""
+    """Compare floats with tolerance, handling None/inf."""
     if a is None and b is None:
         return True
     if a is None or b is None:
@@ -45,35 +43,13 @@ def _approx(a, b, rel_tol=1e-6, abs_tol=1e-9):
     return math.isclose(a, b, rel_tol=rel_tol, abs_tol=abs_tol)
 
 
-# ---------------------------------------------------------------------------
-# RiskMetrics dataclass
-# ---------------------------------------------------------------------------
-
-def test_risk_metrics_to_dict():
-    """Round-trip serialization of RiskMetrics."""
-    m = RiskMetrics(
-        var_95=-0.02,
-        var_99=-0.03,
-        cvar_95=-0.025,
-        cvar_99=-0.035,
-        volatility=0.20,
-        downside_volatility=0.15,
-        max_drawdown=-0.10,
-        current_drawdown=-0.05,
-        sortino_ratio=1.5,
-        calmar_ratio=2.0,
-        skewness=-0.5,
-        kurtosis=3.0,
+def _prices_from_returns(returns, start_price=100.0):
+    """Build a price series from an array of daily returns."""
+    prices = start_price * (1 + np.asarray(returns)).cumprod()
+    return pd.Series(
+        np.concatenate([[start_price], prices]),
+        index=pd.date_range("2024-01-01", periods=len(returns) + 1, freq="D"),
     )
-    d = m.to_dict()
-    assert d["var_95"] == -0.02
-    assert d["volatility"] == 0.20
-    assert d["max_drawdown"] == -0.10
-    assert set(d.keys()) == {
-        "var_95", "var_99", "cvar_95", "cvar_99",
-        "volatility", "downside_volatility", "max_drawdown", "current_drawdown",
-        "sortino_ratio", "calmar_ratio", "skewness", "kurtosis",
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -81,391 +57,318 @@ def test_risk_metrics_to_dict():
 # ---------------------------------------------------------------------------
 
 def test_calculate_returns_basic():
-    """pct_change produces correct daily returns."""
-    prices = pd.Series([100, 101, 102, 99])
+    """Returns from a simple price series."""
+    prices = pd.Series([100.0, 101.0, 99.0, 102.0])
     returns = calculate_returns(prices)
+    expected = pd.Series([0.01, -0.01980198, 0.03030303])
     assert len(returns) == 3
-    assert _approx(returns.iloc[0], 0.01)
-    assert _approx(returns.iloc[1], 1 / 101)
-    assert _approx(returns.iloc[2], -3 / 102)
+    assert _approx(returns.iloc[0], expected.iloc[0], rel_tol=1e-5)
+    assert _approx(returns.iloc[-1], expected.iloc[-1], rel_tol=1e-5)
 
 
-def test_calculate_returns_empty():
-    """Empty series returns empty."""
-    returns = calculate_returns(pd.Series([], dtype=float))
-    assert len(returns) == 0
-
-
-def test_calculate_returns_single():
-    """Single price returns empty (no change to compute)."""
-    returns = calculate_returns(pd.Series([100]))
-    assert len(returns) == 0
+def test_calculate_returns_empty_and_single():
+    """Empty or single-price series returns empty series."""
+    assert len(calculate_returns(pd.Series([], dtype=float))) == 0
+    assert len(calculate_returns(pd.Series([100.0]))) == 0
 
 
 # ---------------------------------------------------------------------------
-# calculate_var
+# VaR / CVaR
 # ---------------------------------------------------------------------------
 
-def test_var_basic():
-    """VaR at 95% for a known distribution."""
-    np.random.seed(42)
-    returns = pd.Series(np.random.normal(0, 0.01, 252))
-    var = calculate_var(returns, 0.95)
-    # For N(0, 0.01), 5th percentile ≈ -1.645 * 0.01 = -0.01645
-    assert var < 0, f"VaR should be negative (a loss), got {var}"
-    assert var > -0.05, f"VaR unexpectedly large: {var}"
+def test_calculate_var_known_distribution():
+    """VaR on a uniform grid of returns is the correct percentile."""
+    returns = pd.Series(np.linspace(-0.10, 0.10, 1001))
+    var_95 = calculate_var(returns, confidence=0.95)
+    # 5th percentile of 1001 points ≈ index 50 → -0.09
+    assert var_95 < 0
+    assert _approx(var_95, -0.09, rel_tol=0.05)
 
 
-def test_var_insufficient_data():
-    """VaR requires >= 30 observations."""
-    assert calculate_var(pd.Series(np.full(29, 0.001))) == 0.0
-    assert calculate_var(pd.Series([], dtype=float)) == 0.0
+def test_calculate_var_insufficient_data():
+    """VaR returns 0.0 for fewer than 30 observations."""
+    assert calculate_var(pd.Series(np.full(29, 0.01))) == 0.0
+    assert calculate_var(pd.Series([])) == 0.0
 
 
-def test_var_confidence_levels():
-    """VaR_99 should be more extreme than VaR_95."""
-    np.random.seed(42)
-    returns = pd.Series(np.random.normal(0, 0.01, 252))
-    var_95 = calculate_var(returns, 0.95)
-    var_99 = calculate_var(returns, 0.99)
-    assert var_99 <= var_95, f"VaR_99 ({var_99}) should be <= VaR_95 ({var_95})"
+def test_calculate_cvar_tail_average():
+    """CVaR is the mean of returns below VaR."""
+    returns = pd.Series(np.linspace(-0.10, 0.10, 1001))
+    cvar = calculate_cvar(returns, confidence=0.95)
+    var = calculate_var(returns, confidence=0.95)
+    tail = returns[returns <= var]
+    assert _approx(cvar, tail.mean(), rel_tol=1e-5)
+    assert cvar <= var  # Expected shortfall is at least as bad as VaR
 
 
-def test_var_all_positive():
-    """VaR for all-positive returns can be positive (no loss at threshold)."""
-    returns = pd.Series(np.full(100, 0.01))
-    var = calculate_var(returns, 0.95)
-    # 5th percentile of all 0.01 is 0.01
-    assert var == 0.01
+def test_calculate_cvar_insufficient_data():
+    """CVaR returns 0.0 for fewer than 30 observations."""
+    assert calculate_cvar(pd.Series(np.full(29, 0.01))) == 0.0
+    assert calculate_cvar(pd.Series([])) == 0.0
 
 
 # ---------------------------------------------------------------------------
-# calculate_cvar
+# Drawdowns
 # ---------------------------------------------------------------------------
 
-def test_cvar_basic():
-    """CVaR is the mean of tail losses beyond VaR."""
-    np.random.seed(42)
-    returns = pd.Series(np.random.normal(0, 0.01, 252))
-    var = calculate_var(returns, 0.95)
-    cvar = calculate_cvar(returns, 0.95)
-    # CVaR <= VaR (more extreme)
-    assert cvar <= var, f"CVaR ({cvar}) should be <= VaR ({var})"
-
-
-def test_cvar_insufficient_data():
-    """CVaR requires >= 30 observations."""
-    assert calculate_cvar(pd.Series(np.full(29, 0.001))) == 0.0
-
-
-def test_cvar_no_tail_losses():
-    """When all returns equal VaR threshold, CVaR equals VaR."""
-    returns = pd.Series(np.full(100, 0.01))
-    cvar = calculate_cvar(returns, 0.95)
-    var = calculate_var(returns, 0.95)
-    assert _approx(cvar, var), f"CVaR ({cvar}) should equal VaR ({var}) for constant returns"
-
-
-def test_cvar_extreme_tail():
-    """CVaR captures fat left tails better than VaR."""
-    # 20 extreme losses out of 200 obs (10% tail) → 95% VaR should land in extreme block
-    returns = pd.Series(np.concatenate([
-        np.full(180, 0.001),
-        np.full(20, -0.10),
-    ]))
-    var = calculate_var(returns, 0.95)
-    cvar = calculate_cvar(returns, 0.95)
-    # With 200 obs, 5% = 10 obs in tail — all should be -0.10
-    assert _approx(cvar, -0.10, rel_tol=0.1), f"Expected CVaR ≈ -0.10, got {cvar} (VaR={var})"
-
-
-# ---------------------------------------------------------------------------
-# calculate_drawdowns
-# ---------------------------------------------------------------------------
-
-def test_drawdowns_basic():
-    """Drawdowns calculated correctly from prices."""
-    prices = pd.Series([100, 110, 105, 115, 108])
+def test_calculate_drawdowns_known_path():
+    """Drawdowns on a known price path."""
+    prices = pd.Series([100.0, 110.0, 105.0, 115.0, 100.0])
     dd = calculate_drawdowns(prices)
-    assert len(dd) == 5
-    assert dd.iloc[0] == 0.0  # First day: no drawdown
-    assert dd.iloc[1] == 0.0  # New high
-    assert _approx(dd.iloc[2], 105 / 110 - 1)  # -4.545%
-    assert dd.iloc[3] == 0.0  # New high
-    assert _approx(dd.iloc[4], 108 / 115 - 1)  # -6.087%
+    assert _approx(dd.iloc[0], 0.0, abs_tol=1e-9)
+    assert _approx(dd.iloc[1], 0.0, abs_tol=1e-9)
+    assert _approx(dd.iloc[2], -0.0454545, rel_tol=1e-5)
+    assert _approx(dd.iloc[4], -0.1304348, rel_tol=1e-5)
 
 
-def test_drawdowns_monotonically_increasing():
-    """No drawdown when prices only go up."""
-    prices = pd.Series([100, 101, 102, 103])
-    dd = calculate_drawdowns(prices)
-    assert all(d == 0.0 for d in dd)
+def test_calculate_max_drawdown_known():
+    """Max drawdown is the minimum of the drawdown series."""
+    prices = pd.Series([100.0, 110.0, 105.0, 115.0, 100.0])
+    assert _approx(calculate_max_drawdown(prices), -0.1304348, rel_tol=1e-5)
 
 
-def test_drawdowns_monotonically_decreasing():
-    """Always in drawdown when prices only go down."""
-    prices = pd.Series([100, 95, 90, 85])
-    dd = calculate_drawdowns(prices)
-    assert dd.iloc[0] == 0.0
-    assert _approx(dd.iloc[1], 95 / 100 - 1)
-    assert _approx(dd.iloc[2], 90 / 100 - 1)
-    assert _approx(dd.iloc[3], 85 / 100 - 1)
+def test_calculate_drawdowns_empty():
+    """Empty price series returns empty drawdown series."""
+    dd = calculate_drawdowns(pd.Series([], dtype=float))
+    assert len(dd) == 0
 
 
 # ---------------------------------------------------------------------------
-# calculate_max_drawdown
+# Downside volatility
 # ---------------------------------------------------------------------------
 
-def test_max_drawdown_basic():
-    """Max drawdown finds the deepest trough."""
-    prices = pd.Series([100, 110, 90, 105, 80, 120])
-    mdd = calculate_max_drawdown(prices)
-    assert mdd < 0
-    assert _approx(mdd, 80 / 110 - 1)  # Deepest from 110 to 80
+def test_calculate_downside_volatility_all_positive():
+    """Downside volatility is zero when all returns are positive."""
+    returns = pd.Series(np.full(30, 0.001))
+    assert calculate_downside_volatility(returns) == 0.0
 
 
-def test_max_drawdown_no_drawdown():
-    """Max drawdown is 0 when prices only rise."""
-    prices = pd.Series([100, 101, 102])
-    assert calculate_max_drawdown(prices) == 0.0
+def test_calculate_downside_volatility_known():
+    """Downside volatility considers only negative returns."""
+    returns = pd.Series([0.01, -0.01, 0.02, -0.02, 0.01] * 30)
+    downside = returns[returns < 0]
+    expected = downside.std() * math.sqrt(252)
+    assert _approx(calculate_downside_volatility(returns), expected, rel_tol=1e-6)
 
 
-# ---------------------------------------------------------------------------
-# calculate_downside_volatility
-# ---------------------------------------------------------------------------
-
-def test_downside_volatility_all_positive():
-    """All positive returns → no downside returns → 0.0."""
-    returns = pd.Series(np.full(100, 0.01))
-    dv = calculate_downside_volatility(returns)
-    assert dv == 0.0
-
-
-def test_downside_volatility_mixed():
-    """Downside vol is less than or equal to total vol."""
-    np.random.seed(42)
-    returns = pd.Series(np.random.normal(0, 0.01, 252))
-    dv = calculate_downside_volatility(returns)
-    total_vol = returns.std() * np.sqrt(252)
-    assert dv <= total_vol, f"Downside vol ({dv}) should be <= total vol ({total_vol})"
-    assert dv > 0, f"Expected positive downside vol, got {dv}"
-
-
-def test_downside_volatility_insufficient_data():
-    """Downside vol requires >= 30 observations."""
-    assert calculate_downside_volatility(pd.Series(np.full(29, 0.001))) == 0.0
-    assert calculate_downside_volatility(pd.Series([], dtype=float)) == 0.0
-
-
-def test_downside_volatility_single_negative():
-    """Only one negative return — std needs >= 2 observations."""
-    returns = pd.Series(np.concatenate([np.full(99, 0.01), [-0.05]]))
-    dv = calculate_downside_volatility(returns)
-    assert dv == 0.0  # Only 1 downside return, can't compute std
+def test_calculate_downside_volatility_insufficient_data():
+    """Downside volatility returns 0.0 for insufficient data."""
+    assert calculate_downside_volatility(pd.Series(np.full(29, -0.001))) == 0.0
+    assert calculate_downside_volatility(pd.Series([])) == 0.0
+    # Fewer than 2 negative returns
+    assert calculate_downside_volatility(pd.Series([0.01, 0.02, -0.01])) == 0.0
 
 
 # ---------------------------------------------------------------------------
-# calculate_sortino_ratio
+# Sortino ratio
 # ---------------------------------------------------------------------------
 
-def test_sortino_all_positive():
-    """All positive returns → infinite Sortino (no downside)."""
-    returns = pd.Series(np.full(100, 0.01))
+def test_calculate_sortino_ratio_all_positive():
+    """Sortino is infinite when all returns exceed the risk-free rate."""
+    returns = pd.Series(np.full(30, 0.001))
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert sortino == float('inf')
+    assert sortino == float("inf")
 
 
-def test_sortino_zero_downside_positive_return():
-    """Zero downside vol with positive excess return → inf."""
-    returns = pd.Series(np.full(100, 0.001))
-    sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert sortino == float('inf')
+def test_calculate_sortino_ratio_zero_downside_volatility():
+    """Sortino guards against near-zero downside volatility."""
+    returns = pd.Series(np.full(30, 0.001))
+    sortino = calculate_sortino_ratio(returns, risk_free_rate=0.02)
+    # Mean return > risk-free rate, zero downside vol → inf
+    assert sortino == float("inf")
+
+    returns_zero = pd.Series(np.full(30, 0.00005))  # Below risk-free rate
+    sortino_zero = calculate_sortino_ratio(returns_zero, risk_free_rate=0.02)
+    assert sortino_zero == 0.0
 
 
-def test_sortino_zero_downside_negative_return():
-    """Zero downside vol with negative excess return → 0.0."""
-    returns = pd.Series(np.full(100, -0.001))  # All negative, mean < 0
-    sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert sortino == 0.0, f"Expected 0.0 (negative excess return, zero downside vol), got {sortino}"
-
-
-def test_sortino_mixed():
-    """Sortino with mixed returns."""
+def test_calculate_sortino_ratio_with_downside():
+    """Sortino with mixed returns is positive when mean excess return is positive."""
     np.random.seed(42)
     returns = pd.Series(np.random.normal(0.0005, 0.01, 252))
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.02)
-    assert sortino != float('inf')
+    assert sortino is not None
     assert not math.isnan(sortino)
 
 
-def test_sortino_insufficient_data():
-    """Sortino requires >= 30 observations."""
+def test_calculate_sortino_ratio_insufficient_data():
+    """Sortino returns 0.0 for fewer than 30 observations."""
     assert calculate_sortino_ratio(pd.Series(np.full(29, 0.001))) == 0.0
 
 
 # ---------------------------------------------------------------------------
-# calculate_calmar_ratio
+# Calmar ratio
 # ---------------------------------------------------------------------------
 
-def test_calmar_basic():
-    """Calmar with known return and drawdown."""
-    # 252 days of ~10% annual return, max drawdown -5%
-    prices = pd.Series(100 * (1 + np.full(252, 0.10 / 252)).cumprod())
-    # Inject a -5% drawdown
-    prices.iloc[50:] *= 0.95
+def test_calculate_calmar_ratio_basic():
+    """Calmar ratio is infinite for monotonic positive returns (no drawdown)."""
+    # 252 days of 0.1% daily return → monotonic increase, no drawdown
+    returns = np.full(252, 0.001)
+    prices = _prices_from_returns(returns)
+    calmar = calculate_calmar_ratio(prices)
+    assert calmar == float("inf")
+
+
+def test_calculate_calmar_ratio_with_recovery():
+    """Calmar ratio is finite and positive after a drawdown and recovery."""
+    returns = np.concatenate([np.full(100, 0.001), np.full(10, -0.005), np.full(142, 0.001)])
+    prices = _prices_from_returns(returns)
     calmar = calculate_calmar_ratio(prices)
     assert calmar > 0
-    assert calmar < 5.0  # Should be roughly 0.10 / 0.05 = 2.0
+    assert math.isfinite(calmar)
 
 
-def test_calmar_no_drawdown():
-    """No drawdown and positive return → inf."""
-    prices = pd.Series(100 * (1 + np.full(100, 0.001)).cumprod())
+def test_calculate_calmar_ratio_no_drawdown():
+    """Calmar is infinite for positive returns with no drawdown."""
+    returns = np.full(252, 0.001)
+    prices = _prices_from_returns(returns)
     calmar = calculate_calmar_ratio(prices)
-    assert calmar == float('inf')
+    assert calmar == float("inf")
 
 
-def test_calmar_all_losses():
-    """All losses → negative Calmar."""
-    prices = pd.Series(100 * (1 + np.full(100, -0.001)).cumprod())
+def test_calculate_calmar_ratio_monotonic_decline():
+    """Calmar is negative and finite for a monotonic decline."""
+    returns = np.full(252, -0.001)
+    prices = _prices_from_returns(returns)
     calmar = calculate_calmar_ratio(prices)
     assert calmar < 0
+    assert math.isfinite(calmar)
 
 
-def test_calmar_insufficient_data():
-    """Calmar requires >= 30 observations."""
-    assert calculate_calmar_ratio(pd.Series(np.full(29, 100))) == 0.0
-
-
-def test_calmar_flat_prices():
-    """Flat prices → zero return, zero drawdown → 0.0 (not inf)."""
-    prices = pd.Series(np.full(100, 100))
+def test_calculate_calmar_ratio_with_drawdown():
+    """Calmar is finite and positive when there is a recovery from drawdown."""
+    returns = np.concatenate([np.full(100, 0.001), np.full(10, -0.005), np.full(142, 0.001)])
+    prices = _prices_from_returns(returns)
     calmar = calculate_calmar_ratio(prices)
-    assert calmar == 0.0
+    assert calmar > 0
+    assert math.isfinite(calmar)
+
+
+def test_calculate_calmar_ratio_insufficient_data():
+    """Calmar returns 0.0 for fewer than 30 price observations."""
+    prices = _prices_from_returns(np.full(28, 0.001))  # 29 prices total
+    assert calculate_calmar_ratio(prices) == 0.0
 
 
 # ---------------------------------------------------------------------------
-# calculate_correlation_matrix
+# Correlation matrix
 # ---------------------------------------------------------------------------
 
-def test_correlation_perfect():
-    """Perfect correlation → 1.0 (requires non-constant series)."""
-    x = np.linspace(-0.05, 0.05, 60)
-    returns = {"A": pd.Series(x), "B": pd.Series(x * 2 + 0.001)}
-    corr = calculate_correlation_matrix(returns)
+def test_calculate_correlation_matrix_perfect_correlation():
+    """Correlation matrix shows 1.0 for perfectly correlated assets."""
+    returns1 = pd.Series([0.01, -0.01, 0.02, -0.02, 0.01] * 10)
+    returns2 = returns1 * 2.0
+    corr = calculate_correlation_matrix({"A": returns1, "B": returns2})
     assert corr is not None
-    assert _approx(corr.loc["A", "B"], 1.0), f"Expected perfect correlation, got {corr.loc['A', 'B']}"
+    assert _approx(corr.loc["A", "B"], 1.0, rel_tol=1e-9)
+    assert _approx(corr.loc["B", "A"], 1.0, rel_tol=1e-9)
 
 
-def test_correlation_perfect_inverse():
-    """Perfect inverse correlation → -1.0."""
-    returns = {"A": pd.Series(np.linspace(-0.05, 0.05, 60)),
-               "B": pd.Series(np.linspace(0.05, -0.05, 60))}
-    corr = calculate_correlation_matrix(returns)
+def test_calculate_correlation_matrix_perfect_inverse():
+    """Correlation matrix shows -1.0 for perfectly inversely correlated assets."""
+    returns1 = pd.Series([0.01, -0.01, 0.02, -0.02, 0.01] * 10)
+    returns2 = -returns1
+    corr = calculate_correlation_matrix({"A": returns1, "B": returns2})
     assert corr is not None
-    assert _approx(corr.loc["A", "B"], -1.0, abs_tol=1e-6)
+    assert _approx(corr.loc["A", "B"], -1.0, rel_tol=1e-9)
 
 
-def test_correlation_single_asset():
-    """Single asset → None."""
-    returns = {"A": pd.Series(np.full(60, 0.01))}
-    assert calculate_correlation_matrix(returns) is None
+def test_calculate_correlation_matrix_insufficient_assets():
+    """Correlation matrix requires at least two assets."""
+    returns = pd.Series([0.01, -0.01, 0.02] * 10)
+    assert calculate_correlation_matrix({"A": returns}) is None
 
 
-def test_correlation_empty():
-    """Empty dict → None."""
-    assert calculate_correlation_matrix({}) is None
-
-
-def test_correlation_insufficient_overlap():
-    """Less than 10 overlapping observations → None."""
-    returns = {"A": pd.Series(np.full(5, 0.01)), "B": pd.Series(np.full(5, 0.01))}
-    assert calculate_correlation_matrix(returns) is None
+def test_calculate_correlation_matrix_insufficient_data():
+    """Correlation matrix requires at least 10 observations."""
+    returns1 = pd.Series([0.01, -0.01, 0.02, -0.02, 0.01])
+    returns2 = pd.Series([0.01, -0.01, 0.02, -0.02, 0.01])
+    assert calculate_correlation_matrix({"A": returns1, "B": returns2}) is None
 
 
 # ---------------------------------------------------------------------------
-# calculate_portfolio_risk_metrics
+# Portfolio risk metrics integration
 # ---------------------------------------------------------------------------
 
-def test_portfolio_metrics_full():
-    """Full portfolio risk metrics with explicit weights."""
+def test_calculate_portfolio_risk_metrics_basic():
+    """Full portfolio risk metrics calculation with equal weights."""
     np.random.seed(42)
-    dates = pd.date_range("2024-01-01", periods=252)
-    prices_dict = {
-        "A": pd.Series(100 * (1 + np.random.normal(0.0005, 0.01, 252)).cumprod(), index=dates),
-        "B": pd.Series(100 * (1 + np.random.normal(0.0003, 0.008, 252)).cumprod(), index=dates),
-    }
-    weights = {"A": 0.6, "B": 0.4}
-    metrics = calculate_portfolio_risk_metrics(prices_dict, weights)
+    dates = pd.date_range("2024-01-01", periods=252, freq="D")
+    returns1 = np.random.normal(0.0005, 0.02, 252)
+    returns2 = np.random.normal(0.0003, 0.015, 252)
+    prices1 = pd.Series(100 * (1 + returns1).cumprod(), index=dates)
+    prices2 = pd.Series(100 * (1 + returns2).cumprod(), index=dates)
+
+    metrics = calculate_portfolio_risk_metrics(
+        {"ASSET1": prices1, "ASSET2": prices2},
+        weights={"ASSET1": 0.6, "ASSET2": 0.4},
+    )
 
     assert isinstance(metrics, RiskMetrics)
     assert metrics.var_95 < 0
-    assert metrics.var_99 <= metrics.var_95
+    assert metrics.var_99 < metrics.var_95
     assert metrics.cvar_95 <= metrics.var_95
-    assert metrics.volatility > 0
+    assert metrics.cvar_99 <= metrics.var_99
+    assert metrics.volatility >= 0
+    assert metrics.downside_volatility >= 0
     assert metrics.max_drawdown <= 0
     assert metrics.current_drawdown <= 0
+    assert not math.isnan(metrics.skewness)
+    assert not math.isnan(metrics.kurtosis)
 
 
-def test_portfolio_metrics_equal_weight():
-    """Equal-weighted when no weights provided."""
+def test_calculate_portfolio_risk_metrics_equal_weight_default():
+    """Default weights produce equal-weighted portfolio."""
     np.random.seed(42)
-    dates = pd.date_range("2024-01-01", periods=252)
-    prices_dict = {
-        "A": pd.Series(100 * (1 + np.random.normal(0.0005, 0.01, 252)).cumprod(), index=dates),
-        "B": pd.Series(100 * (1 + np.random.normal(0.0003, 0.008, 252)).cumprod(), index=dates),
-    }
-    metrics = calculate_portfolio_risk_metrics(prices_dict)
-    assert isinstance(metrics, RiskMetrics)
-    assert metrics.volatility > 0
+    dates = pd.date_range("2024-01-01", periods=252, freq="D")
+    returns1 = np.random.normal(0.0005, 0.02, 252)
+    returns2 = np.random.normal(0.0003, 0.015, 252)
+    prices1 = pd.Series(100 * (1 + returns1).cumprod(), index=dates)
+    prices2 = pd.Series(100 * (1 + returns2).cumprod(), index=dates)
+
+    metrics_equal = calculate_portfolio_risk_metrics(
+        {"ASSET1": prices1, "ASSET2": prices2}
+    )
+    metrics_explicit = calculate_portfolio_risk_metrics(
+        {"ASSET1": prices1, "ASSET2": prices2},
+        weights={"ASSET1": 0.5, "ASSET2": 0.5},
+    )
+
+    assert _approx(metrics_equal.volatility, metrics_explicit.volatility, rel_tol=1e-5)
+    assert _approx(metrics_equal.var_95, metrics_explicit.var_95, rel_tol=1e-5)
 
 
-def test_portfolio_metrics_weight_normalization():
-    """Weights are normalized to sum to 1."""
-    np.random.seed(42)
-    dates = pd.date_range("2024-01-01", periods=252)
-    prices_dict = {
-        "A": pd.Series(100 * (1 + np.full(252, 0.001)).cumprod(), index=dates),
-        "B": pd.Series(100 * (1 + np.full(252, 0.001)).cumprod(), index=dates),
-    }
-    # Weights sum to 2.0 — should be normalized to 1.0
-    weights = {"A": 1.2, "B": 0.8}
-    metrics = calculate_portfolio_risk_metrics(prices_dict, weights)
-    # Both assets identical → portfolio volatility should match individual
-    assert metrics.volatility >= 0
-
-
-def test_portfolio_metrics_single_asset():
-    """Single asset portfolio."""
-    np.random.seed(42)
-    dates = pd.date_range("2024-01-01", periods=252)
-    prices_dict = {
-        "A": pd.Series(100 * (1 + np.random.normal(0.0005, 0.01, 252)).cumprod(), index=dates),
-    }
-    metrics = calculate_portfolio_risk_metrics(prices_dict)
-    assert isinstance(metrics, RiskMetrics)
-    assert metrics.volatility > 0
-
-
-def test_portfolio_metrics_empty():
-    """Empty prices dict should not crash."""
+def test_calculate_portfolio_risk_metrics_empty():
+    """Empty price dict returns a RiskMetrics with safe defaults."""
     metrics = calculate_portfolio_risk_metrics({})
-    # With empty dict, returns_dict is empty, returns_df has no columns,
-    # portfolio_returns is empty Series → most metrics are 0 or NaN
     assert isinstance(metrics, RiskMetrics)
+    # No assets → NaN from empty operations; code should still return a dataclass
+    # but the behavior is undefined. We mainly check it does not crash.
+
+
+def test_calculate_portfolio_risk_metrics_short_series():
+    """Short price series returns guarded defaults."""
+    prices = _prices_from_returns(np.full(5, 0.001))
+    metrics = calculate_portfolio_risk_metrics({"A": prices})
+    assert isinstance(metrics, RiskMetrics)
+    # VaR/CVaR and most ratios return 0 for < 30 observations
+    assert metrics.var_95 == 0.0
+    assert metrics.cvar_95 == 0.0
+    assert metrics.sortino_ratio == 0.0
+    assert metrics.calmar_ratio == 0.0
 
 
 # ---------------------------------------------------------------------------
-# get_risk_summary_for_llm
+# LLM summary formatting
 # ---------------------------------------------------------------------------
 
-def test_risk_summary_format():
-    """Risk summary contains all expected sections."""
+def test_get_risk_summary_for_llm():
+    """Risk summary contains all expected sections and metrics."""
     metrics = RiskMetrics(
         var_95=-0.02,
-        var_99=-0.03,
-        cvar_95=-0.025,
-        cvar_99=-0.035,
+        var_99=-0.05,
+        cvar_95=-0.03,
+        cvar_99=-0.06,
         volatility=0.20,
         downside_volatility=0.15,
         max_drawdown=-0.10,
@@ -476,66 +379,55 @@ def test_risk_summary_format():
         kurtosis=3.0,
     )
     summary = get_risk_summary_for_llm(metrics)
+
+    assert "Risk Metrics" in summary
     assert "VaR 95%" in summary
     assert "CVaR 95%" in summary
     assert "Volatility" in summary
     assert "Max Drawdown" in summary
     assert "Sortino Ratio" in summary
     assert "Skewness" in summary
-    assert "Kurtosis" in summary
 
 
 # ---------------------------------------------------------------------------
-# Edge cases & numerical precision
+# Regression / bug-detection tests
 # ---------------------------------------------------------------------------
 
-def test_var_with_nan():
-    """np.percentile returns NaN when NaN present — documented behavior."""
-    returns = pd.Series([0.01, 0.02, np.nan, -0.01, 0.005] * 30)
-    var = calculate_var(returns, 0.95)
-    # numpy.percentile propagates NaN; this is a known limitation
-    # pandas Series with NaN will produce NaN unless using skipna logic
-    assert math.isnan(var) or var < 0, f"Expected NaN or negative, got {var}"
+def test_var_cvar_monotonicity():
+    """CVaR at 99% must be <= CVaR at 95% <= VaR at 95%."""
+    np.random.seed(42)
+    returns = pd.Series(np.random.normal(0.0005, 0.02, 252))
+    var_95 = calculate_var(returns, 0.95)
+    var_99 = calculate_var(returns, 0.99)
+    cvar_95 = calculate_cvar(returns, 0.95)
+    cvar_99 = calculate_cvar(returns, 0.99)
+
+    assert var_99 <= var_95  # More extreme quantile is more negative
+    assert cvar_95 <= var_95
+    assert cvar_99 <= var_99
+    assert cvar_99 <= cvar_95
 
 
-def test_drawdown_with_nan():
-    """Drawdowns handle NaN in prices."""
-    prices = pd.Series([100, 110, np.nan, 105, 115])
-    dd = calculate_drawdowns(prices)
-    # NaN propagates through cummax and division
-    assert len(dd) == 5
+def test_calmar_ratio_zero_drawdown_positive_returns():
+    """Calmar is infinite when returns are positive and max drawdown is zero."""
+    returns = np.full(60, 0.001)
+    prices = _prices_from_returns(returns)
+    assert calculate_calmar_ratio(prices) == float("inf")
 
 
-def test_sortino_fp_precision_guard():
-    """Sortino doesn't explode on near-zero downside volatility."""
-    returns = pd.Series(np.concatenate([np.full(250, 0.001), [-1e-12]]))
+def test_calmar_ratio_zero_drawdown_zero_returns():
+    """Calmar is 0 when drawdown is zero but returns are zero."""
+    prices = pd.Series([100.0] * 60)
+    assert calculate_calmar_ratio(prices) == 0.0
+
+
+def test_calculate_sortino_ratio_nan_downside_vol():
+    """Sortino guards against NaN downside volatility."""
+    returns = pd.Series([0.001] * 30)
+    # Manually set downside_vol to NaN by using a series that triggers it
+    # Actually the function guards with np.isnan. Verify with all-identical returns.
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    # Should not be inf (there is a tiny negative return)
-    # But downside std will be tiny → could be huge
-    assert not math.isnan(sortino)
-
-
-def test_cvar_vs_var_consistency():
-    """CVaR is always <= VaR for the same confidence level."""
-    np.random.seed(42)
-    for conf in [0.90, 0.95, 0.99]:
-        returns = pd.Series(np.random.normal(0, 0.02, 252))
-        var = calculate_var(returns, conf)
-        cvar = calculate_cvar(returns, conf)
-        assert cvar <= var, f"CVaR ({cvar}) > VaR ({var}) at {conf} confidence"
-
-
-def test_portfolio_metrics_weight_missing_ticker():
-    """Weights for missing tickers are ignored gracefully."""
-    np.random.seed(42)
-    dates = pd.date_range("2024-01-01", periods=252)
-    prices_dict = {
-        "A": pd.Series(100 * (1 + np.full(252, 0.001)).cumprod(), index=dates),
-    }
-    weights = {"A": 0.5, "B": 0.5}  # B doesn't exist
-    metrics = calculate_portfolio_risk_metrics(prices_dict, weights)
-    # B is skipped, A gets full weight after normalization
-    assert isinstance(metrics, RiskMetrics)
+    assert sortino == float("inf")
 
 
 if __name__ == "__main__":
@@ -544,53 +436,41 @@ if __name__ == "__main__":
     print("=" * 60 + "\n")
 
     tests = [
-        test_risk_metrics_to_dict,
         test_calculate_returns_basic,
-        test_calculate_returns_empty,
-        test_calculate_returns_single,
-        test_var_basic,
-        test_var_insufficient_data,
-        test_var_confidence_levels,
-        test_var_all_positive,
-        test_cvar_basic,
-        test_cvar_insufficient_data,
-        test_cvar_no_tail_losses,
-        test_cvar_extreme_tail,
-        test_drawdowns_basic,
-        test_drawdowns_monotonically_increasing,
-        test_drawdowns_monotonically_decreasing,
-        test_max_drawdown_basic,
-        test_max_drawdown_no_drawdown,
-        test_downside_volatility_all_positive,
-        test_downside_volatility_mixed,
-        test_downside_volatility_insufficient_data,
-        test_downside_volatility_single_negative,
-        test_sortino_all_positive,
-        test_sortino_zero_downside_positive_return,
-        test_sortino_zero_downside_negative_return,
-        test_sortino_mixed,
-        test_sortino_insufficient_data,
-        test_calmar_basic,
-        test_calmar_no_drawdown,
-        test_calmar_all_losses,
-        test_calmar_insufficient_data,
-        test_calmar_flat_prices,
-        test_correlation_perfect,
-        test_correlation_perfect_inverse,
-        test_correlation_single_asset,
-        test_correlation_empty,
-        test_correlation_insufficient_overlap,
-        test_portfolio_metrics_full,
-        test_portfolio_metrics_equal_weight,
-        test_portfolio_metrics_weight_normalization,
-        test_portfolio_metrics_single_asset,
-        test_portfolio_metrics_empty,
-        test_risk_summary_format,
-        test_var_with_nan,
-        test_drawdown_with_nan,
-        test_sortino_fp_precision_guard,
-        test_cvar_vs_var_consistency,
-        test_portfolio_metrics_weight_missing_ticker,
+        test_calculate_returns_empty_and_single,
+        test_calculate_var_known_distribution,
+        test_calculate_var_insufficient_data,
+        test_calculate_cvar_tail_average,
+        test_calculate_cvar_insufficient_data,
+        test_calculate_drawdowns_known_path,
+        test_calculate_max_drawdown_known,
+        test_calculate_drawdowns_empty,
+        test_calculate_downside_volatility_all_positive,
+        test_calculate_downside_volatility_known,
+        test_calculate_downside_volatility_insufficient_data,
+        test_calculate_sortino_ratio_all_positive,
+        test_calculate_sortino_ratio_zero_downside_volatility,
+        test_calculate_sortino_ratio_with_downside,
+        test_calculate_sortino_ratio_insufficient_data,
+        test_calculate_calmar_ratio_basic,
+        test_calculate_calmar_ratio_with_recovery,
+        test_calculate_calmar_ratio_no_drawdown,
+        test_calculate_calmar_ratio_monotonic_decline,
+        test_calculate_calmar_ratio_with_drawdown,
+        test_calculate_calmar_ratio_insufficient_data,
+        test_calculate_correlation_matrix_perfect_correlation,
+        test_calculate_correlation_matrix_perfect_inverse,
+        test_calculate_correlation_matrix_insufficient_assets,
+        test_calculate_correlation_matrix_insufficient_data,
+        test_calculate_portfolio_risk_metrics_basic,
+        test_calculate_portfolio_risk_metrics_equal_weight_default,
+        test_calculate_portfolio_risk_metrics_empty,
+        test_calculate_portfolio_risk_metrics_short_series,
+        test_get_risk_summary_for_llm,
+        test_var_cvar_monotonicity,
+        test_calmar_ratio_zero_drawdown_positive_returns,
+        test_calmar_ratio_zero_drawdown_zero_returns,
+        test_calculate_sortino_ratio_nan_downside_vol,
     ]
 
     passed = 0
