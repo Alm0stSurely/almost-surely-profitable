@@ -6,6 +6,7 @@ Integrates with LLM API to get trading decisions based on market state and portf
 import os
 import json
 import logging
+import time
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -129,14 +130,18 @@ class TradingAgent:
         api_key: Optional[str] = None,
         api_url: Optional[str] = None,
         model: str = None,
-        history_file: str = "data/decision_history.json"
+        history_file: str = "data/decision_history.json",
+        max_retries: Optional[int] = None,
+        retry_backoff_factor: Optional[float] = None
     ):
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.api_url = api_url or os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
         self.model = model or os.getenv("LLM_MODEL", "kimi")
         self.history_file = Path(history_file)
         self.history_file.parent.mkdir(exist_ok=True)
-        
+        self.max_retries = max_retries if max_retries is not None else int(os.getenv("LLM_MAX_RETRIES", "3"))
+        self.retry_backoff_factor = retry_backoff_factor if retry_backoff_factor is not None else float(os.getenv("LLM_RETRY_BACKOFF_FACTOR", "1.0"))
+
         if not self.api_key:
             logger.warning("No LLM API key configured!")
     
@@ -403,24 +408,28 @@ class TradingAgent:
     
     def call_llm(self, prompt: str) -> Optional[str]:
         """
-        Call the LLM API.
-        
+        Call the LLM API with exponential-backoff retries for transient errors.
+
+        Retryable conditions: network errors (requests.exceptions.RequestException)
+        and HTTP status codes 429 (rate limit), 502, 503, 504 (server errors).
+        Non-retryable 4xx errors fail immediately.
+
         Args:
             prompt: The formatted prompt
-        
+
         Returns:
-            LLM response text or None if error
+            LLM response text or None if all attempts fail
         """
         if not self.api_key:
             logger.error("No API key configured!")
             return None
-        
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "User-Agent": os.getenv("LLM_USER_AGENT", "python-trading-agent/1.0")
         }
-        
+
         payload = {
             "model": self.model,
             "messages": [
@@ -430,32 +439,65 @@ class TradingAgent:
             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
             "max_tokens": 16000,
         }
-        
-        try:
-            logger.info("Calling LLM API...")
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=180
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            msg = result["choices"][0]["message"]
-            content = msg.get("content", "") or ""
-            # Kimi may put the answer in reasoning_content instead of content
-            if not content.strip() and msg.get("reasoning_content"):
-                content = msg["reasoning_content"]
-                logger.info("Using reasoning_content as content (Kimi quirk)")
-            logger.info(f"LLM content length: {len(content) if content else 0}")
-            logger.info(f"LLM content preview: {repr(content[:200]) if content else None}")
-            logger.info("✓ LLM response received")
-            return content
-            
-        except Exception as e:
-            logger.error(f"Error calling LLM API: {e}")
-            return None
+
+        last_exception = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                logger.info(f"Calling LLM API (attempt {attempt + 1}/{self.max_retries + 1})...")
+                response = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=180
+                )
+                response.raise_for_status()
+
+                result = response.json()
+                msg = result["choices"][0]["message"]
+                content = msg.get("content", "") or ""
+                # Kimi may put the answer in reasoning_content instead of content
+                if not content.strip() and msg.get("reasoning_content"):
+                    content = msg["reasoning_content"]
+                    logger.info("Using reasoning_content as content (Kimi quirk)")
+                logger.info(f"LLM content length: {len(content) if content else 0}")
+                logger.info(f"LLM content preview: {repr(content[:200]) if content else None}")
+                logger.info("✓ LLM response received")
+                return content
+
+            except requests.exceptions.HTTPError as e:
+                last_exception = e
+                status_code = e.response.status_code if e.response is not None else None
+                if status_code in (429, 502, 503, 504) and attempt < self.max_retries:
+                    wait_time = self.retry_backoff_factor * (2 ** attempt)
+                    logger.warning(
+                        f"LLM API returned {status_code} (attempt {attempt + 1}/{self.max_retries + 1}); "
+                        f"retrying in {wait_time:.1f}s..."
+                    )
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Error calling LLM API: {e}")
+                return None
+
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                if attempt < self.max_retries:
+                    wait_time = self.retry_backoff_factor * (2 ** attempt)
+                    logger.warning(
+                        f"LLM API request failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}; "
+                        f"retrying in {wait_time:.1f}s..."
+                    )
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Error calling LLM API: {e}")
+                return None
+
+            except Exception as e:
+                logger.error(f"Error calling LLM API: {e}")
+                return None
+
+        # All retries exhausted
+        logger.error(f"LLM API failed after {self.max_retries + 1} attempts: {last_exception}")
+        return None
     
     def parse_response(self, response: str) -> Dict:
         """

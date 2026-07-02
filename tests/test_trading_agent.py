@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 import pandas as pd
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -482,6 +483,185 @@ def test_build_prompt_without_cooldown_status():
         print("✓ No cooldown status test passed\n")
 
 
+def _make_error_response(status_code: int) -> Mock:
+    """Helper to create a mocked response that raises HTTPError with given status."""
+    mock_response = Mock()
+    mock_response.status_code = status_code
+    mock_response.text = f"HTTP {status_code}"
+    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        response=mock_response
+    )
+    return mock_response
+
+
+def _make_success_response(content: str) -> Mock:
+    """Helper to create a mocked successful JSON response."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{
+            "message": {"content": content}
+        }]
+    }
+    mock_response.raise_for_status.return_value = None
+    return mock_response
+
+
+def test_api_call_retry_on_rate_limit():
+    """Test that 429 rate-limit errors are retried and eventually succeed."""
+    print("Test 14: API Call - Retry on Rate Limit (429)")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=2)
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        rate_limit_response = _make_error_response(429)
+        
+        with patch('requests.post', side_effect=[rate_limit_response, success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert result == '{"actions": [], "reasoning": "OK"}'
+                assert mock_post.call_count == 2
+                assert mock_sleep.call_count == 1
+                assert mock_sleep.call_args[0][0] == 1.0  # backoff factor * 2^0
+                
+                print("  429 retried successfully on second attempt")
+                print("✓ Rate limit retry test passed\n")
+
+
+def test_api_call_retry_on_server_error():
+    """Test that 503 service-unavailable errors are retried."""
+    print("Test 15: API Call - Retry on Server Error (503)")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=3)
+        
+        success_response = _make_success_response('{"actions": [{"ticker": "SPY", "action": "hold"}], "reasoning": "OK"}')
+        server_error_response = _make_error_response(503)
+        
+        with patch('requests.post', side_effect=[server_error_response, server_error_response, success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert "SPY" in result
+                assert mock_post.call_count == 3
+                assert mock_sleep.call_count == 2
+                # Wait times: 1.0s and 2.0s (exponential backoff)
+                assert mock_sleep.call_args_list[0][0][0] == 1.0
+                assert mock_sleep.call_args_list[1][0][0] == 2.0
+                
+                print("  503 retried successfully on third attempt")
+                print("✓ Server error retry test passed\n")
+
+
+def test_api_call_no_retry_on_client_error():
+    """Test that non-retryable 4xx errors fail immediately without retry."""
+    print("Test 16: API Call - No Retry on Client Error (400)")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=3)
+        
+        client_error_response = _make_error_response(400)
+        
+        with patch('requests.post', return_value=client_error_response) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is None
+                assert mock_post.call_count == 1
+                assert mock_sleep.call_count == 0
+                
+                print("  400 failed immediately without retry")
+                print("✓ No retry on client error test passed\n")
+
+
+def test_api_call_exhaust_retries():
+    """Test that persistent transient errors return None after exhausting retries."""
+    print("Test 17: API Call - Exhaust Retries")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=2)
+        
+        server_error_response = _make_error_response(502)
+        
+        with patch('requests.post', return_value=server_error_response) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is None
+                # max_retries=2 means 1 initial + 2 retries = 3 attempts
+                assert mock_post.call_count == 3
+                assert mock_sleep.call_count == 2
+                # Wait times: 1.0s and 2.0s
+                assert mock_sleep.call_args_list[0][0][0] == 1.0
+                assert mock_sleep.call_args_list[1][0][0] == 2.0
+                
+                print("  All retries exhausted, returned None")
+                print("✓ Exhaust retries test passed\n")
+
+
+def test_api_call_retry_on_network_error():
+    """Test that network-level errors are retried and eventually succeed."""
+    print("Test 18: API Call - Retry on Network Error")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=2)
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        
+        with patch('requests.post', side_effect=[requests.exceptions.ConnectionError("Connection refused"), success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert mock_post.call_count == 2
+                assert mock_sleep.call_count == 1
+                
+                print("  Network error retried successfully on second attempt")
+                print("✓ Network error retry test passed\n")
+
+
+def test_retry_configuration():
+    """Test that retry settings are configurable via constructor and env vars."""
+    print("Test 19: Retry Configuration")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        
+        # Constructor values
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            max_retries=5,
+            retry_backoff_factor=0.5
+        )
+        assert agent.max_retries == 5
+        assert agent.retry_backoff_factor == 0.5
+        
+        # Environment defaults
+        with patch.dict(os.environ, {"LLM_MAX_RETRIES": "7", "LLM_RETRY_BACKOFF_FACTOR": "2.5"}):
+            agent_env = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_env.max_retries == 7
+            assert agent_env.retry_backoff_factor == 2.5
+        
+        print("  Constructor and env-var configuration both work")
+        print("✓ Retry configuration test passed\n")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running LLM Trading Agent Tests")
@@ -500,6 +680,12 @@ if __name__ == "__main__":
     test_api_call_network_error()
     test_decision_history_limit()
     test_load_recent_days_filter()
+    test_api_call_retry_on_rate_limit()
+    test_api_call_retry_on_server_error()
+    test_api_call_no_retry_on_client_error()
+    test_api_call_exhaust_retries()
+    test_api_call_retry_on_network_error()
+    test_retry_configuration()
     
     print("=" * 60)
     print("All tests passed! ✓")
