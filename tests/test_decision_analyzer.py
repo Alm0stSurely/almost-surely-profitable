@@ -443,6 +443,40 @@ def test_calculate_metrics_sharpe_with_vol(analyzer):
     assert metrics["sharpe_of_decisions"] > 0
 
 
+def test_calculate_metrics_ignores_nan_forward_returns(analyzer):
+    """NaN forward returns should not poison the average return metrics."""
+    outcomes = {
+        "buys": [
+            {"forward_return": 0.05, "success": True},
+            {"forward_return": float("nan"), "success": False},
+            {"forward_return": -0.03, "success": False},
+        ],
+        "sells": [
+            {"forward_return": -0.04, "success": True},
+            {"forward_return": float("nan"), "success": False},
+        ],
+    }
+    metrics = analyzer._calculate_metrics(outcomes)
+    # NaN should be ignored in the average, not propagate.
+    assert metrics["buy_count"] == 3
+    assert metrics["sell_count"] == 2
+    assert metrics["avg_forward_return_buy"] == pytest.approx((0.05 - 0.03) / 2)
+    assert metrics["avg_forward_return_sell"] == pytest.approx(0.04)
+    assert metrics["buy_accuracy"] == pytest.approx(1/3)
+    assert metrics["sell_accuracy"] == pytest.approx(0.5)
+
+
+def test_calculate_metrics_all_nan_returns_default_to_zero(analyzer):
+    """If all returns are NaN, average metrics should default to 0.0."""
+    outcomes = {
+        "buys": [{"forward_return": float("nan"), "success": False}],
+        "sells": [],
+    }
+    metrics = analyzer._calculate_metrics(outcomes)
+    assert metrics["avg_forward_return_buy"] == 0.0
+    assert metrics["sharpe_of_decisions"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # analyze_behavioral_patterns
 # ---------------------------------------------------------------------------
