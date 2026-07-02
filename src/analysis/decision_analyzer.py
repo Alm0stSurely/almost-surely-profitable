@@ -215,7 +215,9 @@ class DecisionAnalyzer:
             buy_successes = sum(1 for r in outcomes["buys"] if r["success"])
             
             metrics["buy_accuracy"] = buy_successes / len(outcomes["buys"])
-            metrics["avg_forward_return_buy"] = np.mean(buy_returns)
+            # NaN can occur when forward window exceeds available data; ignore NaNs.
+            clean_buy_returns = [x for x in buy_returns if not np.isnan(x)]
+            metrics["avg_forward_return_buy"] = np.nanmean(buy_returns) if clean_buy_returns else 0.0
             metrics["buy_count"] = len(outcomes["buys"])
         else:
             metrics["buy_count"] = 0
@@ -227,8 +229,9 @@ class DecisionAnalyzer:
             
             metrics["sell_accuracy"] = sell_successes / len(outcomes["sells"])
             # For sells, negative return means we avoided loss (good)
-            # So we negate to show the "saved" return
-            metrics["avg_forward_return_sell"] = -np.mean(sell_returns)
+            # So we negate to show the "saved" return; ignore NaNs.
+            clean_sell_returns = [x for x in sell_returns if not np.isnan(x)]
+            metrics["avg_forward_return_sell"] = -np.nanmean(sell_returns) if clean_sell_returns else 0.0
             metrics["sell_count"] = len(outcomes["sells"])
         else:
             metrics["sell_count"] = 0
@@ -247,7 +250,8 @@ class DecisionAnalyzer:
                 ret = r["forward_return"]
                 if r in outcomes["sells"]:
                     ret = -ret
-                returns.append(ret)
+                if not np.isnan(ret):
+                    returns.append(ret)
             
             if len(returns) > 1 and np.std(returns) > 0:
                 metrics["sharpe_of_decisions"] = np.mean(returns) / np.std(returns)

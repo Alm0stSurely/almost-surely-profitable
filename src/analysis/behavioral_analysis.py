@@ -65,41 +65,45 @@ def main():
     for d in valid:
         for a in d.get("actions", []):
             actions_count[a.get("action", "unknown")] += 1
+    total_actions = sum(actions_count.values())
     lines.append("ACTION DISTRIBUTION")
+    lines.append(f"Total actions: {total_actions} ({total_actions/max(len(valid),1):.1f} per decision)")
     for action, count in actions_count.most_common():
-        pct = count / len(valid) * 100
-        lines.append(f"{action:6s}: {count:4d} ({pct:5.1f}% of valid decisions)")
+        pct = count / max(total_actions, 1) * 100
+        lines.append(f"{action:6s}: {count:4d} ({pct:5.1f}% of actions)")
     lines.append("")
 
     # Keyword frequency
-    keywords = {
-        "loss aversion": 0,
-        "CVaR": 0,
-        "cash buffer": 0,
-        "mean reversion": 0,
-        "overbought": 0,
-        "oversold": 0,
-        "tail risk": 0,
-        "correlation": 0,
-        "diversification": 0,
-        "prospect theory": 0,
-        "regime": 0,
-        "momentum": 0,
-        "drawdown": 0,
-        "let winners run": 0,
-        "weekly cap": 0,
-        "stop-loss": 0,
+    # Each concept maps to one or more case-insensitive substrings to match.
+    keyword_concepts = {
+        "loss aversion": ["loss aversion"],
+        "CVaR": ["cvar"],
+        "cash buffer": ["cash buffer"],
+        "mean reversion": ["mean reversion"],
+        "overbought": ["overbought"],
+        "oversold": ["oversold"],
+        "tail risk": ["tail risk"],
+        "correlation": ["correlation"],
+        "diversification": ["diversification"],
+        "prospect theory": ["prospect theory"],
+        "regime": ["regime"],
+        "momentum": ["momentum"],
+        "drawdown": ["drawdown"],
+        "let winners run": ["let winners run"],
+        "trade cap": ["trade cap", "weekly trade", "trade limit"],
+        "stop-loss": ["stop-loss"],
     }
+    keyword_counts = {concept: 0 for concept in keyword_concepts}
     for d in valid:
         r = d.get("reasoning", "").lower()
-        for kw in keywords:
-            if kw.lower() in r:
-                keywords[kw] += 1
+        for concept, variants in keyword_concepts.items():
+            if any(variant in r for variant in variants):
+                keyword_counts[concept] += 1
 
     lines.append("BEHAVIORAL KEYWORD FREQUENCY")
-    for kw, count in sorted(keywords.items(), key=lambda x: -x[1]):
+    for concept, count in sorted(keyword_counts.items(), key=lambda x: -x[1]):
         pct = count / max(len(valid), 1) * 100
-        lines.append(f"{kw:20s}: {count:4d} ({pct:5.1f}%)")
+        lines.append(f"{concept:20s}: {count:4d} ({pct:5.1f}%)")
     lines.append("")
 
     # Cash creep from daily results
