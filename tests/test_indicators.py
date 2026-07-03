@@ -206,6 +206,47 @@ def test_correlation_matrix():
     print("✓ Correlation matrix test passed\n")
 
 
+def test_correlation_matrix_date_alignment():
+    """Test that correlation matrix aligns dates across different trading calendars."""
+    print("Test 7b: Correlation Matrix Date Alignment")
+    print("-" * 40)
+    
+    np.random.seed(42)
+    
+    # SPY trades Mon-Fri: create 30 consecutive business days with varying returns.
+    dates_spy = pd.date_range(start='2026-05-01', periods=30, freq='B')
+    spy_returns = np.random.normal(loc=0.001, scale=0.01, size=len(dates_spy))
+    spy_prices = 100 * np.cumprod(1 + spy_returns)
+    spy_df = pd.DataFrame({'Close': spy_prices}, index=dates_spy)
+    
+    # Euronext asset misses 3 US holidays (e.g., days 5, 12, 18) but is otherwise
+    # perfectly correlated with SPY on shared days.
+    missing_idx = {5, 12, 18}
+    dates_eur = [d for i, d in enumerate(dates_spy) if i not in missing_idx]
+    eur_returns = np.array([spy_returns[i] for i in range(len(spy_returns)) if i not in missing_idx])
+    eur_prices = 100 * np.cumprod(1 + eur_returns)
+    eur_df = pd.DataFrame({'Close': eur_prices}, index=dates_eur)
+    
+    data_dict = {'SPY': spy_df, 'EUR': eur_df}
+    
+    corr_matrix = calculate_correlation_matrix(data_dict, lookback=20)
+    
+    assert corr_matrix.shape == (2, 2), "Correlation matrix should be 2x2"
+    spy_eur_corr = corr_matrix.loc['SPY', 'EUR']
+    
+    # With proper date alignment, the correlation should be exactly 1.0 because
+    # the assets moved identically on every shared date. With naive positional
+    # alignment, the returns would be misaligned and the correlation would be
+    # much lower (or undefined).
+    assert abs(spy_eur_corr - 1.0) < 1e-9, f"SPY-EUR correlation should be 1.0, got {spy_eur_corr}"
+    
+    assert corr_matrix.notna().all().all(), "Correlation matrix should have no NaN values"
+    
+    print(f"  Dates SPY: {len(dates_spy)}, Dates EUR: {len(dates_eur)}")
+    print(f"  SPY-EUR correlation: {spy_eur_corr:.6f}")
+    print("✓ Correlation matrix date alignment test passed\n")
+
+
 def test_nan_handling():
     """Test that NaN Close prices are handled gracefully."""
     print("Test 8: NaN Close Price Handling")
@@ -248,6 +289,8 @@ if __name__ == "__main__":
     test_drawdown()
     test_returns()
     test_correlation_matrix()
+    test_correlation_matrix_date_alignment()
+    test_nan_handling()
     
     print("=" * 60)
     print("All tests passed! ✓")
