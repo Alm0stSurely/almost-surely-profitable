@@ -105,12 +105,19 @@ class PositionCooldownManager:
             del self.entries[ticker]
         self._record_trade()
 
+    def _week_start(self, dt: datetime) -> datetime:
+        """Return the start of the ISO calendar week for dt (Monday 00:00)."""
+        return (dt - timedelta(days=dt.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
     def _record_trade(self) -> None:
         """Record a trade for weekly frequency counting."""
         now = datetime.now()
-        # Keep only trades from the last 7 days
-        cutoff = now - timedelta(days=7)
-        self.weekly_trades = [t for t in self.weekly_trades if t > cutoff]
+        # Keep only trades in the current ISO calendar week (Monday-Sunday).
+        # This aligns the "weekly cap" with the weekly report and the LLM prompt.
+        week_start = self._week_start(now)
+        self.weekly_trades = [t for t in self.weekly_trades if t >= week_start]
         self.weekly_trades.append(now)
 
     def _get_dynamic_stop_loss(self) -> float:
@@ -143,12 +150,14 @@ class PositionCooldownManager:
         Returns:
             (allowed: bool, reason: str)
         """
-        # Check weekly trade cap (dynamic based on regime)
+        # Check weekly trade cap (dynamic based on regime, ISO calendar week)
         trade_cap = self._get_dynamic_trade_cap()
-        if len(self.weekly_trades) >= trade_cap:
+        week_start = self._week_start(datetime.now())
+        current_week_trades = [t for t in self.weekly_trades if t >= week_start]
+        if len(current_week_trades) >= trade_cap:
             return (
                 False,
-                f"Weekly trade cap reached ({len(self.weekly_trades)}/{trade_cap} in {self.config.current_vol_regime} vol regime)"
+                f"Weekly trade cap reached ({len(current_week_trades)}/{trade_cap} in {self.config.current_vol_regime} vol regime)"
             )
 
         # Check minimum holding period
@@ -181,12 +190,14 @@ class PositionCooldownManager:
         Returns:
             (allowed: bool, reason: str)
         """
-        # Check weekly trade cap (dynamic based on regime)
+        # Check weekly trade cap (dynamic based on regime, ISO calendar week)
         trade_cap = self._get_dynamic_trade_cap()
-        if len(self.weekly_trades) >= trade_cap:
+        week_start = self._week_start(datetime.now())
+        current_week_trades = [t for t in self.weekly_trades if t >= week_start]
+        if len(current_week_trades) >= trade_cap:
             return (
                 False,
-                f"Weekly trade cap reached ({len(self.weekly_trades)}/{trade_cap} in {self.config.current_vol_regime} vol regime)"
+                f"Weekly trade cap reached ({len(current_week_trades)}/{trade_cap} in {self.config.current_vol_regime} vol regime)"
             )
 
         # Check flip cooldown
@@ -205,6 +216,8 @@ class PositionCooldownManager:
         """Return current cooldown status for reporting."""
         now = datetime.now()
         trade_cap = self._get_dynamic_trade_cap()
+        week_start = self._week_start(now)
+        current_week_trades = [t for t in self.weekly_trades if t >= week_start]
         return {
             "active_entries": {
                 k: {
@@ -221,7 +234,7 @@ class PositionCooldownManager:
                 for k, v in self.exits.items()
                 if (now - v).total_seconds() / 86400 < self.config.flip_cooldown_days * 2
             },
-            "trades_this_week": len(self.weekly_trades),
+            "trades_this_week": len(current_week_trades),
             "weekly_cap": trade_cap,
             "current_vol_regime": self.config.current_vol_regime,
             "adaptive_stop_loss": self._get_dynamic_stop_loss(),
