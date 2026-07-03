@@ -56,10 +56,19 @@ class BacktestCooldownManager:
             del self.entries[ticker]
         self._record_trade(current_date)
 
+    @staticmethod
+    def _week_start(dt: datetime) -> datetime:
+        """Return the start of the ISO calendar week for dt (Monday 00:00)."""
+        return (dt - timedelta(days=dt.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
     def _record_trade(self, current_date: datetime) -> None:
         """Record a trade for weekly frequency counting."""
-        cutoff = current_date - timedelta(days=7)
-        self.weekly_trades = [t for t in self.weekly_trades if t > cutoff]
+        # Keep only trades in the current ISO calendar week (Monday-Sunday).
+        # This aligns the "weekly cap" with the live cooldown manager and the weekly report.
+        week_start = self._week_start(current_date)
+        self.weekly_trades = [t for t in self.weekly_trades if t >= week_start]
         self.weekly_trades.append(current_date)
 
     def can_sell(
@@ -77,9 +86,9 @@ class BacktestCooldownManager:
         """
         self.trade_attempts += 1
         
-        # Filter expired trades before checking cap
-        cutoff = current_date - timedelta(days=7)
-        self.weekly_trades = [t for t in self.weekly_trades if t > cutoff]
+        # Filter expired trades before checking cap (ISO calendar week)
+        week_start = self._week_start(current_date)
+        self.weekly_trades = [t for t in self.weekly_trades if t >= week_start]
 
         # Check weekly trade cap
         if len(self.weekly_trades) >= self.config.max_trades_per_week:
@@ -123,9 +132,9 @@ class BacktestCooldownManager:
         """
         self.trade_attempts += 1
         
-        # Filter expired trades before checking cap
-        cutoff = current_date - timedelta(days=7)
-        self.weekly_trades = [t for t in self.weekly_trades if t > cutoff]
+        # Filter expired trades before checking cap (ISO calendar week)
+        week_start = self._week_start(current_date)
+        self.weekly_trades = [t for t in self.weekly_trades if t >= week_start]
 
         # Check weekly trade cap
         if len(self.weekly_trades) >= self.config.max_trades_per_week:
@@ -150,6 +159,8 @@ class BacktestCooldownManager:
 
     def get_status(self, current_date: datetime) -> Dict:
         """Return current cooldown status for reporting."""
+        week_start = self._week_start(current_date)
+        current_week_trades = [t for t in self.weekly_trades if t >= week_start]
         return {
             "active_entries": {
                 k: {
@@ -166,7 +177,7 @@ class BacktestCooldownManager:
                 for k, v in self.exits.items()
                 if (current_date - v).total_seconds() / 86400 < self.config.flip_cooldown_days * 2
             },
-            "trades_this_week": len(self.weekly_trades),
+            "trades_this_week": len(current_week_trades),
             "weekly_cap": self.config.max_trades_per_week,
             "config": asdict(self.config),
         }

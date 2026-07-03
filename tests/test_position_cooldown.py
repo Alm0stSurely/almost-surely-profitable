@@ -85,6 +85,61 @@ class TestPositionCooldownManager:
         assert ok is False
         assert "Weekly trade cap" in reason
 
+    def test_trades_from_previous_week_not_counted(self):
+        """A trade from the previous ISO week should not count toward the current week's cap."""
+        from datetime import datetime
+        from unittest.mock import patch
+
+        # Two trades in the current week, one from the previous Friday
+        self.mgr.weekly_trades = [
+            datetime(2026, 6, 26, 21, 0, 0),  # Friday previous week
+            datetime(2026, 6, 30, 21, 0, 0),  # Tuesday current week
+            datetime(2026, 7, 1, 21, 0, 0),  # Wednesday current week
+        ]
+
+        class _FakeDatetime:
+            @classmethod
+            def now(cls):
+                return datetime(2026, 7, 3, 21, 0, 0)  # Friday current week
+
+            @classmethod
+            def fromisoformat(cls, s):
+                return datetime.fromisoformat(s)
+
+            # timedelta is used elsewhere in the module, but it's imported directly
+            # so we don't need to expose it here.
+
+        with patch("risk.position_cooldown.datetime", _FakeDatetime):
+            status = self.mgr.get_status()
+            # The previous Friday trade should be filtered out, leaving 2 current-week trades
+            assert status["trades_this_week"] == 2
+
+    def test_weekly_cap_resets_after_week_boundary(self):
+        """Once the cap is hit, new trades should be allowed again after the week boundary."""
+        from datetime import datetime
+        from unittest.mock import patch
+
+        # Hit the cap last week
+        self.mgr.weekly_trades = [
+            datetime(2026, 6, 24, 21, 0, 0),  # Wednesday
+            datetime(2026, 6, 25, 21, 0, 0),  # Thursday
+        ]
+
+        class _FakeDatetime:
+            @classmethod
+            def now(cls):
+                return datetime(2026, 6, 29, 21, 0, 0)  # Monday next week
+
+            @classmethod
+            def fromisoformat(cls, s):
+                return datetime.fromisoformat(s)
+
+        with patch("risk.position_cooldown.datetime", _FakeDatetime):
+            # After the week boundary, no trades should count against the current cap
+            ok, reason = self.mgr.can_buy("SPY")
+            assert ok is True
+            assert "No cooldown" in reason
+
     def test_get_status_structure(self):
         self.mgr.record_entry("SPY")
         status = self.mgr.get_status()
