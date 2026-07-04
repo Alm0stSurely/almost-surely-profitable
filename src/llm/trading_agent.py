@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import time
+import random
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -132,7 +133,8 @@ class TradingAgent:
         model: str = None,
         history_file: str = "data/decision_history.json",
         max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None
+        retry_backoff_factor: Optional[float] = None,
+        retry_jitter: Optional[float] = None
     ):
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.api_url = api_url or os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
@@ -141,6 +143,7 @@ class TradingAgent:
         self.history_file.parent.mkdir(exist_ok=True)
         self.max_retries = max_retries if max_retries is not None else int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_backoff_factor = retry_backoff_factor if retry_backoff_factor is not None else float(os.getenv("LLM_RETRY_BACKOFF_FACTOR", "1.0"))
+        self.retry_jitter = retry_jitter if retry_jitter is not None else float(os.getenv("LLM_RETRY_JITTER", "0.0"))
 
         if not self.api_key:
             logger.warning("No LLM API key configured!")
@@ -469,6 +472,8 @@ class TradingAgent:
                 status_code = e.response.status_code if e.response is not None else None
                 if status_code in (429, 502, 503, 504) and attempt < self.max_retries:
                     wait_time = self.retry_backoff_factor * (2 ** attempt)
+                    if self.retry_jitter > 0:
+                        wait_time += random.uniform(0, wait_time * self.retry_jitter)
                     logger.warning(
                         f"LLM API returned {status_code} (attempt {attempt + 1}/{self.max_retries + 1}); "
                         f"retrying in {wait_time:.1f}s..."
@@ -482,6 +487,8 @@ class TradingAgent:
                 last_exception = e
                 if attempt < self.max_retries:
                     wait_time = self.retry_backoff_factor * (2 ** attempt)
+                    if self.retry_jitter > 0:
+                        wait_time += random.uniform(0, wait_time * self.retry_jitter)
                     logger.warning(
                         f"LLM API request failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}; "
                         f"retrying in {wait_time:.1f}s..."
