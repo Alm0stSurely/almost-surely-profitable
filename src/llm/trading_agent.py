@@ -132,7 +132,8 @@ class TradingAgent:
         model: str = None,
         history_file: str = "data/decision_history.json",
         max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None
+        retry_backoff_factor: Optional[float] = None,
+        timeout: Optional[float] = None
     ):
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.api_url = api_url or os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
@@ -141,6 +142,7 @@ class TradingAgent:
         self.history_file.parent.mkdir(exist_ok=True)
         self.max_retries = max_retries if max_retries is not None else int(os.getenv("LLM_MAX_RETRIES", "3"))
         self.retry_backoff_factor = retry_backoff_factor if retry_backoff_factor is not None else float(os.getenv("LLM_RETRY_BACKOFF_FACTOR", "1.0"))
+        self.timeout = timeout if timeout is not None else float(os.getenv("LLM_TIMEOUT", "180.0"))
 
         if not self.api_key:
             logger.warning("No LLM API key configured!")
@@ -406,7 +408,44 @@ class TradingAgent:
         
         return portfolio_returns.values
     
-    def call_llm(self, prompt: str) -> Optional[str]:
+    def _calculate_retry_wait(self, attempt: int) -> float:
+        """
+        Calculate exponential-backoff wait time for a given retry attempt.
+
+        Formula: wait = retry_backoff_factor * 2^attempt
+
+        Args:
+            attempt: Zero-based retry attempt index.
+
+        Returns:
+            Wait time in seconds (always >= 0).
+        """
+        wait_time = self.retry_backoff_factor * (2 ** attempt)
+        return max(0.0, wait_time)
+
+    def _sleep_before_retry(self, attempt: int, status_code: Optional[int] = None, error: Optional[Exception] = None) -> None:
+        """
+        Sleep for the computed retry wait and log the retry event.
+
+        Args:
+            attempt: Zero-based retry attempt index.
+            status_code: Optional HTTP status code that triggered the retry.
+            error: Optional exception that triggered the retry.
+        """
+        wait_time = self._calculate_retry_wait(attempt)
+        if status_code is not None:
+            logger.warning(
+                f"LLM API returned {status_code} (attempt {attempt + 1}/{self.max_retries + 1}); "
+                f"retrying in {wait_time:.1f}s..."
+            )
+        elif error is not None:
+            logger.warning(
+                f"LLM API request failed (attempt {attempt + 1}/{self.max_retries + 1}): {error}; "
+                f"retrying in {wait_time:.1f}s..."
+            )
+        time.sleep(wait_time)
+
+    def call_llm(self, prompt: str, timeout: Optional[float] = None) -> Optional[str]:
         """
         Call the LLM API with exponential-backoff retries for transient errors.
 
@@ -415,13 +454,20 @@ class TradingAgent:
         Non-retryable 4xx errors fail immediately.
 
         Args:
-            prompt: The formatted prompt
+            prompt: The formatted prompt.
+            timeout: Optional request timeout in seconds. Defaults to the agent's
+                configured timeout (constructor or LLM_TIMEOUT env var).
 
         Returns:
-            LLM response text or None if all attempts fail
+            LLM response text or None if all attempts fail.
         """
         if not self.api_key:
             logger.error("No API key configured!")
+            return None
+
+        request_timeout = timeout if timeout is not None else self.timeout
+        if request_timeout <= 0:
+            logger.error(f"Invalid timeout value: {request_timeout}. Must be positive.")
             return None
 
         headers = {
@@ -448,7 +494,7 @@ class TradingAgent:
                     self.api_url,
                     headers=headers,
                     json=payload,
-                    timeout=180
+                    timeout=request_timeout
                 )
                 response.raise_for_status()
 
@@ -468,12 +514,7 @@ class TradingAgent:
                 last_exception = e
                 status_code = e.response.status_code if e.response is not None else None
                 if status_code in (429, 502, 503, 504) and attempt < self.max_retries:
-                    wait_time = self.retry_backoff_factor * (2 ** attempt)
-                    logger.warning(
-                        f"LLM API returned {status_code} (attempt {attempt + 1}/{self.max_retries + 1}); "
-                        f"retrying in {wait_time:.1f}s..."
-                    )
-                    time.sleep(wait_time)
+                    self._sleep_before_retry(attempt, status_code=status_code)
                     continue
                 logger.error(f"Error calling LLM API: {e}")
                 return None
@@ -481,12 +522,7 @@ class TradingAgent:
             except requests.exceptions.RequestException as e:
                 last_exception = e
                 if attempt < self.max_retries:
-                    wait_time = self.retry_backoff_factor * (2 ** attempt)
-                    logger.warning(
-                        f"LLM API request failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}; "
-                        f"retrying in {wait_time:.1f}s..."
-                    )
-                    time.sleep(wait_time)
+                    self._sleep_before_retry(attempt, error=e)
                     continue
                 logger.error(f"Error calling LLM API: {e}")
                 return None

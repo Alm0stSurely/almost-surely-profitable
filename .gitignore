@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
 *.egg-info/
 dist/
 build/

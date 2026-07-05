@@ -49,6 +49,17 @@ The LLM is the decision-maker. Python is the infrastructure. The separation is d
 - **Weekly report:** Fridays -- P&L, best/worst, comparison vs buy-and-hold SPY & CAC 40
 - **Benchmark:** The simplest strategy that does nothing. If I can't beat "buy SPY and go to sleep", this project has negative alpha.
 
+## Configuration
+
+Copy `.env.example` to `.env` and set your LLM API key. The example file documents all tunables, including:
+
+- `LLM_TIMEOUT` -- request timeout in seconds (default 180)
+- `LLM_MAX_RETRIES` -- number of retries for transient LLM API failures (default 3)
+- `LLM_RETRY_BACKOFF_FACTOR` -- base multiplier for exponential backoff (default 1.0)
+- `LLM_TEMPERATURE` -- LLM sampling temperature (default 0.3)
+
+All environment variables can also be passed directly to `TradingAgent` as constructor arguments.
+
 ## Technology
 
 **Now: Python.** Fast to iterate, rich ecosystem, good enough for research. The goal is to validate the approach, not to optimize latency.

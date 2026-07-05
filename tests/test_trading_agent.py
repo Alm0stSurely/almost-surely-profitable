@@ -662,6 +662,144 @@ def test_retry_configuration():
         print("✓ Retry configuration test passed\n")
 
 
+def test_timeout_configuration():
+    """Test that request timeout is configurable via constructor and env vars."""
+    print("Test 20: Timeout Configuration")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        
+        # Constructor value
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=60.0
+        )
+        assert agent.timeout == 60.0
+        
+        # Environment default
+        with patch.dict(os.environ, {"LLM_TIMEOUT": "90"}):
+            agent_env = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_env.timeout == 90.0
+        
+        # Default should be 180.0
+        with patch.dict(os.environ, {}, clear=True):
+            agent_default = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_default.timeout == 180.0
+        
+        print("  Constructor and env-var timeout configuration both work")
+        print("  ✓ Default timeout is 180.0s")
+        print("✓ Timeout configuration test passed\n")
+
+
+def test_timeout_passed_to_requests():
+    """Test that the configured timeout is passed to requests.post."""
+    print("Test 21: Timeout Passed to requests.post")
+    print("-" * 40)
+    
+    success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=45.0
+        )
+        
+        with patch('requests.post', return_value=success_response) as mock_post:
+            result = agent.call_llm("test prompt")
+            
+            assert result is not None
+            assert mock_post.call_count == 1
+            assert mock_post.call_args[1]["timeout"] == 45.0
+            
+            print("  requests.post called with timeout=45.0")
+            print("✓ Timeout passed to requests test passed\n")
+
+
+def test_timeout_per_call_override():
+    """Test that a per-call timeout overrides the agent-level timeout."""
+    print("Test 22: Per-Call Timeout Override")
+    print("-" * 40)
+    
+    success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=120.0
+        )
+        
+        with patch('requests.post', return_value=success_response) as mock_post:
+            result = agent.call_llm("test prompt", timeout=30.0)
+            
+            assert result is not None
+            assert mock_post.call_count == 1
+            assert mock_post.call_args[1]["timeout"] == 30.0
+            
+            print("  Per-call timeout=30.0 overrides agent-level 120.0")
+            print("✓ Per-call timeout override test passed\n")
+
+
+def test_invalid_timeout_fails_fast():
+    """Test that non-positive timeouts fail immediately without calling the API."""
+    print("Test 23: Invalid Timeout Fails Fast")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=0.0
+        )
+        
+        with patch('requests.post') as mock_post:
+            result = agent.call_llm("test prompt")
+            
+            assert result is None
+            assert mock_post.call_count == 0
+            
+            print("  Invalid timeout returned None without calling API")
+            print("✓ Invalid timeout fails fast test passed\n")
+
+
+def test_retry_wait_helper():
+    """Test the exponential-backoff wait calculation helper."""
+    print("Test 24: Retry Wait Helper")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            retry_backoff_factor=1.5
+        )
+        
+        assert agent._calculate_retry_wait(0) == 1.5
+        assert agent._calculate_retry_wait(1) == 3.0
+        assert agent._calculate_retry_wait(2) == 6.0
+        assert agent._calculate_retry_wait(3) == 12.0
+        
+        # Zero backoff factor should return 0
+        agent_zero = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            retry_backoff_factor=0.0
+        )
+        assert agent_zero._calculate_retry_wait(0) == 0.0
+        assert agent_zero._calculate_retry_wait(5) == 0.0
+        
+        print("  Exponential backoff: 1.5, 3.0, 6.0, 12.0")
+        print("  ✓ Zero backoff factor yields zero wait")
+        print("✓ Retry wait helper test passed\n")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running LLM Trading Agent Tests")
@@ -686,6 +824,11 @@ if __name__ == "__main__":
     test_api_call_exhaust_retries()
     test_api_call_retry_on_network_error()
     test_retry_configuration()
+    test_timeout_configuration()
+    test_timeout_passed_to_requests()
+    test_timeout_per_call_override()
+    test_invalid_timeout_fails_fast()
+    test_retry_wait_helper()
     
     print("=" * 60)
     print("All tests passed! ✓")
