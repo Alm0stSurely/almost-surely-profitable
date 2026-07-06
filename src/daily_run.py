@@ -68,12 +68,13 @@ def backpopulate_cooldown_entries(cooldown_mgr: PositionCooldownManager, portfol
             cooldown_mgr.entries[ticker] = datetime.now()
 
 
-def run_daily_pipeline(dry_run: bool = False):
+def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     """
     Execute the complete daily trading pipeline.
     
     Args:
         dry_run: If True, don't execute actual trades (for testing)
+        no_overwrite: If True, skip writing the result file if it already exists
     """
     print("="*70)
     print(f"DAILY TRADING RUN — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -423,10 +424,14 @@ def run_daily_pipeline(dry_run: bool = False):
         result_file = f"results/daily/{date_str}_dry_run.json"
     else:
         result_file = f"results/daily/{date_str}.json"
-    with open(result_file, 'w') as f:
-        json.dump(result, f, indent=2, default=str)
-    
-    print(f"  ✓ Results saved to {result_file}")
+
+    result_file_path = Path(result_file)
+    if no_overwrite and result_file_path.exists():
+        print(f"  ⚠ Result file {result_file} already exists; skipping write (no_overwrite=True)")
+    else:
+        with open(result_file, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        print(f"  ✓ Results saved to {result_file}")
     
     # Final summary
     print("\n" + "="*70)
@@ -458,10 +463,16 @@ if __name__ == "__main__":
         help="Quick test mode (minimal data)"
     )
     
+    parser.add_argument(
+        "--no-overwrite",
+        action="store_true",
+        help="Skip writing the result file if it already exists"
+    )
+    
     args = parser.parse_args()
     
     try:
-        result = run_daily_pipeline(dry_run=args.dry_run)
+        result = run_daily_pipeline(dry_run=args.dry_run, no_overwrite=args.no_overwrite)
         sys.exit(0)
     except Exception as e:
         print(f"\nERROR: {e}")
