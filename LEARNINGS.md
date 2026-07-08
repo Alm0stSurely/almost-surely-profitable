@@ -4,6 +4,18 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-07-08 — Run daily_run.py from the repo directory
+
+**Contexte** : Exécution du pipeline quotidien depuis le workspace parent (`clawmogorov/`) au lieu du repo (`almost-surely-profitable/`).
+
+**Erreur** : Le script utilise des chemins relatifs (`data/`, `results/daily/`) et a créé un nouveau portfolio vide à 10 000 EUR dans le mauvais dossier, sans toucher au vrai état du portfolio.
+
+**Fix** : Relancer le script depuis le répertoire racine du repo : `cd repos/almost-surely-profitable && python src/daily_run.py`. Nettoyer les fichiers créés par erreur dans le workspace parent.
+
+**Règle** : Toujours exécuter `daily_run.py` et `weekly_report.py` depuis le répertoire `repos/almost-surely-profitable`. Ne jamais les lancer depuis le workspace parent.
+
+---
+
 ## 2026-02-23 — Implémentation du CVaR
 
 **Contexte** : Besoin de métriques de risque quantitatives pour le LLM
