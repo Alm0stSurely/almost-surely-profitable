@@ -274,8 +274,21 @@ class BacktestEngine:
                 "flip_cooldown_days": self.cooldown_manager.config.flip_cooldown_days,
                 "max_trades_per_week": self.cooldown_manager.config.max_trades_per_week,
                 "stop_loss_threshold_pct": self.cooldown_manager.config.stop_loss_threshold_pct,
+                "current_vol_regime": self.cooldown_manager.config.current_vol_regime,
+                "effective_weekly_cap": self.cooldown_manager._get_dynamic_trade_cap(),
+                "effective_stop_loss_pct": self.cooldown_manager._get_dynamic_stop_loss(),
+                "max_trades_by_regime": {
+                    "high": self.cooldown_manager.config.max_trades_high_vol,
+                    "normal": self.cooldown_manager.config.max_trades_normal_vol,
+                    "low": self.cooldown_manager.config.max_trades_low_vol,
+                },
+                "stop_loss_by_regime": {
+                    "high": self.cooldown_manager.config.stop_loss_high_vol,
+                    "normal": self.cooldown_manager.config.stop_loss_normal_vol,
+                    "low": self.cooldown_manager.config.stop_loss_low_vol,
+                },
             }
-        
+
         return result
     
     def _get_trading_dates(self, data: Dict[str, pd.DataFrame]) -> List[datetime]:

@@ -134,6 +134,49 @@ Examples:
         help="Maximum trades per week (default: 2)"
     )
     parser.add_argument(
+        "--vol-regime",
+        type=str,
+        choices=["high", "normal", "low"],
+        default="normal",
+        help="Volatility regime for adaptive cooldown (default: normal)"
+    )
+    parser.add_argument(
+        "--max-trades-high-vol",
+        type=int,
+        default=2,
+        help="Weekly trade cap in high volatility regime (default: 2)"
+    )
+    parser.add_argument(
+        "--max-trades-normal-vol",
+        type=int,
+        default=3,
+        help="Weekly trade cap in normal volatility regime (default: 3)"
+    )
+    parser.add_argument(
+        "--max-trades-low-vol",
+        type=int,
+        default=4,
+        help="Weekly trade cap in low volatility regime (default: 4)"
+    )
+    parser.add_argument(
+        "--stop-loss-high-vol",
+        type=float,
+        default=3.0,
+        help="Stop-loss threshold in high volatility regime (default: 3.0%%)"
+    )
+    parser.add_argument(
+        "--stop-loss-normal-vol",
+        type=float,
+        default=5.0,
+        help="Stop-loss threshold in normal volatility regime (default: 5.0%%)"
+    )
+    parser.add_argument(
+        "--stop-loss-low-vol",
+        type=float,
+        default=7.0,
+        help="Stop-loss threshold in low volatility regime (default: 7.0%%)"
+    )
+    parser.add_argument(
         "--compare",
         action="store_true",
         help="Run comparison of all strategies (buy_and_hold, equal_weight, random, llm)"
@@ -166,7 +209,14 @@ Examples:
         cooldown_config = CooldownConfig(
             min_hold_days=args.min_hold_days,
             flip_cooldown_days=args.flip_cooldown_days,
-            max_trades_per_week=args.max_trades_per_week
+            max_trades_per_week=args.max_trades_per_week,
+            current_vol_regime=args.vol_regime,
+            max_trades_high_vol=args.max_trades_high_vol,
+            max_trades_normal_vol=args.max_trades_normal_vol,
+            max_trades_low_vol=args.max_trades_low_vol,
+            stop_loss_high_vol=args.stop_loss_high_vol,
+            stop_loss_normal_vol=args.stop_loss_normal_vol,
+            stop_loss_low_vol=args.stop_loss_low_vol,
         )
 
     if getattr(args, 'compare', False):
