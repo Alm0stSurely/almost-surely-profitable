@@ -48,10 +48,18 @@ def test_system_prompt_exists():
     assert "single trading day" in SYSTEM_PROMPT
     assert "total portfolio drawdown from inception" in SYSTEM_PROMPT
     
+    # Check for sell discipline / let winners run (added 2026-07-09)
+    assert "SELL DISCIPLINE" in SYSTEM_PROMPT
+    assert "LET WINNERS RUN" in SYSTEM_PROMPT
+    assert "Do NOT sell a position merely because it is showing a small profit" in SYSTEM_PROMPT
+    assert "confirmed technical reversal" in SYSTEM_PROMPT
+    assert "When in doubt, default to HOLD" in SYSTEM_PROMPT
+    
     print(f"  Prompt length: {len(SYSTEM_PROMPT)} chars")
     print("  ✓ Contains LOSS AVERSION")
     print("  ✓ Contains CVaR principle")
     print("  ✓ Contains Deflated Sharpe Ratio")
+    print("  ✓ Contains SELL DISCIPLINE / LET WINNERS RUN")
     print("✓ System prompt test passed\n")
 
 
