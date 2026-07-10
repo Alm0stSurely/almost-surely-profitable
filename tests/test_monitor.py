@@ -341,6 +341,136 @@ def test_check_bollinger_breakouts_no_data():
         print("✓ Bollinger no data test passed\n")
 
 
+# --- New tests added 2026-07-10: Bollinger breakout minimum margin threshold
+import monitor
+import pandas as pd
+import pytest
+
+from portfolio.portfolio import Portfolio, Position
+
+
+def _make_portfolio(tmp_path, ticker="DBA", quantity=10, avg_price=26.0, current_price=26.5):
+    """Build a minimal portfolio with a single position for monitor tests."""
+    portfolio = Portfolio(data_dir=str(tmp_path / "data"))
+    portfolio.positions[ticker] = Position(
+        ticker=ticker,
+        quantity=quantity,
+        avg_price=avg_price,
+        current_price=current_price,
+    )
+    return portfolio
+
+
+def _make_bollinger_series(band_value, length=30):
+    """Return a constant pandas Series representing a flat Bollinger band."""
+    return pd.Series([float(band_value)] * length)
+
+
+class TestBollingerBreakoutMargin:
+    """Bollinger breakouts must exceed a minimum margin before alerting."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_history(self, tmp_path, monkeypatch):
+        """Redirect alert history to a temp file and keep bollinger checks on."""
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+        monkeypatch.setattr(monitor, "CHECK_BOLLINGER", True)
+
+    @pytest.fixture
+    def mock_bollinger(self):
+        """Patch network/data dependencies so tests run offline."""
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, patch(
+            "data.indicators.calculate_bollinger_bands"
+        ) as mock_bands:
+
+            def setup(upper, lower):
+                mock_fetch.return_value = {"DBA": pd.DataFrame({"Close": [100.0] * 30})}
+                middle = (upper + lower) / 2.0
+                mock_bands.return_value = (
+                    _make_bollinger_series(upper),
+                    _make_bollinger_series(middle),
+                    _make_bollinger_series(lower),
+                )
+
+            yield setup
+
+    def test_marginal_upper_breakout_is_suppressed(self, tmp_path, mock_bollinger):
+        """A 0.05% upper pierce must not create an alert."""
+        mock_bollinger(upper=100.0, lower=90.0)
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        alerts = check_bollinger_breakouts({"DBA": 100.05}, portfolio)
+        assert alerts == []
+
+    def test_clear_upper_breakout_is_alerted(self, tmp_path, mock_bollinger):
+        """A 1.5% upper breakout must trigger an alert with the margin recorded."""
+        mock_bollinger(upper=100.0, lower=90.0)
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        alerts = check_bollinger_breakouts({"DBA": 101.5}, portfolio)
+        assert len(alerts) == 1
+        alert = alerts[0]
+        assert alert["ticker"] == "DBA"
+        assert alert["direction"] == "upper"
+        assert alert["breakout_margin_pct"] == pytest.approx(1.5, abs=0.01)
+        assert alert["alert_reason"] == "First alert for this ticker"
+
+    def test_exact_threshold_upper_breakout_is_alerted(self, tmp_path, mock_bollinger):
+        """A breakout exactly at the configured threshold (1.0%) must alert."""
+        mock_bollinger(upper=100.0, lower=90.0)
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        alerts = check_bollinger_breakouts({"DBA": 101.0}, portfolio)
+        assert len(alerts) == 1
+
+    def test_lower_breakout_is_alerted(self, tmp_path, mock_bollinger):
+        """A 1.5% lower breakout must trigger an alert with the margin recorded."""
+        mock_bollinger(upper=110.0, lower=100.0)
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        alerts = check_bollinger_breakouts({"DBA": 98.5}, portfolio)
+        assert len(alerts) == 1
+        assert alerts[0]["direction"] == "lower"
+        assert alerts[0]["breakout_margin_pct"] == pytest.approx(1.5, abs=0.01)
+
+    def test_marginal_lower_breakout_is_suppressed(self, tmp_path, mock_bollinger):
+        """A 0.05% lower pierce must not create an alert."""
+        mock_bollinger(upper=110.0, lower=100.0)
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        alerts = check_bollinger_breakouts({"DBA": 99.95}, portfolio)
+        assert alerts == []
+
+    def test_bollinger_disabled_returns_empty(self, tmp_path, monkeypatch):
+        """When bollinger checks are disabled, no alerts are produced."""
+        monkeypatch.setattr(monitor, "CHECK_BOLLINGER", False)
+        portfolio = _make_portfolio(tmp_path)
+        alerts = check_bollinger_breakouts({"DBA": 200.0}, portfolio)
+        assert alerts == []
+
+    def test_config_threshold_is_loaded(self):
+        """The threshold loaded from config/monitor.json must be 1.0%."""
+        assert monitor.BOLLINGER_MIN_BREAKOUT_PCT == pytest.approx(1.0, abs=0.01)
+
+
+class TestBreakoutMarginHelpers:
+    """Direct unit tests for the margin helper functions."""
+
+    def test_breakout_margin_zero_band(self):
+        assert monitor._breakout_margin(100.0, 0.0) == 0.0
+
+    def test_breakout_margin_upper(self):
+        assert monitor._breakout_margin(101.5, 100.0) == pytest.approx(1.5, abs=1e-9)
+
+    def test_breakout_margin_lower(self):
+        assert monitor._breakout_margin(98.5, 100.0) == pytest.approx(1.5, abs=1e-9)
+
+    def test_is_significant_breakout_exact(self):
+        assert monitor._is_significant_breakout(101.0, 100.0, 1.0) is True
+
+    def test_is_significant_breakout_below(self):
+        assert monitor._is_significant_breakout(100.5, 100.0, 1.0) is False
+
+    def test_is_significant_breakout_zero_band(self):
+        assert monitor._is_significant_breakout(100.0, 0.0, 1.0) is False
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running Intraday Monitor Tests")

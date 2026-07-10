@@ -55,7 +55,8 @@ def load_monitor_config() -> dict:
             'position_movement_pct': 2.0,
             'index_movement_pct': 3.0,
             'portfolio_drawdown_pct': 1.5,
-            'bollinger_breakout_std': 2.0
+            'bollinger_breakout_std': 2.0,
+            'bollinger_breakout_min_pct': 1.0
         },
         'indices': ["SPY", "^FCHI"],
         'check_stop_losses': True,
@@ -163,6 +164,24 @@ INDICES = _monitor_config.get('indices', ["SPY", "^FCHI"])
 CHECK_STOP_LOSSES = _monitor_config.get('check_stop_losses', True)
 STOP_LOSS_THRESHOLD = _monitor_config.get('stop_loss_threshold_pct', 5.0)
 CHECK_BOLLINGER = _monitor_config.get('check_bollinger', True)
+BOLLINGER_MIN_BREAKOUT_PCT = THRESHOLDS.get('bollinger_breakout_min_pct', 1.0)
+
+
+def _breakout_margin(current_price: float, band: float) -> float:
+    """Return the absolute percentage distance from a Bollinger band.
+
+    A value of 1.0 means the price is 1% beyond the band. The result is
+    always non-negative so it can be compared against the same threshold for
+    both upper and lower breakouts.
+    """
+    if band == 0:
+        return 0.0
+    return abs((current_price - band) / band) * 100
+
+
+def _is_significant_breakout(current_price: float, band: float, min_pct: float) -> bool:
+    """Return True when the price has moved at least ``min_pct`` beyond a band."""
+    return _breakout_margin(current_price, band) >= min_pct
 
 
 def load_previous_close(portfolio: Portfolio) -> Dict[str, float]:
@@ -272,11 +291,14 @@ def check_bollinger_breakouts(
             latest_upper = upper.iloc[-1]
             latest_lower = lower.iloc[-1]
             
-            # Check for breakout
+            # Check for breakout, requiring a minimum margin beyond the band to
+            # avoid firing on micro-pierces (e.g. price 0.05% above the band).
             if current_price > latest_upper:
-                movement_pct = ((current_price - latest_upper) / latest_upper) * 100
+                breakout_margin_pct = _breakout_margin(current_price, latest_upper)
+                if not _is_significant_breakout(current_price, latest_upper, BOLLINGER_MIN_BREAKOUT_PCT):
+                    continue
                 should_alert_flag, reason = should_alert(
-                    ticker, movement_pct, 'bollinger_breakout_upper', history
+                    ticker, breakout_margin_pct, 'bollinger_breakout_upper', history
                 )
                 
                 if should_alert_flag:
@@ -287,15 +309,18 @@ def check_bollinger_breakouts(
                         'current_price': current_price,
                         'bollinger_upper': float(latest_upper),
                         'direction': 'upper',
+                        'breakout_margin_pct': breakout_margin_pct,
                         'interpretation': 'Overbought - potential mean reversion',
                         'alert_reason': reason
                     })
-                    record_alert(ticker, movement_pct, 'bollinger_breakout_upper', 'medium', history)
+                    record_alert(ticker, breakout_margin_pct, 'bollinger_breakout_upper', 'medium', history)
                     
             elif current_price < latest_lower:
-                movement_pct = ((current_price - latest_lower) / latest_lower) * 100
+                breakout_margin_pct = _breakout_margin(current_price, latest_lower)
+                if not _is_significant_breakout(current_price, latest_lower, BOLLINGER_MIN_BREAKOUT_PCT):
+                    continue
                 should_alert_flag, reason = should_alert(
-                    ticker, movement_pct, 'bollinger_breakout_lower', history
+                    ticker, breakout_margin_pct, 'bollinger_breakout_lower', history
                 )
                 
                 if should_alert_flag:
@@ -306,10 +331,11 @@ def check_bollinger_breakouts(
                         'current_price': current_price,
                         'bollinger_lower': float(latest_lower),
                         'direction': 'lower',
+                        'breakout_margin_pct': breakout_margin_pct,
                         'interpretation': 'Oversold - potential bounce',
                         'alert_reason': reason
                     })
-                    record_alert(ticker, movement_pct, 'bollinger_breakout_lower', 'medium', history)
+                    record_alert(ticker, breakout_margin_pct, 'bollinger_breakout_lower', 'medium', history)
                     
         except Exception as e:
             # Silently skip if calculation fails
