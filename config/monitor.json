@@ -3,7 +3,8 @@
     "position_movement_pct": 2.0,
     "index_movement_pct": 3.0,
     "portfolio_drawdown_pct": 1.5,
-    "bollinger_breakout_std": 2.0
+    "bollinger_breakout_std": 2.0,
+    "bollinger_breakout_min_pct": 1.0
   },
   "indices": ["SPY", "QQQ", "^FCHI", "FEZ"],
   "check_stop_losses": true,
