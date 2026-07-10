@@ -25,10 +25,17 @@ from analysis.regime_detector import RegimeDetector, format_regime_for_llm
 from benchmark import LiveEqualWeightBenchmark
 
 
+# Resolve all paths relative to the repository root so the script is safe to run
+# from any working directory (e.g. via cron from the parent workspace).
+REPO_ROOT = Path(__file__).parent.parent.resolve()
+DATA_DIR = REPO_ROOT / "data"
+DAILY_RESULTS_DIR = REPO_ROOT / "results" / "daily"
+
+
 def setup_directories():
     """Create necessary directories."""
-    Path("data").mkdir(exist_ok=True)
-    Path("results/daily").mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(exist_ok=True)
+    DAILY_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def backpopulate_cooldown_entries(cooldown_mgr: PositionCooldownManager, portfolio) -> None:
@@ -132,7 +139,7 @@ def run_daily_pipeline(dry_run: bool = False):
     
     # Step 3: Load portfolio
     print("\n[3/7] Loading portfolio...")
-    portfolio = Portfolio(data_dir="data")
+    portfolio = Portfolio(data_dir=str(DATA_DIR))
     
     # Update current prices in portfolio
     current_prices = fetch_current_prices(list(portfolio.positions.keys()), max_workers=4)
@@ -148,7 +155,7 @@ def run_daily_pipeline(dry_run: bool = False):
         vol_regime = market_analysis['regime']['state'].get('volatility_regime', 'normal')
     
     cooldown_config = CooldownConfig(current_vol_regime=vol_regime)
-    cooldown_mgr = PositionCooldownManager(data_dir="data", config=cooldown_config)
+    cooldown_mgr = PositionCooldownManager(data_dir=str(DATA_DIR), config=cooldown_config)
     backpopulate_cooldown_entries(cooldown_mgr, portfolio)
     cooldown_status = cooldown_mgr.get_status()
     print(f"  ✓ Cooldown manager active — trades this week: {cooldown_status['trades_this_week']}/{cooldown_status['weekly_cap']}")
@@ -313,7 +320,7 @@ def run_daily_pipeline(dry_run: bool = False):
     # Step 5.5: Update live equal-weight benchmark
     print("\n[5.5/7] Updating equal-weight benchmark...")
     try:
-        benchmark = LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir="data")
+        benchmark = LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir=str(DATA_DIR))
         # Get all current prices for benchmark universe
         benchmark_prices = fetch_current_prices(ALL_TICKERS, max_workers=8)
         benchmark_summary = benchmark.rebalance(benchmark_prices)
@@ -420,9 +427,9 @@ def run_daily_pipeline(dry_run: bool = False):
     # Save to daily results
     date_str = datetime.now().strftime('%Y-%m-%d')
     if dry_run:
-        result_file = f"results/daily/{date_str}_dry_run.json"
+        result_file = str(DAILY_RESULTS_DIR / f"{date_str}_dry_run.json")
     else:
-        result_file = f"results/daily/{date_str}.json"
+        result_file = str(DAILY_RESULTS_DIR / f"{date_str}.json")
     with open(result_file, 'w') as f:
         json.dump(result, f, indent=2, default=str)
     

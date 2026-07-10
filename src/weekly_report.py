@@ -18,6 +18,15 @@ from risk.performance_metrics import calculate_all_metrics, PerformanceMetrics
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 
 
+# Resolve paths relative to the repository root so the script is safe to run
+# from any working directory (e.g. via cron from the parent workspace).
+REPO_ROOT = Path(__file__).parent.parent.resolve()
+DATA_DIR = REPO_ROOT / "data"
+RESULTS_DIR = REPO_ROOT / "results"
+DAILY_RESULTS_DIR = RESULTS_DIR / "daily"
+REPORTS_DIR = RESULTS_DIR / "reports"
+
+
 def calculate_weekly_returns(week_results):
     """Calculate daily returns from week results."""
     returns = []
@@ -73,10 +82,10 @@ def generate_weekly_report():
     print("="*70)
     
     # Initialize report generator
-    rg = ReportGenerator()
+    rg = ReportGenerator(results_dir=str(DAILY_RESULTS_DIR))
     
     # Load portfolio for current state
-    portfolio = Portfolio(data_dir="data")
+    portfolio = Portfolio(data_dir=str(DATA_DIR))
     
     # Update with current prices
     if portfolio.positions:
@@ -198,8 +207,8 @@ def generate_weekly_report():
         print(f"\n🔄 No trades this week")
     
     # Save report
-    report_file = f"results/weekly-{today.strftime('%G-W%V')}.md"
-    Path("results").mkdir(exist_ok=True)
+    report_file = str(RESULTS_DIR / f"weekly-{today.strftime('%G-W%V')}.md")
+    RESULTS_DIR.mkdir(exist_ok=True)
     
     with open(report_file, 'w') as f:
         f.write(f"# Weekly Report — Week {today.strftime('%G-W%V')}\n\n")

@@ -23,10 +23,17 @@ from data.fetch_market_data import fetch_current_prices
 from portfolio.portfolio import Portfolio
 
 
+# Resolve paths relative to the repository root so the script is safe to run
+# from any working directory (e.g. via cron from the parent workspace).
+REPO_ROOT = Path(__file__).parent.parent.resolve()
+DATA_DIR = REPO_ROOT / "data"
+
+
 # Load thresholds from config
-CONFIG_PATH = Path(__file__).parent.parent / "config" / "monitor.json"
-UNIVERSE_PATH = Path(__file__).parent.parent / "config" / "universe.json"
-ALERT_HISTORY_PATH = Path(__file__).parent.parent / "data" / "alert_history.json"
+CONFIG_PATH = REPO_ROOT / "config" / "monitor.json"
+UNIVERSE_PATH = REPO_ROOT / "config" / "universe.json"
+ALERT_HISTORY_PATH = DATA_DIR / "alert_history.json"
+MARKET_STATE_PATH = DATA_DIR / "market_state.json"
 
 # Alert deduplication settings
 COOLDOWN_HOURS = 6  # Don't re-alert same ticker within 6 hours
@@ -160,11 +167,9 @@ CHECK_BOLLINGER = _monitor_config.get('check_bollinger', True)
 
 def load_previous_close(portfolio: Portfolio) -> Dict[str, float]:
     """Load previous closing prices from portfolio state or market data."""
-    state_file = Path("data/market_state.json")
-    
-    if state_file.exists():
+    if MARKET_STATE_PATH.exists():
         try:
-            with open(state_file, 'r') as f:
+            with open(MARKET_STATE_PATH, 'r') as f:
                 state = json.load(f)
             return state.get('previous_close', {})
         except:
@@ -176,15 +181,14 @@ def load_previous_close(portfolio: Portfolio) -> Dict[str, float]:
 
 def save_market_state(prices: Dict[str, float]):
     """Save current prices as reference for next check."""
-    state_file = Path("data/market_state.json")
-    state_file.parent.mkdir(exist_ok=True)
+    MARKET_STATE_PATH.parent.mkdir(exist_ok=True)
     
     state = {
         'timestamp': datetime.now().isoformat(),
         'previous_close': prices
     }
     
-    with open(state_file, 'w') as f:
+    with open(MARKET_STATE_PATH, 'w') as f:
         json.dump(state, f, indent=2)
 
 
@@ -435,7 +439,7 @@ def check_position_movements(positions: Dict, previous_close: Dict, current_pric
     """Check for significant position movements (wrapper for check_movements)."""
     from portfolio.portfolio import Portfolio, Position
     
-    portfolio = Portfolio(data_dir="data")
+    portfolio = Portfolio(data_dir=str(DATA_DIR))
     for ticker, pos_data in positions.items():
         portfolio.positions[ticker] = Position(
             ticker=ticker,
@@ -513,7 +517,7 @@ def run_monitor():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting intraday monitor...")
     
     # Load portfolio
-    portfolio = Portfolio(data_dir="data")
+    portfolio = Portfolio(data_dir=str(DATA_DIR))
     
     # Get tickers to monitor (positions + indices)
     tickers_to_monitor = list(portfolio.positions.keys()) + INDICES
