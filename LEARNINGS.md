@@ -223,4 +223,21 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-07-03 — Cooldown trade count mismatch vs weekly report
+
+**Contexte** : Le daily_run et le cooldown manager affichent "trades this week: 3/3" alors que le weekly_report et `trades_history.json` n'en comptent que 2 pour la semaine W27 (2026-06-29 à 2026-07-03).
+
+**Erreur** : Discrepance entre le nombre de trades comptés par le cooldown manager et le nombre réel de trades dans la semaine ISO. Le LLM a reçu une information potentiellement incorrecte ("cap atteint") et a donc refusé toute action alors qu'une marge de manoeuvre théorique existait peut-être.
+
+**Cause probable** : Le cooldown manager utilise probablement une fenêtre glissante de 7 jours (rolling window) pour compter les trades, tandis que le weekly_report utilise la semaine ISO (lundi-dimanche). Les deux trades de W27 (BUY TTE.PA et BUY SPY le 30 juin) plus le SELL TLT du 26 juin (vendredi de la semaine précédente) forment 3 trades sur une fenêtre glissante de 7 jours se terminant le 1er juillet.
+
+**Fix** : À investiguer — aligner la définition de "semaine" entre le cooldown manager et le weekly report, ou clarifier dans le prompt LLM que la limite est rolling 7-day et non calendaire. Vérifier `PositionCooldownManager` pour la logique de reset.
+
+**Règle** :
+- Ne jamais supposer que "weekly" signifie la même chose dans tous les modules
+- Vérifier la cohérence entre cooldown manager, weekly report, et `trades_history.json` avant de faire confiance au nombre affiché
+- Quand le LLM parle de "weekly trade cap", s'assurer que la définition correspond exactement à l'implémentation
+
+---
+
 *Document mis à jour régulièrement avec les apprentissages du live trading.*

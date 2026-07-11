@@ -148,24 +148,58 @@ def calculate_correlation_matrix(
 ) -> pd.DataFrame:
     """
     Calculate correlation matrix between assets based on returns.
-    
+
+    Aligns observations by date before computing correlations so that
+    returns from different trading calendars (e.g. US holidays vs Euronext
+    holidays) are not compared by position. After alignment, the most recent
+    `lookback` common trading days are retained and rows with any missing
+    returns are dropped so that every pairwise correlation is computed over
+    the same set of dates.
+
     Args:
-        data_dict: Dict mapping ticker to DataFrame
-        lookback: Number of days to use for correlation (default: 20)
-    
+        data_dict: Dict mapping ticker to DataFrame with a DatetimeIndex
+            and a 'Close' column.
+        lookback: Number of common trading days to use for correlation
+            (default: 20).
+
     Returns:
-        Correlation matrix DataFrame
+        Correlation matrix DataFrame. Returns an empty DataFrame if there are
+        fewer than two assets or fewer than two complete aligned observations.
     """
-    returns_df = pd.DataFrame()
-    
+    returns_series = {}
+
     for ticker, df in data_dict.items():
-        if 'Close' in df.columns:
-            returns_df[ticker] = df['Close'].pct_change()
-    
-    # Use only last 'lookback' days
+        if 'Close' not in df.columns or df.empty:
+            continue
+        close = df['Close'].dropna()
+        if close.empty:
+            continue
+
+        returns = close.pct_change()
+
+        # If the index is a DatetimeIndex, normalize it to date-only so that
+        # assets fetched at different times of day are still aligned by date.
+        if isinstance(returns.index, pd.DatetimeIndex):
+            returns.index = returns.index.normalize()
+
+        returns_series[ticker] = returns
+
+    if len(returns_series) < 2:
+        return pd.DataFrame()
+
+    # Align all return series on a common date index.
+    returns_df = pd.DataFrame(returns_series)
+
+    # Keep only the most recent `lookback` trading days with complete data.
     if len(returns_df) > lookback:
         returns_df = returns_df.tail(lookback)
-    
+
+    # Ensure every pairwise correlation uses the same date observations.
+    returns_df = returns_df.dropna()
+
+    if len(returns_df) < 2:
+        return pd.DataFrame()
+
     return returns_df.corr()
 
 
