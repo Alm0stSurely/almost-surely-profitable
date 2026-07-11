@@ -105,6 +105,9 @@ def _patch_pipeline(tmp_path, monkeypatch, fixed_date: datetime):
     }
 
     patches = {
+        "REPO_ROOT": tmp_path,
+        "DATA_DIR": data_dir,
+        "DAILY_RESULTS_DIR": results_dir,
         "fetch_historical_data": MagicMock(return_value=mock_market_data),
         "analyze_market_data": MagicMock(return_value=market_analysis),
         "fetch_current_prices": MagicMock(return_value={}),
