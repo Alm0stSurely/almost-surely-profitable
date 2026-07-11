@@ -670,6 +670,136 @@ def test_retry_configuration():
         print("✓ Retry configuration test passed\n")
 
 
+
+
+def test_jitter_configuration():
+    """Test that retry jitter is configurable via constructor and env vars."""
+    print("Test 20: Jitter Configuration")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        
+        # Constructor value
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            retry_jitter=0.25
+        )
+        assert agent.retry_jitter == 0.25
+        
+        # Environment default
+        with patch.dict(os.environ, {"LLM_RETRY_JITTER": "0.5"}):
+            agent_env = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_env.retry_jitter == 0.5
+        
+        # Default should be 0.0 (no jitter)
+        with patch.dict(os.environ, {}, clear=True):
+            agent_default = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_default.retry_jitter == 0.0
+        
+        print("  Constructor and env-var jitter configuration both work")
+        print("  ✓ Default jitter is 0.0 (backward-compatible)")
+        print("✓ Jitter configuration test passed\n")
+
+
+def test_jitter_applied_on_http_retry():
+    """Jitter increases wait time by up to the configured fraction."""
+    print("Test 21: Jitter Applied on HTTP Retry")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            max_retries=1,
+            retry_backoff_factor=1.0,
+            retry_jitter=0.25
+        )
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        rate_limit_response = _make_error_response(429)
+        
+        with patch('requests.post', side_effect=[rate_limit_response, success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert mock_post.call_count == 2
+                assert mock_sleep.call_count == 1
+                
+                waited = mock_sleep.call_args[0][0]
+                # Base wait is 1.0s; jitter adds up to 0.25s
+                assert 1.0 <= waited <= 1.25
+                
+                print(f"  Waited {waited:.3f}s (base 1.0s + jitter up to 25%)")
+                print("✓ Jitter applied on HTTP retry test passed\n")
+
+
+def test_jitter_applied_on_network_error():
+    """Jitter is also applied on network-level retryable errors."""
+    print("Test 22: Jitter Applied on Network Error")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            max_retries=1,
+            retry_backoff_factor=2.0,
+            retry_jitter=0.5
+        )
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        
+        with patch('requests.post', side_effect=[requests.exceptions.ConnectionError("Connection refused"), success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert mock_post.call_count == 2
+                assert mock_sleep.call_count == 1
+                
+                waited = mock_sleep.call_args[0][0]
+                # Base wait is 2.0s; jitter adds up to 1.0s
+                assert 2.0 <= waited <= 3.0
+                
+                print(f"  Waited {waited:.3f}s (base 2.0s + jitter up to 50%)")
+                print("✓ Jitter applied on network error test passed\n")
+
+
+def test_no_jitter_exact_backoff():
+    """With jitter disabled, backoff remains exactly exponential."""
+    print("Test 23: No Jitter - Exact Exponential Backoff")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            max_retries=2,
+            retry_backoff_factor=1.0,
+            retry_jitter=0.0
+        )
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        server_error_response = _make_error_response(503)
+        
+        with patch('requests.post', side_effect=[server_error_response, server_error_response, success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert mock_sleep.call_count == 2
+                assert mock_sleep.call_args_list[0][0][0] == 1.0
+                assert mock_sleep.call_args_list[1][0][0] == 2.0
+                
+                print("  Wait times exactly 1.0s and 2.0s with no jitter")
+                print("✓ No jitter exact backoff test passed\n")
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running LLM Trading Agent Tests")
@@ -694,6 +824,10 @@ if __name__ == "__main__":
     test_api_call_exhaust_retries()
     test_api_call_retry_on_network_error()
     test_retry_configuration()
+    test_jitter_configuration()
+    test_jitter_applied_on_http_retry()
+    test_jitter_applied_on_network_error()
+    test_no_jitter_exact_backoff()
     
     print("=" * 60)
     print("All tests passed! ✓")
