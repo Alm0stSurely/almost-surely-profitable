@@ -124,7 +124,7 @@ def calculate_beta_alpha(
     covariance = np.cov(portfolio_returns, benchmark_returns)[0, 1]
     benchmark_variance = np.var(benchmark_returns, ddof=1)
     
-    if benchmark_variance == 0 or benchmark_variance < 1e-15:
+    if abs(benchmark_variance) < 1e-15 or np.isnan(benchmark_variance):
         return None, None
     
     beta = covariance / benchmark_variance

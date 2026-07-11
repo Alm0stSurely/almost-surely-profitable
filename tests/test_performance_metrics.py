@@ -94,6 +94,15 @@ def test_beta_alpha_near_zero_variance():
     assert alpha is None
 
 
+def test_beta_alpha_nan_variance():
+    """NaN benchmark variance should not propagate into NaN beta/alpha."""
+    portfolio = np.linspace(-0.01, 0.01, 60)
+    benchmark = np.full(60, np.nan)
+    beta, alpha = calculate_beta_alpha(portfolio, benchmark)
+    assert beta is None
+    assert alpha is None
+
+
 def test_beta_alpha_mismatched_lengths():
     """Mismatched lengths are aligned by taking the trailing overlap."""
     portfolio = np.linspace(-0.01, 0.01, 60)
