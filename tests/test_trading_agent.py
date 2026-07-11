@@ -800,6 +800,138 @@ def test_no_jitter_exact_backoff():
                 print("  Wait times exactly 1.0s and 2.0s with no jitter")
                 print("✓ No jitter exact backoff test passed\n")
 
+
+def test_timeout_configuration():
+    """Test that request timeout is configurable via constructor and env vars."""
+    print("Test 24: Timeout Configuration")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        
+        # Constructor value
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=45.0
+        )
+        assert agent.timeout == 45.0
+        
+        # Environment default
+        with patch.dict(os.environ, {"LLM_TIMEOUT": "300"}):
+            agent_env = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_env.timeout == 300.0
+        
+        # Default should be 180.0
+        with patch.dict(os.environ, {}, clear=True):
+            agent_default = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent_default.timeout == 180.0
+        
+        print("  Constructor and env-var timeout configuration both work")
+        print("  ✓ Default timeout is 180.0s (backward-compatible)")
+        print("✓ Timeout configuration test passed\n")
+
+
+def test_call_llm_uses_configured_timeout():
+    """The configured agent timeout is passed to requests.post."""
+    print("Test 25: call_llm Uses Configured Timeout")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=45.0
+        )
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        
+        with patch('requests.post', return_value=success_response) as mock_post:
+            result = agent.call_llm("test prompt")
+            
+            assert result is not None
+            assert mock_post.call_count == 1
+            assert mock_post.call_args[1].get("timeout") == 45.0
+            
+            print("  requests.post received timeout=45.0")
+            print("✓ call_llm uses configured timeout test passed\n")
+
+
+def test_call_llm_timeout_override_argument():
+    """A per-call timeout argument overrides the agent's default timeout."""
+    print("Test 26: call_llm Timeout Override Argument")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=45.0
+        )
+        
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+        
+        with patch('requests.post', return_value=success_response) as mock_post:
+            result = agent.call_llm("test prompt", timeout=120.0)
+            
+            assert result is not None
+            assert mock_post.call_count == 1
+            assert mock_post.call_args[1].get("timeout") == 120.0
+            
+            print("  Per-call timeout=120.0 overrode configured timeout=45.0")
+            print("✓ call_llm timeout override test passed\n")
+
+
+def test_call_llm_env_timeout_used():
+    """An LLM_TIMEOUT env var is used when no constructor timeout is provided."""
+    print("Test 27: call_llm Env Timeout")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        
+        with patch.dict(os.environ, {"LLM_TIMEOUT": "240"}):
+            agent = TradingAgent(api_key="test_key", history_file=str(history_file))
+            assert agent.timeout == 240.0
+            
+            success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+            
+            with patch('requests.post', return_value=success_response) as mock_post:
+                result = agent.call_llm("test prompt")
+                
+                assert result is not None
+                assert mock_post.call_count == 1
+                assert mock_post.call_args[1].get("timeout") == 240.0
+                
+                print("  Env timeout=240.0 applied to requests.post")
+                print("✓ call_llm env timeout test passed\n")
+
+
+def test_call_llm_invalid_timeout_returns_none():
+    """Non-positive timeouts are rejected immediately without making a request."""
+    print("Test 28: call_llm Invalid Timeout")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(
+            api_key="test_key",
+            history_file=str(history_file),
+            timeout=0.0
+        )
+        
+        with patch('requests.post') as mock_post:
+            result = agent.call_llm("test prompt")
+            
+            assert result is None
+            assert mock_post.call_count == 0
+            
+            print("  Non-positive timeout rejected without API call")
+            print("✓ Invalid timeout test passed\n")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running LLM Trading Agent Tests")
@@ -828,6 +960,11 @@ if __name__ == "__main__":
     test_jitter_applied_on_http_retry()
     test_jitter_applied_on_network_error()
     test_no_jitter_exact_backoff()
+    test_timeout_configuration()
+    test_call_llm_uses_configured_timeout()
+    test_call_llm_timeout_override_argument()
+    test_call_llm_env_timeout_used()
+    test_call_llm_invalid_timeout_returns_none()
     
     print("=" * 60)
     print("All tests passed! ✓")
