@@ -101,17 +101,22 @@ class TestBacktestCooldownManager:
 
     def test_weekly_trade_cap_blocks_buy(self):
         """Buying when weekly trade cap is reached should be blocked."""
-        mgr = BacktestCooldownManager(config=CooldownConfig(max_trades_per_week=2))
+        mgr = BacktestCooldownManager(
+            config=CooldownConfig(max_trades_per_week=2, max_trades_normal_vol=2)
+        )
         mgr.record_entry("X", datetime(2024, 1, 15))
         mgr.record_entry("Y", datetime(2024, 1, 16))
 
         allowed, reason = mgr.can_buy("AAPL", datetime(2024, 1, 17))
         assert allowed is False
         assert "Weekly trade cap" in reason
+        assert "normal" in reason
 
     def test_weekly_trade_cap_blocks_sell(self):
         """Selling when weekly trade cap is reached should be blocked."""
-        mgr = BacktestCooldownManager(config=CooldownConfig(max_trades_per_week=2))
+        mgr = BacktestCooldownManager(
+            config=CooldownConfig(max_trades_per_week=2, max_trades_normal_vol=2)
+        )
         mgr.record_entry("AAPL", datetime(2024, 1, 10))
         mgr.record_entry("X", datetime(2024, 1, 15))
         mgr.record_entry("Y", datetime(2024, 1, 16))
@@ -119,10 +124,13 @@ class TestBacktestCooldownManager:
         allowed, reason = mgr.can_sell("AAPL", datetime(2024, 1, 17), 100.0, 90.0)
         assert allowed is False
         assert "Weekly trade cap" in reason
+        assert "normal" in reason
 
     def test_weekly_trade_cap_resets_after_7_days(self):
         """Weekly trade cap should reset after 7 days."""
-        mgr = BacktestCooldownManager(config=CooldownConfig(max_trades_per_week=2))
+        mgr = BacktestCooldownManager(
+            config=CooldownConfig(max_trades_per_week=2, max_trades_normal_vol=2)
+        )
         mgr.record_entry("X", datetime(2024, 1, 1))
         mgr.record_entry("Y", datetime(2024, 1, 2))
 
@@ -147,7 +155,9 @@ class TestBacktestCooldownManager:
 
     def test_get_metrics(self):
         """get_metrics should report aggregate statistics."""
-        mgr = BacktestCooldownManager(config=CooldownConfig(max_trades_per_week=1))
+        mgr = BacktestCooldownManager(
+            config=CooldownConfig(max_trades_per_week=1, max_trades_normal_vol=1)
+        )
         mgr.record_entry("AAPL", datetime(2024, 1, 1))
 
         # This should be blocked by weekly cap (entry counts as 1 trade)
@@ -216,3 +226,90 @@ class TestCooldownConfig:
         d = __import__('dataclasses').asdict(config)
         assert d["min_hold_days"] == 3
         assert d["flip_cooldown_days"] == 10
+
+
+class TestAdaptiveRegime:
+    """Test suite for adaptive volatility regime in backtest cooldown."""
+
+    def test_high_vol_uses_lower_trade_cap(self):
+        """High vol regime should use max_trades_high_vol as the weekly cap."""
+        config = CooldownConfig(
+            max_trades_high_vol=1,
+            max_trades_normal_vol=3,
+            current_vol_regime="high",
+        )
+        mgr = BacktestCooldownManager(config=config)
+        mgr.record_entry("X", datetime(2024, 1, 15))
+
+        allowed, reason = mgr.can_buy("AAPL", datetime(2024, 1, 16))
+        assert allowed is False
+        assert "1/1" in reason
+        assert "high" in reason
+
+    def test_low_vol_uses_higher_trade_cap(self):
+        """Low vol regime should use max_trades_low_vol as the weekly cap."""
+        config = CooldownConfig(
+            max_trades_low_vol=5,
+            max_trades_normal_vol=2,
+            current_vol_regime="low",
+        )
+        mgr = BacktestCooldownManager(config=config)
+        mgr.record_entry("W", datetime(2024, 1, 15))
+        mgr.record_entry("X", datetime(2024, 1, 16))
+        mgr.record_entry("Y", datetime(2024, 1, 17))
+        mgr.record_entry("Z", datetime(2024, 1, 18))
+        mgr.record_entry("V", datetime(2024, 1, 19))
+
+        allowed, reason = mgr.can_buy("AAPL", datetime(2024, 1, 20))
+        assert allowed is False
+        assert "5/5" in reason
+        assert "low" in reason
+
+    def test_high_vol_uses_tighter_stop_loss(self):
+        """High vol regime should trigger stop-loss override at a lower threshold."""
+        config = CooldownConfig(
+            min_hold_days=5,
+            stop_loss_high_vol=3.0,
+            stop_loss_normal_vol=5.0,
+            current_vol_regime="high",
+        )
+        mgr = BacktestCooldownManager(config=config)
+        mgr.record_entry("AAPL", datetime(2024, 1, 1))
+
+        # 4% drawdown is below the 5% normal threshold but above the 3% high-vol threshold
+        allowed, reason = mgr.can_sell("AAPL", datetime(2024, 1, 2), 96.0, 100.0)
+        assert allowed is True
+        assert "3.0%" in reason
+
+    def test_low_vol_uses_looser_stop_loss(self):
+        """Low vol regime should require a larger drawdown for stop-loss override."""
+        config = CooldownConfig(
+            min_hold_days=5,
+            stop_loss_low_vol=7.0,
+            stop_loss_normal_vol=5.0,
+            current_vol_regime="low",
+        )
+        mgr = BacktestCooldownManager(config=config)
+        mgr.record_entry("AAPL", datetime(2024, 1, 1))
+
+        # 6% drawdown exceeds normal 5% but is below low-vol 7%
+        allowed, reason = mgr.can_sell("AAPL", datetime(2024, 1, 2), 94.0, 100.0)
+        assert allowed is False
+        assert "Minimum hold period" in reason
+
+    def test_get_status_reports_adaptive_fields(self):
+        """get_status should report current regime and adaptive stop-loss."""
+        config = CooldownConfig(
+            stop_loss_high_vol=3.0,
+            current_vol_regime="high",
+        )
+        mgr = BacktestCooldownManager(config=config)
+        status = mgr.get_status(datetime(2024, 1, 10))
+        assert status["current_vol_regime"] == "high"
+        assert status["adaptive_stop_loss"] == 3.0
+        assert status["weekly_cap"] == 2
+
+    def test_default_regime_is_normal(self):
+        """Default config should use normal vol regime."""
+        config = CooldownConfig()
+        assert config.current_vol_regime == "normal"
