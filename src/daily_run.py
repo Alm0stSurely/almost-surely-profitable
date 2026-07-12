@@ -8,6 +8,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Dict
 import numpy as np
 import pandas as pd
 
@@ -75,6 +76,23 @@ def backpopulate_cooldown_entries(cooldown_mgr: PositionCooldownManager, portfol
             cooldown_mgr.entries[ticker] = datetime.now()
 
 
+def _build_prices_df(market_data_raw: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """
+    Build a price-indexed DataFrame from fetch_historical_data output.
+
+    fetch_historical_data returns a Dict[str, pd.DataFrame] with OHLCV
+    columns and a DatetimeIndex. The RegimeDetector expects a DataFrame
+    whose columns are tickers and whose index is the date. Aligning the
+    individual Close series by their DatetimeIndex handles mismatched
+    trading calendars (e.g. US holidays vs Euronext holidays) correctly.
+    """
+    close_series = {}
+    for ticker, df in market_data_raw.items():
+        if isinstance(df, pd.DataFrame) and 'Close' in df.columns and not df.empty:
+            close_series[ticker] = df['Close']
+    return pd.DataFrame(close_series)
+
+
 def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     """
     Execute the complete daily trading pipeline.
@@ -102,13 +120,9 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     # Step 2.5: Market Regime Analysis
     print("\n[2.5/7] Analyzing market regime...")
     try:
-        # Build price DataFrame from market data
-        prices_df = pd.DataFrame({
-            ticker: data['history']['close'] 
-            for ticker, data in market_data_raw.items() 
-            if 'history' in data and 'close' in data['history']
-        })
-        
+        # Build price DataFrame from fetch_historical_data output
+        prices_df = _build_prices_df(market_data_raw)
+
         if not prices_df.empty:
             detector = RegimeDetector()
             regime_state = detector.analyze(prices_df)

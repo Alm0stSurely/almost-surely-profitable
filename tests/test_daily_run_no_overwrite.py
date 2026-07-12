@@ -38,9 +38,12 @@ def _patch_pipeline(tmp_path, monkeypatch, fixed_date: datetime):
     # Change cwd so files are written into the temporary directory
     monkeypatch.chdir(tmp_path)
 
-    # Minimal market data that satisfies the DataFrame creation in regime analysis
+    # Minimal market data that satisfies the DataFrame contract used by
+    # the real fetch_historical_data helper. The Close column and a
+    # DatetimeIndex are required for the regime-analysis path.
+    dates = pd.date_range("2026-07-01", periods=3, freq="B")
     mock_market_data = {
-        "SPY": {"history": {"close": pd.Series([1.0, 2.0, 3.0])}}
+        "SPY": pd.DataFrame({"Close": [100.0, 101.0, 102.0]}, index=dates)
     }
     market_analysis = {
         "assets": {
