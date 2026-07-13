@@ -21,6 +21,9 @@ from analysis.churn_analysis import (
     match_round_trips,
     analyze_churn,
     print_report,
+    _parse_trade_timestamp,
+    _bucket_metrics,
+    analyze_cohort,
 )
 
 
@@ -457,3 +460,137 @@ class TestMainIntegration:
             captured = capsys.readouterr()
             assert "PORTFOLIO CHURN ANALYSIS" in captured.out
             assert "1" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# _parse_trade_timestamp
+# ---------------------------------------------------------------------------
+
+class TestParseTradeTimestamp:
+    def test_parses_iso_datetime(self):
+        t = {"timestamp": "2026-01-01T10:00:00"}
+        assert _parse_trade_timestamp(t) == datetime(2026, 1, 1, 10, 0, 0)
+
+    def test_parses_iso_date_fallback(self):
+        t = {"timestamp": "2026-01-01"}
+        assert _parse_trade_timestamp(t) == datetime(2026, 1, 1)
+
+    def test_missing_timestamp_returns_datetime_min(self):
+        assert _parse_trade_timestamp({}) == datetime.min
+
+    def test_invalid_timestamp_returns_datetime_min(self):
+        t = {"timestamp": "not-a-date"}
+        assert _parse_trade_timestamp(t) == datetime.min
+
+
+# ---------------------------------------------------------------------------
+# match_round_trips sorting
+# ---------------------------------------------------------------------------
+
+class TestMatchRoundTripsSorting:
+    def test_unsorted_trades_still_fifo_by_timestamp(self):
+        """Trades are reordered by timestamp before matching."""
+        trades = [
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-01-04T10:00:00"),
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "buy", 120.0, timestamp="2026-01-02T10:00:00"),
+            make_trade("AAPL", "sell", 130.0, realized_pnl=10.0, timestamp="2026-01-05T10:00:00"),
+        ]
+        rts = match_round_trips(trades)
+        assert len(rts) == 2
+        assert rts[0].buy_price == 150.0
+        assert rts[0].sell_price == 160.0
+        assert rts[1].buy_price == 120.0
+        assert rts[1].sell_price == 130.0
+        assert all(rt.hold_days >= 0 for rt in rts)
+
+    def test_sell_before_its_buy_in_input_sorted_out(self):
+        """A sell that appears earlier in the file than its matching buy must still pair with the oldest buy."""
+        trades = [
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-01-02T10:00:00"),
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+        ]
+        rts = match_round_trips(trades)
+        assert len(rts) == 1
+        assert rts[0].hold_days == 1.0
+
+
+# ---------------------------------------------------------------------------
+# _bucket_metrics
+# ---------------------------------------------------------------------------
+
+class TestBucketMetrics:
+    def test_empty_returns_zeroed(self):
+        metrics = _bucket_metrics([])
+        assert metrics["total_round_trips"] == 0
+        assert metrics["win_rate_pct"] == 0.0
+        assert metrics["avg_hold_days"] == 0.0
+
+    def test_basic_metrics(self):
+        rt1 = RoundTrip("AAPL", datetime(2026, 1, 1), datetime(2026, 1, 5), 4.0, 100.0, 150.0, 160.0)
+        rt2 = RoundTrip("TSLA", datetime(2026, 1, 1), datetime(2026, 1, 20), 19.0, -20.0, 200.0, 190.0)
+        metrics = _bucket_metrics([rt1, rt2])
+        assert metrics["total_round_trips"] == 2
+        assert metrics["winning_round_trips"] == 1
+        assert metrics["win_rate_pct"] == 50.0
+        assert metrics["total_realized_pnl"] == 80.0
+        assert metrics["avg_hold_days"] == pytest.approx(11.5)
+        assert metrics["short_term_count"] == 0
+        assert metrics["medium_term_count"] == 1
+        assert metrics["long_term_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# analyze_cohort
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeCohort:
+    def test_cohort_split_by_buy_date(self):
+        """Cohort attribution is based on the entry (buy) date, not the sell date."""
+        trades = [
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-02-02T10:00:00"),
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-02-01T10:00:00"),
+            make_trade("AAPL", "sell", 170.0, realized_pnl=20.0, timestamp="2026-02-03T10:00:00"),
+        ]
+        cutoff = datetime(2026, 2, 1)
+        pre, post = analyze_cohort(trades, cutoff)
+        # The first buy is pre-cutoff, so its round trip is pre-cutoff even though the sell is post-cutoff.
+        # The second buy is post-cutoff, so its round trip is post-cutoff.
+        assert pre["total_round_trips"] == 1
+        assert pre["win_rate_pct"] == 100.0
+        assert post["total_round_trips"] == 1
+        assert post["win_rate_pct"] == 100.0
+
+    def test_no_pre_round_trips(self):
+        trades = [
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-02-01T10:00:00"),
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-02-02T10:00:00"),
+        ]
+        cutoff = datetime(2026, 2, 1)
+        pre, post = analyze_cohort(trades, cutoff)
+        assert pre["total_round_trips"] == 0
+        assert post["total_round_trips"] == 1
+
+    def test_no_post_round_trips(self):
+        trades = [
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-01-02T10:00:00"),
+        ]
+        cutoff = datetime(2026, 2, 1)
+        pre, post = analyze_cohort(trades, cutoff)
+        assert pre["total_round_trips"] == 1
+        assert post["total_round_trips"] == 0
+
+    def test_sell_before_cutoff_buy_after_cutoff_not_counted(self):
+        """A sell before cutoff with a buy after cutoff should not create a round trip."""
+        trades = [
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-02-02T10:00:00"),
+        ]
+        cutoff = datetime(2026, 2, 1)
+        pre, post = analyze_cohort(trades, cutoff)
+        # The sell has no matching pre-cutoff buy, so no pre-cutoff round trip.
+        # The buy has no matching post-cutoff sell, so no post-cutoff round trip.
+        assert pre["total_round_trips"] == 0
+        assert post["total_round_trips"] == 0
