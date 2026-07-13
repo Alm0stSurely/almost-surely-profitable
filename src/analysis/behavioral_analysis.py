@@ -9,6 +9,48 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "results"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "results" / "analysis"
 
+
+# Keyword concepts used for behavioral analysis. Multi-variant matching is required
+# because the LLM paraphrases guardrails (e.g. "weekly trade cap", "trade limit",
+# "trades used" all refer to the same cooldown constraint).
+KEYWORD_CONCEPTS = {
+    "loss aversion": ["loss aversion", "loss-aversion"],
+    "CVaR": ["cvar", "conditional value at risk", "expected shortfall"],
+    "cash buffer": ["cash buffer", "cash target", "cash position", "cash level", "cash allocation"],
+    "mean reversion": ["mean reversion", "mean-reversion", "revert to mean", "reverting"],
+    "overbought": ["overbought", "over-bought"],
+    "oversold": ["oversold", "over-sold"],
+    "tail risk": ["tail risk", "tail-risk"],
+    "correlation": ["correlation", "correlated", "correlations"],
+    "diversification": ["diversification", "diversified"],
+    "prospect theory": ["prospect theory"],
+    "regime": ["regime", "volatility regime", "market regime"],
+    "momentum": ["momentum", "trend", "trending"],
+    "drawdown": ["drawdown", "max drawdown"],
+    "let winners run": ["let winners run", "winners run", "ride winners", "run winners"],
+    "trade cap": ["trade cap", "weekly trade", "weekly cap", "trade limit", "trades used", "trades remaining", "weekly trade cap"],
+    "stop-loss": ["stop-loss", "stop loss", "stoploss"],
+    "cooldown": ["cooldown", "cool-down", "holding period", "mandatory hold", "flip cooldown"],
+}
+
+
+def count_keyword_concepts(decisions, keyword_concepts=None):
+    """Count how many decisions mention each behavioral keyword concept.
+
+    Each decision is counted at most once per concept. Matching is
+    case-insensitive and supports multiple variants per concept so that
+    paraphrases are captured (e.g. "weekly trade cap" and "trade limit").
+    """
+    if keyword_concepts is None:
+        keyword_concepts = KEYWORD_CONCEPTS
+    keyword_counts = {concept: 0 for concept in keyword_concepts}
+    for d in decisions:
+        r = d.get("reasoning", "").lower()
+        for concept, variants in keyword_concepts.items():
+            if any(variant in r for variant in variants):
+                keyword_counts[concept] += 1
+    return keyword_counts
+
 def main():
     with open(DATA_DIR / "decision_history.json") as f:
         decisions = json.load(f)
@@ -74,31 +116,8 @@ def main():
     lines.append("")
 
     # Keyword frequency
-    # Each concept maps to one or more case-insensitive substrings to match.
-    keyword_concepts = {
-        "loss aversion": ["loss aversion"],
-        "CVaR": ["cvar"],
-        "cash buffer": ["cash buffer"],
-        "mean reversion": ["mean reversion"],
-        "overbought": ["overbought"],
-        "oversold": ["oversold"],
-        "tail risk": ["tail risk"],
-        "correlation": ["correlation"],
-        "diversification": ["diversification"],
-        "prospect theory": ["prospect theory"],
-        "regime": ["regime"],
-        "momentum": ["momentum"],
-        "drawdown": ["drawdown"],
-        "let winners run": ["let winners run"],
-        "trade cap": ["trade cap", "weekly trade", "trade limit"],
-        "stop-loss": ["stop-loss"],
-    }
-    keyword_counts = {concept: 0 for concept in keyword_concepts}
-    for d in valid:
-        r = d.get("reasoning", "").lower()
-        for concept, variants in keyword_concepts.items():
-            if any(variant in r for variant in variants):
-                keyword_counts[concept] += 1
+    keyword_concepts = KEYWORD_CONCEPTS
+    keyword_counts = count_keyword_concepts(valid, keyword_concepts)
 
     lines.append("BEHAVIORAL KEYWORD FREQUENCY")
     for concept, count in sorted(keyword_counts.items(), key=lambda x: -x[1]):
