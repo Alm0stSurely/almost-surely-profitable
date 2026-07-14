@@ -1,0 +1,55 @@
+
+======================================================================
+LLM DECISION QUALITY ANALYSIS (Enhanced)
+Analysis Period: Last 14 trading days
+Generated: 2026-07-14 22:32:18
+======================================================================
+
+TRADE STATISTICS
+----------------
+Total Trading Days Analyzed: 14
+Total Trades Executed: 22
+  - Buy trades: 19
+  - Sell trades: 3
+Avg Trades per Day: 2.07
+Unique Assets Traded: 12
+
+PERFORMANCE METRICS (5-Day Forward)
+-----------------------------------
+Overall Win Rate: 50.0%
+
+Buy Decisions:
+  - Count: 19
+  - Accuracy (price went up): 52.6%
+  - Avg 5D Forward Return: +0.31%
+
+Sell Decisions:
+  - Count: 3
+  - Accuracy (price went down): 33.3%
+  - Avg 5D Return Avoided: -2.19%
+
+Decision Sharpe Ratio: -0.011
+
+PERFORMANCE METRICS (1-Day Forward)
+-----------------------------------
+Overall Win Rate (1D): 50.0%
+Buy Accuracy (1D): 47.4%
+Sell Accuracy (1D): 66.7%
+
+BEHAVIORAL ANALYSIS
+-------------------
+Overconfidence Check: 0.7/1.0
+  (Lower trading frequency = better discipline)
+
+Diversification Score: 1.0/1.0
+  (Number of unique assets traded)
+
+Loss Aversion Score: 0.27/1.0
+  (Ratio of sells in declining market)
+
+ASSESSMENT
+----------
+~ LLM performance is near random (45-55% win rate)
+⚠ Negative risk-adjusted returns - review strategy
+
+======================================================================
