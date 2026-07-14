@@ -159,9 +159,12 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     # Update current prices in portfolio
     current_prices = fetch_current_prices(list(portfolio.positions.keys()), max_workers=4)
     portfolio.update_prices(current_prices)
-    portfolio.save_state()
-    
-    # Step 3b: Initialize position cooldown manager with adaptive regime
+    # In dry-run mode we still mark positions to market for the current
+    # decision, but we must not persist the updated state to disk.
+    if not dry_run:
+        portfolio.save_state()
+
+    # Step 3b: Initialize position cooldown guardrails...
     print("\n[3b/7] Initializing position cooldown guardrails...")
     
     # Determine regime for adaptive parameters
@@ -349,15 +352,18 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
 
     # Step 6: Save portfolio state
     print("\n[6/7] Saving portfolio state...")
-    portfolio.save_state()
-    print("  ✓ Portfolio state saved")
+    if not dry_run:
+        portfolio.save_state()
+        print("  ✓ Portfolio state saved")
+    else:
+        print("  (DRY RUN - portfolio state not saved)")
     
     # Save cooldown state
     if not dry_run:
         cooldown_mgr.save_state()
         print("  ✓ Cooldown state saved")
     
-    # Step 6.5: Calculate performance metrics (Sharpe, Beta, Alpha)
+    # Step 6.5: Calculating performance metrics (Sharpe, Beta, Alpha)
     print("\n[6.5/7] Calculating performance metrics...")
     
     # Get SPY as benchmark for Beta/Alpha calculation
@@ -424,7 +430,10 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         'portfolio_before': {
             'cash': portfolio_summary['cash'],
             'total_value': portfolio_summary['total_value'],
-            'positions': len(portfolio_summary['positions'])
+            'positions': len(portfolio_summary['positions']),
+            # Persist the pre-trade tail-risk context so offline analysis can
+            # compare it with realized performance and LLM decisions.
+            'risk_metrics': portfolio_summary.get('risk_metrics')
         },
         'decision': {
             'reasoning': decision['reasoning'],
