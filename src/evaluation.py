@@ -144,13 +144,12 @@ def generate_comprehensive_report():
     if decisions:
         print(f"Decisions Analyzed: {len(decisions)} days")
         
-        # Quick stats
-        total_trades = sum(len(d.get("trades", [])) for d in decisions)
+        # Detailed outcomes (consistent with decision_analyzer.py)
+        outcomes = analyzer.analyze_outcomes(decisions)
+        total_trades = outcomes.get('buy_count', 0) + outcomes.get('sell_count', 0)
         print(f"Total Trades: {total_trades}")
         print(f"Avg Trades/Day: {total_trades/len(decisions):.1f}")
         
-        # Detailed outcomes
-        outcomes = analyzer.analyze_outcomes(decisions)
         print(f"\nWin Rate: {outcomes['win_rate']*100:.1f}%")
         print(f"Buy Accuracy: {outcomes['buy_accuracy']*100:.1f}%")
         print(f"Sell Accuracy: {outcomes['sell_accuracy']*100:.1f}%")
