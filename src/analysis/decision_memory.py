@@ -114,10 +114,10 @@ class DecisionMemory:
     
     def get_decision_summary(self, days: int = 30) -> Dict:
         """Generate summary statistics of recent decisions."""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = (datetime.now() - timedelta(days=days)).date()
         recent_decisions = [
-            d for d in self.decisions 
-            if datetime.strptime(d.date, "%Y-%m-%d") >= cutoff_date
+            d for d in self.decisions
+            if datetime.strptime(d.date, "%Y-%m-%d").date() >= cutoff_date
         ]
         
         if not recent_decisions:
