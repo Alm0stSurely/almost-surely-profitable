@@ -696,6 +696,26 @@ class TestEdgeCases:
         assert summary["best_trade"] == 999.0
         assert summary["worst_trade"] == -999.0
 
+    def test_exact_boundary_date_included(self, tmp_path):
+        # A record dated exactly `days` ago should still be included in the window.
+        from unittest.mock import patch
+        from analysis import decision_memory as dm
+
+        records = [
+            make_record(date="2026-06-15", pnl_pct=5.0),  # exactly 30 days before freeze
+            make_record(date="2026-07-14", pnl_pct=3.0),
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+
+        frozen_now = datetime(2026, 7, 15, 12, 0, 0)
+        with patch.object(dm, "datetime", wraps=datetime) as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            summary = mem.get_decision_summary(days=30)
+        assert summary["total_decisions"] == 2
+        assert summary["completed_trades"] == 2
+        assert summary["best_trade"] == 5.0
+
     def test_very_old_dates_not_in_recent_summary(self, tmp_path):
         old = make_record(date="2020-01-01", pnl_pct=100.0)
         path = make_memory_file(tmp_path, [old])
