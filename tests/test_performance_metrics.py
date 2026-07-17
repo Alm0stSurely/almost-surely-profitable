@@ -8,11 +8,13 @@ floating point rounding should not produce colossal or infinite artefacts.
 
 import sys
 import math
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import numpy as np
+import pytest
 
 from risk.performance_metrics import (
     PerformanceMetrics,
@@ -142,6 +144,31 @@ def test_sortino_ratio_near_zero_downside():
 
 def test_sortino_ratio_insufficient_data():
     assert calculate_sortino_ratio(np.array([0.01])) == 0.0
+
+
+def test_sortino_ratio_single_downside_return_no_warning():
+    """A single downside return used to trigger np.std(ddof=1) RuntimeWarning."""
+    returns = np.array([0.001, 0.001, -0.002])
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        result = calculate_sortino_ratio(returns, risk_free_rate=0.0)
+    runtime_warnings = [w for w in recorded if issubclass(w.category, RuntimeWarning)]
+    assert not runtime_warnings
+    assert result == 0.0
+
+
+def test_sortino_ratio_positive_mean_with_single_downside_is_infinite():
+    returns = np.array([0.010, 0.008, -0.001])
+    result = calculate_sortino_ratio(returns, risk_free_rate=0.0)
+    assert math.isinf(result) and result > 0
+
+
+def test_sortino_ratio_two_downside_returns():
+    returns = np.array([0.005, -0.002, -0.004])
+    result = calculate_sortino_ratio(returns, risk_free_rate=0.0, annualized=False)
+    downside = np.array([-0.002, -0.004])
+    expected = np.mean(returns) / np.std(downside, ddof=1)
+    assert math.isclose(result, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +304,19 @@ def test_calculate_all_metrics_insufficient_data():
     metrics = calculate_all_metrics(np.array([0.01]))
     assert metrics.total_return == 0.0
     assert metrics.sharpe_ratio == 0.0
+
+
+def test_calculate_all_metrics_small_sample_no_warning():
+    """Ensure a realistic 3-day weekly return vector does not warn."""
+    returns = np.array([0.005, 0.003, -0.002])
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        metrics = calculate_all_metrics(returns)
+    runtime_warnings = [w for w in recorded if issubclass(w.category, RuntimeWarning)]
+    assert not runtime_warnings
+    assert metrics.sharpe_ratio != 0.0
+    assert math.isinf(metrics.sortino_ratio) and metrics.sortino_ratio > 0
+    assert metrics.volatility > 0.0
 
 
 # ---------------------------------------------------------------------------
