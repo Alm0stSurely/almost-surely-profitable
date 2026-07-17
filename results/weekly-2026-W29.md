@@ -7,11 +7,11 @@
 | Metric | Value |
 |--------|-------|
 | Cash | €2623.93 |
-| Positions Value | €7113.38 |
-| **Total Value** | **€9737.30** |
-| Total Return | -2.63% |
+| Positions Value | €7102.75 |
+| **Total Value** | **€9726.67** |
+| Total Return | -2.73% |
 | Realized P&L | €-455.76 |
-| Unrealized P&L | €31.84 |
+| Unrealized P&L | €21.21 |
 | Number of Positions | 10 |
 
 ## Weekly Performance
@@ -19,18 +19,18 @@
 | Metric | Value |
 |--------|-------|
 | Start of Week | €9718.40 |
-| End of Week | €9737.30 |
-| Weekly Return | +0.19% |
-| Trading Days | 4 |
+| End of Week | €9726.67 |
+| Weekly Return | +0.09% |
+| Trading Days | 5 |
 
 ## Performance Metrics
 
 | Metric | Value | Interpretation |
 |--------|-------|----------------|
-| Sharpe Ratio | 1.12 | Good |
-| Sortino Ratio | inf | Good |
-| Max Drawdown | -0.38% | Low |
-| Volatility | 5.92% | Low |
+| Sharpe Ratio | 0.71 | Poor |
+| Sortino Ratio | 0.84 | Poor |
+| Max Drawdown | -0.40% | Low |
+| Volatility | 4.85% | Low |
 
 ## Risk Metrics
 
@@ -38,23 +38,23 @@
 |--------|-------|
 | CVaR 95% | 0.38% |
 | VaR 95% | 0.33% |
-| Skewness | -1.31 |
-| Kurtosis | 0.00 |
+| Skewness | -0.81 |
+| Kurtosis | 0.51 |
 
 ## Positions
 
 | Ticker | Quantity | Price | Value | P&L % | P&L € |
 |--------|----------|-------|-------|-------|-------|
-| SAN.PA | 4.91 | €76.80 | €377.02 | +5.09% | €+18.27 |
-| DBA | 9.31 | €27.59 | €256.98 | +3.37% | €+8.38 |
-| SPY | 2.07 | €750.76 | €1556.05 | +0.27% | €+4.13 |
-| QQQ | 0.72 | €706.02 | €506.11 | -3.27% | €-17.09 |
-| TTE.PA | 16.31 | €70.01 | €1141.62 | +2.91% | €+32.29 |
-| IJR | 6.04 | €147.18 | €889.29 | +0.25% | €+2.24 |
-| FEZ | 10.99 | €68.01 | €747.29 | -0.89% | €-6.70 |
-| GLD | 1.70 | €365.01 | €619.71 | -3.31% | €-21.19 |
-| TLT | 6.49 | €84.22 | €546.37 | +0.30% | €+1.61 |
-| REET | 16.59 | €28.51 | €472.95 | +2.14% | €+9.90 |
+| SAN.PA | 4.91 | €77.40 | €379.96 | +5.91% | €+21.21 |
+| DBA | 9.31 | €27.83 | €259.27 | +4.29% | €+10.66 |
+| SPY | 2.07 | €743.16 | €1540.28 | -0.75% | €-11.63 |
+| QQQ | 0.72 | €695.30 | €498.42 | -4.74% | €-24.77 |
+| TTE.PA | 16.31 | €70.60 | €1151.24 | +3.78% | €+41.91 |
+| IJR | 6.04 | €146.01 | €882.22 | -0.54% | €-4.83 |
+| FEZ | 10.99 | €67.73 | €744.21 | -1.30% | €-9.78 |
+| GLD | 1.70 | €368.42 | €625.49 | -2.40% | €-15.40 |
+| TLT | 6.49 | €84.53 | €548.39 | +0.67% | €+3.63 |
+| REET | 16.59 | €28.52 | €473.25 | +2.20% | €+10.20 |
 
 ## Trades This Week
 
