@@ -170,7 +170,9 @@ def calculate_sortino_ratio(
     # Downside deviation (only negative returns)
     downside_returns = excess_returns[excess_returns < 0]
     
-    if len(downside_returns) == 0:
+    if len(downside_returns) < 2:
+        # Insufficient observations to estimate a sample standard deviation
+        # (np.std with ddof=1 on fewer than 2 elements raises RuntimeWarning).
         return float('inf') if mean_excess > 0 else 0.0
     
     downside_std = np.std(downside_returns, ddof=1)
