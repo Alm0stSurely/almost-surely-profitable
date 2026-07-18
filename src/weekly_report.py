@@ -6,6 +6,7 @@ Run every Friday after market close to generate weekly performance report.
 
 import sys
 import numpy as np
+import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -28,7 +29,8 @@ REPORTS_DIR = RESULTS_DIR / "reports"
 
 
 def calculate_weekly_returns(week_results):
-    """Calculate daily returns from week results."""
+    """Calculate daily returns and their corresponding dates from week results."""
+    dates = []
     returns = []
     for i in range(1, len(week_results)):
         prev_value = week_results[i-1].get('portfolio_after', {}).get('total_value', 0)
@@ -36,7 +38,8 @@ def calculate_weekly_returns(week_results):
         if prev_value > 0:
             daily_return = (curr_value - prev_value) / prev_value
             returns.append(daily_return)
-    return np.array(returns)
+            dates.append(week_results[i].get('date'))
+    return dates, np.array(returns)
 
 
 def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
@@ -44,11 +47,12 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
     
     Args:
         start_date: Start date string
-        end_date: End date string
+        end_date: End date string (inclusive)
         benchmarks: List of benchmark tickers, or single string. Defaults to ['SPY', 'CAC.PA', 'FEZ'].
     
     Returns:
-        Dict mapping benchmark ticker to returns array, or None for failed fetches.
+        Dict mapping benchmark ticker to {'returns': np.ndarray, 'cumulative_return': float},
+        or None for failed fetches.
     """
     if benchmarks is None:
         benchmarks = ['SPY', 'CAC.PA', 'FEZ']
@@ -57,18 +61,24 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
     
     result = {}
     try:
-        data = fetch_historical_data(benchmarks, period="1mo")
+        # yfinance end is exclusive, so add one day to include end_date.
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+        end_exclusive = end_dt.strftime('%Y-%m-%d')
+        data = fetch_historical_data(benchmarks, start=start_date, end=end_exclusive)
         for benchmark in benchmarks:
-            if benchmark in data:
+            if benchmark in data and 'Close' in data[benchmark].columns and len(data[benchmark]) >= 2:
                 df = data[benchmark]
-                if 'Close' in df.columns and len(df) >= 2:
-                    closes = df['Close'].values
-                    returns = np.diff(closes) / closes[:-1]
-                    result[benchmark] = returns
-                else:
-                    print(f"  ⚠ Not enough data for benchmark {benchmark}")
+                if hasattr(df.index, 'tz') and df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                closes = df['Close'].dropna().values
+                returns = np.diff(closes) / closes[:-1]
+                cumulative_return = float(closes[-1] / closes[0] - 1)
+                result[benchmark] = {
+                    'returns': returns,
+                    'cumulative_return': cumulative_return,
+                }
             else:
-                print(f"  ⚠ Could not fetch benchmark {benchmark}")
+                print(f"  ⚠ Not enough data for benchmark {benchmark}")
     except Exception as e:
         print(f"  ⚠ Could not fetch benchmarks: {e}")
     
@@ -126,7 +136,7 @@ def generate_weekly_report():
         print(f"   Weekly return: {weekly_return:+.2f}%")
     
     # Calculate performance metrics
-    portfolio_returns = calculate_weekly_returns(week_results)
+    portfolio_dates, portfolio_returns = calculate_weekly_returns(week_results)
     benchmark_returns = fetch_benchmark_returns(
         week_start.strftime('%Y-%m-%d'),
         today.strftime('%Y-%m-%d')
@@ -136,7 +146,7 @@ def generate_weekly_report():
         print(f"\n📊 Performance Metrics (Week):")
         
         # Calculate metrics against each benchmark
-        spy_returns = benchmark_returns.get('SPY') if benchmark_returns else None
+        spy_returns = benchmark_returns.get('SPY', {}).get('returns') if benchmark_returns else None
         metrics = calculate_all_metrics(portfolio_returns, spy_returns)
         
         print(f"   Sharpe Ratio: {metrics.sharpe_ratio:.2f}")
@@ -152,16 +162,6 @@ def generate_weekly_report():
         if metrics.information_ratio is not None:
             print(f"   Information Ratio (vs SPY): {metrics.information_ratio:.2f}")
         
-        # Compare against CAC.PA if available
-        cac_returns = benchmark_returns.get('CAC.PA') if benchmark_returns else None
-        if cac_returns is not None and len(cac_returns) == len(portfolio_returns):
-            cac_metrics = calculate_all_metrics(portfolio_returns, cac_returns)
-            if cac_metrics.beta is not None:
-                print(f"   Beta (vs CAC.PA): {cac_metrics.beta:.2f}")
-                print(f"   Alpha (vs CAC.PA): {cac_metrics.alpha:.2%}")
-        elif cac_returns is not None:
-            print(f"   ⚠ CAC.PA data length mismatch, skipping comparison")
-        
         # Risk metrics (CVaR)
         cvar_result = calculate_portfolio_cvar(
             {'portfolio': portfolio_returns},
@@ -174,6 +174,15 @@ def generate_weekly_report():
         tail = tail_risk_analysis(portfolio_returns, spy_returns)
         print(f"   Skewness: {tail.get('skewness', 0):.2f}")
         print(f"   Kurtosis: {tail.get('kurtosis', 0):.2f}")
+    
+    # Benchmark cumulative comparison for the week
+    if benchmark_returns:
+        print(f"\n📊 Benchmark Cumulative Returns (Week):")
+        for benchmark in ['SPY', 'CAC.PA', 'FEZ']:
+            if benchmark in benchmark_returns:
+                bench_cum = benchmark_returns[benchmark]['cumulative_return']
+                alpha = weekly_return / 100 - bench_cum
+                print(f"   {benchmark}: {bench_cum*100:+.2f}% (alpha: {alpha*100:+.2f}%)")
     
     # Positions
     if summary['positions']:
@@ -266,19 +275,17 @@ def generate_weekly_report():
             f.write(f"| Skewness | {tail.get('skewness', 0):.2f} |\n")
             f.write(f"| Kurtosis | {tail.get('kurtosis', 0):.2f} |\n")
             
-            # CAC.PA comparison
-            if cac_returns is not None and len(cac_returns) == len(portfolio_returns):
-                f.write(f"\n## Benchmark Comparison: CAC 40\n\n")
-                f.write(f"| Metric | Value | Interpretation |\n")
-                f.write(f"|--------|-------|----------------|\n")
-                if cac_metrics.beta is not None:
-                    cac_beta_interp = "Neutral" if 0.9 < cac_metrics.beta < 1.1 else ("Defensive" if cac_metrics.beta < 0.9 else "Aggressive")
-                    f.write(f"| Beta (vs CAC.PA) | {cac_metrics.beta:.2f} | {cac_beta_interp} |\n")
-                    cac_alpha_interp = "Outperform" if cac_metrics.alpha and cac_metrics.alpha > 0 else "Underperform"
-                    f.write(f"| Alpha (vs CAC.PA) | {cac_metrics.alpha:.2%} | {cac_alpha_interp} |\n")
-                if cac_metrics.information_ratio is not None:
-                    cac_ir_interp = "Good" if cac_metrics.information_ratio > 0.5 else "Neutral"
-                    f.write(f"| Information Ratio (vs CAC.PA) | {cac_metrics.information_ratio:.2f} | {cac_ir_interp} |\n")
+            # Benchmark cumulative comparison
+            if benchmark_returns:
+                f.write(f"\n## Benchmark Cumulative Returns\n\n")
+                f.write(f"| Benchmark | Weekly Return | Alpha vs Portfolio |\n")
+                f.write(f"|-----------|---------------|---------------------|\n")
+                for benchmark in ['SPY', 'CAC.PA', 'FEZ']:
+                    if benchmark in benchmark_returns:
+                        bench_cum = benchmark_returns[benchmark]['cumulative_return']
+                        alpha = weekly_return / 100 - bench_cum
+                        bench_interp = "Outperform" if alpha > 0 else ("Underperform" if alpha < 0 else "Neutral")
+                        f.write(f"| {benchmark} | {bench_cum*100:+.2f}% | {alpha*100:+.2f}% ({bench_interp}) |\n")
         
         # Positions
         f.write(f"\n## Positions\n\n")
