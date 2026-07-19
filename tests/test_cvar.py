@@ -120,6 +120,49 @@ def test_drawdown_cvar():
     print("✓ Drawdown CVaR test passed\n")
 
 
+def test_tail_risk_small_sample():
+    """Test tail_risk_analysis on small sample sizes."""
+    print("Test 5: Small-Sample Tail Risk")
+    print("-" * 40)
+    
+    # Empty input should return empty dict
+    assert tail_risk_analysis(np.array([])) == {}
+    
+    # Single observation: no sample standard deviation possible
+    result = tail_risk_analysis(np.array([0.01]))
+    assert 'sortino_ratio' not in result
+    
+    # Two observations, one negative: sortino should not be added because
+    # only one downside observation exists and ddof=1 is undefined.
+    result = tail_risk_analysis(np.array([0.01, -0.02]))
+    assert 'sortino_ratio' not in result
+    
+    # Two observations, both negative: two downside observations, sortino defined
+    result = tail_risk_analysis(np.array([-0.01, -0.02]))
+    assert 'sortino_ratio' in result
+    assert np.isfinite(result['sortino_ratio'])
+    
+    # Benchmark shorter than returns: should align and compute if enough data
+    result = tail_risk_analysis(
+        np.array([0.01, -0.02, 0.005, 0.001]),
+        np.array([0.005, -0.01])
+    )
+    assert 'tracking_error' in result
+    assert 'information_ratio' in result
+    assert np.isfinite(result['tracking_error'])
+    assert np.isfinite(result['information_ratio'])
+    
+    # Benchmark with only one observation: no tracking error possible
+    result = tail_risk_analysis(
+        np.array([0.01, -0.02]),
+        np.array([0.005])
+    )
+    assert 'tracking_error' not in result
+    assert 'information_ratio' not in result
+    
+    print("✓ Small-sample tail risk test passed\n")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("CVaR Module Test Suite")
@@ -129,6 +172,7 @@ if __name__ == "__main__":
     test_basic_cvar()
     test_portfolio_cvar()
     test_tail_risk_analysis()
+    test_tail_risk_small_sample()
     test_drawdown_cvar()
     
     print("=" * 60)
