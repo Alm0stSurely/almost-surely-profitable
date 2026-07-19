@@ -190,21 +190,31 @@ def tail_risk_analysis(
     metrics['max_drawdown'] = float(np.min(drawdowns))
     
     # Sortino ratio (downside risk adjusted return)
+    # Use sample standard deviation (ddof=1) to match performance_metrics.py.
+    # A single downside observation cannot estimate a sample std, so we
+    # require at least two observations and guard numerical noise.
     downside_returns = returns[returns < 0]
-    if len(downside_returns) > 0:
-        downside_std = np.std(downside_returns)
-        if downside_std > 0:
+    if len(downside_returns) >= 2:
+        downside_std = np.std(downside_returns, ddof=1)
+        if abs(downside_std) > 1e-15 and not np.isnan(downside_std):
             metrics['sortino_ratio'] = float(np.mean(returns) / downside_std * np.sqrt(252))
     
     # Compare to benchmark if provided
-    if benchmark_returns is not None and len(benchmark_returns) == len(returns):
-        # Tracking error
-        diff = returns - benchmark_returns
-        metrics['tracking_error'] = float(np.std(diff) * np.sqrt(252))
+    if benchmark_returns is not None and len(benchmark_returns) > 0 and len(returns) > 0:
+        # Align lengths (same convention as performance_metrics.py) so mixed
+        # market calendars do not silently discard the comparison.
+        min_len = min(len(returns), len(benchmark_returns))
+        aligned_returns = returns[-min_len:]
+        aligned_benchmark = benchmark_returns[-min_len:]
+        diff = aligned_returns - aligned_benchmark
         
-        # Information ratio
-        if metrics['tracking_error'] > 0:
-            metrics['information_ratio'] = float(np.mean(diff) / np.std(diff) * np.sqrt(252))
+        # Need at least two observations to estimate a sample tracking error.
+        if len(diff) >= 2:
+            tracking_error = np.std(diff, ddof=1) * np.sqrt(252)
+            if abs(tracking_error) > 1e-15 and not np.isnan(tracking_error):
+                metrics['tracking_error'] = float(tracking_error)
+                mean_active = np.mean(diff) * 252
+                metrics['information_ratio'] = float(mean_active / tracking_error)
     
     return metrics
 
