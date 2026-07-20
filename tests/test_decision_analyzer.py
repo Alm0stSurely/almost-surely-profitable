@@ -581,7 +581,7 @@ def test_generate_report_with_data(mock_fetch, analyzer, tmp_path, mock_price_da
     with open(tmp_path / "2026-05-10.json", "w") as f:
         json.dump({
             "date": "2026-05-10",
-            "decision": {"actions": [{"ticker": "SPY", "action": "buy"}], "reasoning": "Test"},
+            "decision": {"actions": [{"ticker": "SPY", "action": "buy"}], "reasoning": "Bullish momentum"},
             "executed_trades": [{"ticker": "SPY", "action": "buy", "price": 176.0}],
             "portfolio_before": {},
             "portfolio_after": {},

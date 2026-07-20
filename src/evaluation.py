@@ -22,6 +22,7 @@ from analysis.decision_analyzer import DecisionAnalyzer
 from risk.performance_metrics import calculate_all_metrics
 from risk.cvar import calculate_portfolio_cvar
 from data.fetch_market_data import fetch_historical_data
+from utils import load_valid_daily_results_limited
 
 
 def load_portfolio_data():
@@ -34,23 +35,8 @@ def load_portfolio_data():
 
 
 def load_recent_results(days=30):
-    """Load recent daily results for analysis."""
-    results_dir = Path("results/daily")
-    if not results_dir.exists():
-        return []
-    
-    files = sorted(results_dir.glob("*.json"))[-days:]
-    results = []
-    
-    for file in files:
-        try:
-            with open(file) as f:
-                data = json.load(f)
-                results.append(data)
-        except:
-            continue
-    
-    return results
+    """Load recent valid daily results for analysis."""
+    return load_valid_daily_results_limited("results/daily", days=days)
 
 
 def _get_benchmark_return(start_date: str, end_date: str, benchmark: str = "SPY") -> Optional[float]:

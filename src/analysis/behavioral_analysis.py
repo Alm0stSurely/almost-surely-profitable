@@ -3,7 +3,12 @@ import json
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-import glob
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from utils import load_valid_daily_results
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "results"
@@ -125,13 +130,11 @@ def main():
         lines.append(f"{concept:20s}: {count:4d} ({pct:5.1f}%)")
     lines.append("")
 
-    # Cash creep from daily results
-    daily_files = sorted(glob.glob(str(RESULTS_DIR / "daily" / "2026-*.json")))
+    # Cash creep from daily results (skip dry-run/test artifacts)
+    daily_results = load_valid_daily_results(str(RESULTS_DIR / "daily"))[-20:]
     lines.append("CASH LEVELS (recent 20 daily results)")
     lines.append(f"{'Date':12s} {'Cash %':>8s} {'Positions':>10s} {'Total Return':>14s} {'Trades':>7s}")
-    for f in daily_files[-20:]:
-        with open(f) as fh:
-            data = json.load(fh)
+    for data in daily_results:
         pa = data.get("portfolio_after", {})
         cash = pa.get("cash", 0)
         total = pa.get("total_value", 1)

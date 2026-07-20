@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 
+from utils import load_valid_daily_results
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -25,27 +28,15 @@ class ReportGenerator:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None
     ) -> List[Dict]:
-        """Load daily results from JSON files."""
-        results = []
-        
-        for file in sorted(self.results_dir.glob("*.json")):
-            try:
-                with open(file, 'r') as f:
-                    data = json.load(f)
-                
-                date = data.get('date', file.stem)
-                
-                # Filter by date range
-                if start_date and date < start_date:
-                    continue
-                if end_date and date > end_date:
-                    continue
-                
-                results.append(data)
-            except Exception as e:
-                logger.warning(f"Error loading {file}: {e}")
-        
-        return sorted(results, key=lambda x: x.get('date', ''))
+        """Load valid daily results from JSON files."""
+        results = load_valid_daily_results(str(self.results_dir))
+
+        if start_date:
+            results = [r for r in results if r.get('date', '') >= start_date]
+        if end_date:
+            results = [r for r in results if r.get('date', '') <= end_date]
+
+        return results
     
     def generate_weekly_report(self, year: int, week: int) -> Dict:
         """

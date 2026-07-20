@@ -26,6 +26,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent / ".."))
 
 from data.fetch_market_data import fetch_historical_data, fetch_current_prices
+from utils import is_valid_daily_result
 
 
 class DecisionAnalyzer:
@@ -51,6 +52,10 @@ class DecisionAnalyzer:
             try:
                 with open(file) as f:
                     data = json.load(f)
+                
+                # Skip dry-run and test artifacts
+                if not is_valid_daily_result(data):
+                    continue
                 
                 # Extract date from filename or data
                 date_str = data.get("date", file.stem)
