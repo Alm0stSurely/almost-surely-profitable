@@ -66,6 +66,18 @@ def calculate_cvar(
     return results
 
 
+def _zero_cvar_result() -> CVaRResult:
+    """Return a zeroed CVaRResult for degenerate inputs."""
+    return CVaRResult(
+        cvar_95=0.0,
+        cvar_99=0.0,
+        var_95=0.0,
+        var_99=0.0,
+        worst_case=0.0,
+        expected_shortfall_pct=0.0,
+    )
+
+
 def calculate_portfolio_cvar(
     position_returns: Dict[str, np.ndarray],
     weights: Dict[str, float],
@@ -82,13 +94,28 @@ def calculate_portfolio_cvar(
     Returns:
         CVaRResult with various risk metrics
     """
+    # Guard degenerate inputs so callers always receive a well-formed result.
+    if not position_returns:
+        return _zero_cvar_result()
+    
+    # Normalize weights so they represent actual portfolio fractions.
+    total_weight = sum(weights.values())
+    if total_weight <= 0.0 or not np.isfinite(total_weight):
+        return _zero_cvar_result()
+    
+    normalized_weights = {ticker: weight / total_weight for ticker, weight in weights.items()}
+    
     # Align returns (same length)
     min_len = min(len(r) for r in position_returns.values())
+    if min_len == 0:
+        return _zero_cvar_result()
     
     # Calculate portfolio returns
     portfolio_returns = np.zeros(min_len)
     for ticker, returns in position_returns.items():
-        weight = weights.get(ticker, 0.0)
+        weight = normalized_weights.get(ticker, 0.0)
+        if weight == 0.0:
+            continue
         portfolio_returns += returns[-min_len:] * weight
     
     # Calculate CVaR at different levels
