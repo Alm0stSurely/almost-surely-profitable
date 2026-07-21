@@ -29,6 +29,11 @@ class CVaRResult:
     expected_shortfall_pct: float  # Expected shortfall as percentage
 
 
+def _has_non_finite(arr: np.ndarray) -> bool:
+    """Return True if the array contains any NaN or infinite value."""
+    return not np.isfinite(arr).all()
+
+
 def calculate_cvar(
     returns: np.ndarray,
     confidence_levels: List[float] = [0.95, 0.99]
@@ -43,7 +48,7 @@ def calculate_cvar(
     Returns:
         Dictionary mapping confidence level to CVaR value
     """
-    if len(returns) == 0:
+    if len(returns) == 0 or _has_non_finite(returns):
         return {level: 0.0 for level in confidence_levels}
     
     # Convert to losses (positive values are losses)
@@ -96,6 +101,11 @@ def calculate_portfolio_cvar(
     """
     # Guard degenerate inputs so callers always receive a well-formed result.
     if not position_returns:
+        return _zero_cvar_result()
+    
+    # Reject any position return series containing non-finite values so that
+    # NaN/Inf cannot propagate into the portfolio aggregation.
+    if any(_has_non_finite(r) for r in position_returns.values()):
         return _zero_cvar_result()
     
     # Normalize weights so they represent actual portfolio fractions.
@@ -152,6 +162,9 @@ def calculate_drawdown_cvar(
     Returns:
         CVaR of drawdowns
     """
+    if len(equity_curve) == 0 or _has_non_finite(equity_curve):
+        return 0.0
+    
     # Calculate rolling maximum (peak)
     rolling_max = pd.Series(equity_curve).rolling(window=window, min_periods=1).max()
     
@@ -183,7 +196,7 @@ def tail_risk_analysis(
     Returns:
         Dictionary with tail risk metrics
     """
-    if len(returns) == 0:
+    if len(returns) == 0 or _has_non_finite(returns):
         return {}
     
     metrics = {}
