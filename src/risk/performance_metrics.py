@@ -41,6 +41,11 @@ class PerformanceMetrics:
     tracking_error: Optional[float]
 
 
+def _has_non_finite(arr: np.ndarray) -> bool:
+    """Return True if the array contains any NaN or infinite value."""
+    return not np.isfinite(arr).all()
+
+
 def calculate_sharpe_ratio(
     returns: np.ndarray,
     risk_free_rate: float = 0.02,
@@ -64,7 +69,7 @@ def calculate_sharpe_ratio(
     Returns:
         Sharpe ratio (higher is better, >1 is good, >2 is very good)
     """
-    if len(returns) < 2:
+    if len(returns) < 2 or _has_non_finite(returns):
         return 0.0
     
     # Convert annual risk-free to daily
@@ -114,6 +119,9 @@ def calculate_beta_alpha(
     if len(portfolio_returns) < 30 or len(benchmark_returns) < 30:
         return None, None
     
+    if _has_non_finite(portfolio_returns) or _has_non_finite(benchmark_returns):
+        return None, None
+    
     if len(portfolio_returns) != len(benchmark_returns):
         # Align lengths
         min_len = min(len(portfolio_returns), len(benchmark_returns))
@@ -160,7 +168,7 @@ def calculate_sortino_ratio(
     Returns:
         Sortino ratio (higher is better)
     """
-    if len(returns) < 2:
+    if len(returns) < 2 or _has_non_finite(returns):
         return 0.0
     
     daily_rf = risk_free_rate / 252
@@ -173,7 +181,7 @@ def calculate_sortino_ratio(
     if len(downside_returns) < 2:
         # Insufficient observations to estimate a sample standard deviation
         # (np.std with ddof=1 on fewer than 2 elements raises RuntimeWarning).
-        return float('inf') if mean_excess > 0 else 0.0
+        return 0.0
     
     downside_std = np.std(downside_returns, ddof=1)
     
@@ -207,7 +215,7 @@ def calculate_calmar_ratio(
     Returns:
         Calmar ratio (higher is better, >0.5 is good, >1 is excellent)
     """
-    if len(returns) < 2:
+    if len(returns) < 2 or _has_non_finite(returns):
         return 0.0
     
     # Annualized return
@@ -223,12 +231,12 @@ def calculate_calmar_ratio(
         max_drawdown = np.min(drawdowns)
     
     if abs(max_drawdown) < 1e-15 or np.isnan(max_drawdown):
-        return float('inf') if annualized_return > 0 else 0.0
+        return 0.0
     if max_drawdown > 0:
         return 0.0
     
     calmar = annualized_return / abs(max_drawdown)
-    return float(calmar)
+    return float(calmar) if np.isfinite(calmar) else 0.0
 
 
 def calculate_treynor_ratio(
@@ -251,14 +259,14 @@ def calculate_treynor_ratio(
     Returns:
         Treynor ratio or None if beta is invalid
     """
-    if len(returns) < 2 or beta is None or abs(beta) < 1e-15 or np.isnan(beta):
+    if len(returns) < 2 or beta is None or abs(beta) < 1e-15 or np.isnan(beta) or _has_non_finite(returns):
         return None
     
     daily_rf = risk_free_rate / 252
     excess_return = np.mean(returns) - daily_rf
     
     treynor = (excess_return * 252) / beta
-    return float(treynor)
+    return float(treynor) if np.isfinite(treynor) else None
 
 
 def calculate_information_ratio(
@@ -278,6 +286,9 @@ def calculate_information_ratio(
         Tuple of (information_ratio, tracking_error)
     """
     if len(portfolio_returns) < 30 or len(benchmark_returns) < 30:
+        return None, None
+    
+    if _has_non_finite(portfolio_returns) or _has_non_finite(benchmark_returns):
         return None, None
     
     min_len = min(len(portfolio_returns), len(benchmark_returns))
@@ -316,7 +327,7 @@ def calculate_all_metrics(
     Returns:
         PerformanceMetrics dataclass with all calculated metrics
     """
-    if len(returns) < 2:
+    if len(returns) < 2 or _has_non_finite(returns):
         return PerformanceMetrics(
             total_return=0.0,
             annualized_return=0.0,
@@ -367,6 +378,20 @@ def calculate_all_metrics(
             treynor = calculate_treynor_ratio(returns, beta, risk_free_rate)
         
         info_ratio, tracking_err = calculate_information_ratio(returns, benchmark_returns)
+    
+    # Ensure every field is finite before returning to downstream consumers.
+    total_return = float(total_return) if np.isfinite(total_return) else 0.0
+    annualized_return = float(annualized_return) if np.isfinite(annualized_return) else 0.0
+    volatility = float(volatility) if np.isfinite(volatility) else 0.0
+    max_drawdown = float(max_drawdown) if np.isfinite(max_drawdown) else 0.0
+    sharpe = float(sharpe) if np.isfinite(sharpe) else 0.0
+    sortino = float(sortino) if np.isfinite(sortino) else 0.0
+    calmar = float(calmar) if np.isfinite(calmar) else 0.0
+    beta = float(beta) if beta is not None and np.isfinite(beta) else None
+    alpha = float(alpha) if alpha is not None and np.isfinite(alpha) else None
+    treynor = float(treynor) if treynor is not None and np.isfinite(treynor) else None
+    info_ratio = float(info_ratio) if info_ratio is not None and np.isfinite(info_ratio) else None
+    tracking_err = float(tracking_err) if tracking_err is not None and np.isfinite(tracking_err) else None
     
     return PerformanceMetrics(
         total_return=total_return,

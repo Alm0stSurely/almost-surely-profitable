@@ -8,6 +8,7 @@ floating point rounding should not produce colossal or infinite artefacts.
 
 import sys
 import math
+import json
 import warnings
 from pathlib import Path
 
@@ -129,10 +130,10 @@ def test_sortino_ratio_basic():
 
 
 def test_sortino_ratio_no_downside():
-    """All-positive returns produce infinite Sortino if excess return > 0."""
+    """All-positive returns have no downside volatility → Sortino is 0.0."""
     returns = np.full(30, 0.002)
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert math.isinf(sortino) and sortino > 0
+    assert sortino == 0.0
 
 
 def test_sortino_ratio_near_zero_downside():
@@ -157,10 +158,16 @@ def test_sortino_ratio_single_downside_return_no_warning():
     assert result == 0.0
 
 
-def test_sortino_ratio_positive_mean_with_single_downside_is_infinite():
+def test_sortino_ratio_positive_mean_with_single_downside_is_zero():
     returns = np.array([0.010, 0.008, -0.001])
     result = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert math.isinf(result) and result > 0
+    assert result == 0.0
+
+
+def test_sortino_ratio_non_finite_input():
+    """NaN/Inf inputs should not propagate through the Sortino ratio."""
+    assert calculate_sortino_ratio(np.array([0.01, np.nan, -0.01])) == 0.0
+    assert calculate_sortino_ratio(np.array([0.01, np.inf, -0.01])) == 0.0
 
 
 def test_sortino_ratio_two_downside_returns():
@@ -184,17 +191,23 @@ def test_calmar_ratio_basic():
 
 
 def test_calmar_ratio_zero_drawdown():
-    """Constantly increasing series has zero drawdown -> inf if return positive."""
+    """Constantly increasing series has zero drawdown → Calmar is 0.0."""
     returns = np.full(30, 0.001)
     calmar = calculate_calmar_ratio(returns)
-    assert math.isinf(calmar) and calmar > 0
+    assert calmar == 0.0
 
 
 def test_calmar_ratio_near_zero_drawdown():
     """A tiny but non-zero drawdown below the tolerance should be treated as zero."""
     returns = np.full(30, 0.001)
     calmar = calculate_calmar_ratio(returns, max_drawdown=1e-16)
-    assert math.isinf(calmar) and calmar > 0
+    assert calmar == 0.0
+
+
+def test_calmar_ratio_non_finite_input():
+    """NaN/Inf inputs should not propagate through the Calmar ratio."""
+    assert calculate_calmar_ratio(np.array([0.01, np.nan, -0.01])) == 0.0
+    assert calculate_calmar_ratio(np.array([0.01, np.inf, -0.01])) == 0.0
 
 
 def test_calmar_ratio_positive_drawdown():
@@ -307,7 +320,7 @@ def test_calculate_all_metrics_insufficient_data():
 
 
 def test_calculate_all_metrics_small_sample_no_warning():
-    """Ensure a realistic 3-day weekly return vector does not warn."""
+    """Ensure a realistic 3-day weekly return vector does not warn and stays finite."""
     returns = np.array([0.005, 0.003, -0.002])
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
@@ -315,8 +328,53 @@ def test_calculate_all_metrics_small_sample_no_warning():
     runtime_warnings = [w for w in recorded if issubclass(w.category, RuntimeWarning)]
     assert not runtime_warnings
     assert metrics.sharpe_ratio != 0.0
-    assert math.isinf(metrics.sortino_ratio) and metrics.sortino_ratio > 0
+    assert metrics.sortino_ratio == 0.0
+    assert np.isfinite(metrics.calmar_ratio)
     assert metrics.volatility > 0.0
+
+
+def test_calculate_all_metrics_non_finite_input():
+    """NaN/Inf returns should yield a fully zeroed, finite metrics object."""
+    for bad in [np.nan, np.inf, -np.inf]:
+        returns = np.array([0.01, bad, -0.01])
+        metrics = calculate_all_metrics(returns)
+        assert metrics.total_return == 0.0
+        assert metrics.sharpe_ratio == 0.0
+        assert metrics.sortino_ratio == 0.0
+        assert metrics.calmar_ratio == 0.0
+        assert metrics.volatility == 0.0
+        assert metrics.max_drawdown == 0.0
+        assert metrics.beta is None
+        assert metrics.alpha is None
+        assert metrics.information_ratio is None
+        assert metrics.tracking_error is None
+
+
+def test_calculate_all_metrics_json_serializable():
+    """The metrics object must serialize to valid JSON (no Infinity)."""
+    returns = np.array([0.005, 0.003, -0.002])
+    metrics = calculate_all_metrics(returns)
+    payload = {
+        'sharpe_ratio': metrics.sharpe_ratio,
+        'sortino_ratio': metrics.sortino_ratio,
+        'calmar_ratio': metrics.calmar_ratio,
+        'volatility': metrics.volatility,
+        'max_drawdown': metrics.max_drawdown,
+    }
+    # json.dumps allows allow_nan=True by default; we want strict JSON.
+    text = json.dumps(payload, allow_nan=False)
+    assert 'Infinity' not in text
+    assert 'NaN' not in text
+    assert json.loads(text) == payload
+
+
+def test_calculate_all_metrics_basic():
+    """All metrics with a simple return series and benchmark."""
+    returns = np.linspace(-0.01, 0.01, 60)
+    benchmark = np.linspace(-0.005, 0.005, 60)
+    metrics = calculate_all_metrics(returns, benchmark_returns=benchmark)
+    assert isinstance(metrics, PerformanceMetrics)
+    assert metrics.volatility > 0
 
 
 # ---------------------------------------------------------------------------
