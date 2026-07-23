@@ -164,18 +164,18 @@ def test_calculate_downside_volatility_insufficient_data():
 # ---------------------------------------------------------------------------
 
 def test_calculate_sortino_ratio_all_positive():
-    """Sortino is infinite when all returns exceed the risk-free rate."""
+    """Sortino returns 0.0 when all returns exceed the risk-free rate (zero downside vol)."""
     returns = pd.Series(np.full(30, 0.001))
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert sortino == float("inf")
+    assert sortino == 0.0
 
 
 def test_calculate_sortino_ratio_zero_downside_volatility():
-    """Sortino guards against near-zero downside volatility."""
+    """Sortino guards against near-zero downside volatility by returning 0.0."""
     returns = pd.Series(np.full(30, 0.001))
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.02)
-    # Mean return > risk-free rate, zero downside vol → inf
-    assert sortino == float("inf")
+    # Mean return > risk-free rate, zero downside vol → 0.0 (finite sentinel)
+    assert sortino == 0.0
 
     returns_zero = pd.Series(np.full(30, 0.00005))  # Below risk-free rate
     sortino_zero = calculate_sortino_ratio(returns_zero, risk_free_rate=0.02)
@@ -201,12 +201,12 @@ def test_calculate_sortino_ratio_insufficient_data():
 # ---------------------------------------------------------------------------
 
 def test_calculate_calmar_ratio_basic():
-    """Calmar ratio is infinite for monotonic positive returns (no drawdown)."""
+    """Calmar ratio returns 0.0 for monotonic positive returns (no drawdown)."""
     # 252 days of 0.1% daily return → monotonic increase, no drawdown
     returns = np.full(252, 0.001)
     prices = _prices_from_returns(returns)
     calmar = calculate_calmar_ratio(prices)
-    assert calmar == float("inf")
+    assert calmar == 0.0
 
 
 def test_calculate_calmar_ratio_with_recovery():
@@ -219,11 +219,11 @@ def test_calculate_calmar_ratio_with_recovery():
 
 
 def test_calculate_calmar_ratio_no_drawdown():
-    """Calmar is infinite for positive returns with no drawdown."""
+    """Calmar returns 0.0 for positive returns with no drawdown."""
     returns = np.full(252, 0.001)
     prices = _prices_from_returns(returns)
     calmar = calculate_calmar_ratio(prices)
-    assert calmar == float("inf")
+    assert calmar == 0.0
 
 
 def test_calculate_calmar_ratio_monotonic_decline():
@@ -409,10 +409,10 @@ def test_var_cvar_monotonicity():
 
 
 def test_calmar_ratio_zero_drawdown_positive_returns():
-    """Calmar is infinite when returns are positive and max drawdown is zero."""
+    """Calmar returns 0.0 when returns are positive and max drawdown is zero."""
     returns = np.full(60, 0.001)
     prices = _prices_from_returns(returns)
-    assert calculate_calmar_ratio(prices) == float("inf")
+    assert calculate_calmar_ratio(prices) == 0.0
 
 
 def test_calmar_ratio_zero_drawdown_zero_returns():
@@ -422,12 +422,12 @@ def test_calmar_ratio_zero_drawdown_zero_returns():
 
 
 def test_calculate_sortino_ratio_nan_downside_vol():
-    """Sortino guards against NaN downside volatility."""
+    """Sortino guards against NaN downside volatility by returning 0.0."""
     returns = pd.Series([0.001] * 30)
     # Manually set downside_vol to NaN by using a series that triggers it
     # Actually the function guards with np.isnan. Verify with all-identical returns.
     sortino = calculate_sortino_ratio(returns, risk_free_rate=0.0)
-    assert sortino == float("inf")
+    assert sortino == 0.0
 
 
 if __name__ == "__main__":

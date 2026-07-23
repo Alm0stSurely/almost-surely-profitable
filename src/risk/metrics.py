@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from scipy import stats
 
 
+def _has_non_finite(values) -> bool:
+    """Return True if the values contain any NaN or infinite element."""
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return False
+    return not np.isfinite(arr).all()
+
+
 @dataclass
 class RiskMetrics:
     """Container for portfolio risk metrics."""
@@ -67,6 +75,9 @@ def calculate_var(returns: pd.Series, confidence: float = 0.95) -> float:
     if len(returns) < 30:
         return 0.0
     
+    if _has_non_finite(returns):
+        return 0.0
+    
     return np.percentile(returns, (1 - confidence) * 100)
 
 
@@ -87,6 +98,9 @@ def calculate_cvar(returns: pd.Series, confidence: float = 0.95) -> float:
         CVaR as a negative number (expected tail loss)
     """
     if len(returns) < 30:
+        return 0.0
+    
+    if _has_non_finite(returns):
         return 0.0
     
     var = calculate_var(returns, confidence)
@@ -117,6 +131,8 @@ def calculate_drawdowns(prices: pd.Series) -> pd.Series:
 
 def calculate_max_drawdown(prices: pd.Series) -> float:
     """Calculate maximum drawdown from price series."""
+    if len(prices) < 2 or _has_non_finite(prices):
+        return 0.0
     return calculate_drawdowns(prices).min()
 
 
@@ -134,6 +150,9 @@ def calculate_downside_volatility(returns: pd.Series) -> float:
         Annualized downside volatility
     """
     if len(returns) < 30:
+        return 0.0
+    
+    if _has_non_finite(returns):
         return 0.0
     
     # Only negative returns
@@ -168,6 +187,9 @@ def calculate_sortino_ratio(
     if len(returns) < 30:
         return 0.0
     
+    if _has_non_finite(returns):
+        return 0.0
+    
     # Annualized mean return
     mean_return = returns.mean() * 252
     
@@ -176,7 +198,7 @@ def calculate_sortino_ratio(
     
     # Guard against numerical precision issues with near-zero downside volatility
     if downside_vol < 1e-15 or np.isnan(downside_vol):
-        return float('inf') if mean_return > risk_free_rate else 0.0
+        return 0.0
     
     return (mean_return - risk_free_rate) / downside_vol
 
@@ -198,10 +220,16 @@ def calculate_calmar_ratio(prices: pd.Series) -> float:
     if len(prices) < 30:
         return 0.0
     
+    if _has_non_finite(prices):
+        return 0.0
+    
     # Annualized return
     total_return = (prices.iloc[-1] / prices.iloc[0]) - 1
     years = len(prices) / 252
     annualized_return = (1 + total_return) ** (1/years) - 1 if years > 0 else 0
+    
+    if not np.isfinite(annualized_return):
+        annualized_return = 0.0
     
     # Max drawdown (absolute value)
     max_dd = abs(calculate_max_drawdown(prices))
@@ -209,7 +237,7 @@ def calculate_calmar_ratio(prices: pd.Series) -> float:
     # Guard against numerical precision: a monotonic series has zero drawdown,
     # but floating-point rounding can produce a tiny non-zero value.
     if max_dd < 1e-15 or np.isnan(max_dd):
-        return float('inf') if annualized_return > 0 else 0.0
+        return 0.0
     
     return annualized_return / max_dd
 
@@ -295,19 +323,22 @@ def calculate_portfolio_risk_metrics(
     skewness = portfolio_returns.skew() if len(portfolio_returns) > 3 else 0.0
     kurtosis = portfolio_returns.kurtosis() if len(portfolio_returns) > 3 else 0.0
     
+    def _to_finite(value, default=0.0):
+        return float(value) if np.isfinite(value) else default
+    
     return RiskMetrics(
-        var_95=var_95,
-        var_99=var_99,
-        cvar_95=cvar_95,
-        cvar_99=cvar_99,
-        volatility=volatility,
-        downside_volatility=downside_vol,
-        max_drawdown=max_dd,
-        current_drawdown=current_dd,
-        sortino_ratio=sortino,
-        calmar_ratio=calmar,
-        skewness=skewness,
-        kurtosis=kurtosis
+        var_95=_to_finite(var_95),
+        var_99=_to_finite(var_99),
+        cvar_95=_to_finite(cvar_95),
+        cvar_99=_to_finite(cvar_99),
+        volatility=_to_finite(volatility),
+        downside_volatility=_to_finite(downside_vol),
+        max_drawdown=_to_finite(max_dd),
+        current_drawdown=_to_finite(current_dd),
+        sortino_ratio=_to_finite(sortino),
+        calmar_ratio=_to_finite(calmar),
+        skewness=_to_finite(skewness),
+        kurtosis=_to_finite(kurtosis)
     )
 
 
