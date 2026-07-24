@@ -4,6 +4,7 @@ Handles positions, cash, order execution, P&L calculation, and state persistence
 """
 
 import json
+import math
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -37,7 +38,7 @@ class Position:
     @property
     def unrealized_pnl_pct(self) -> float:
         """Unrealized profit/loss percentage."""
-        if self.cost_basis == 0:
+        if not _is_valid_positive_scalar(self.cost_basis):
             return 0.0
         return (self.unrealized_pnl / self.cost_basis) * 100
 
@@ -53,6 +54,16 @@ class Trade:
     total_value: float
     fees: float = 0.0
     realized_pnl: float = 0.0
+
+
+def _is_valid_positive_scalar(value) -> bool:
+    """Return True if value is a finite number greater than zero."""
+    return isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+
+
+def _is_valid_percentage(value) -> bool:
+    """Return True if value is a finite percentage in (0, 100]."""
+    return _is_valid_positive_scalar(value) and value <= 100
 
 
 class Portfolio:
@@ -170,9 +181,9 @@ class Portfolio:
         return self.total_realized_pnl + self.total_unrealized_pnl
     
     def update_prices(self, prices: Dict[str, float]) -> None:
-        """Update current prices for all positions."""
+        """Update current prices for all positions, ignoring non-finite values."""
         for ticker, price in prices.items():
-            if ticker in self.positions:
+            if ticker in self.positions and _is_valid_positive_scalar(price):
                 self.positions[ticker].current_price = price
     
     def buy(self, ticker: str, pct_of_cash: float, current_price: float) -> bool:
@@ -187,11 +198,11 @@ class Portfolio:
         Returns:
             True if order executed successfully
         """
-        if pct_of_cash <= 0 or pct_of_cash > 100:
+        if not _is_valid_percentage(pct_of_cash):
             print(f"Invalid percentage: {pct_of_cash}")
             return False
         
-        if current_price <= 0:
+        if not _is_valid_positive_scalar(current_price):
             print(f"Invalid price: {current_price}")
             return False
         
@@ -260,11 +271,15 @@ class Portfolio:
             print(f"No position in {ticker}")
             return False
         
+        if not _is_valid_positive_scalar(current_price):
+            print(f"Invalid price: {current_price}")
+            return False
+        
         pos = self.positions[ticker]
         
         # Determine sell percentage
         sell_pct = 100.0 if pct is None else pct
-        if sell_pct <= 0 or sell_pct > 100:
+        if not _is_valid_percentage(sell_pct):
             print(f"Invalid sell percentage: {sell_pct}")
             return False
         

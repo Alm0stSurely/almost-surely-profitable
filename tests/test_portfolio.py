@@ -242,6 +242,109 @@ def test_portfolio_persistence():
         print("✓ Portfolio persistence test passed\n")
 
 
+def test_buy_rejects_non_finite_inputs():
+    """Buy should reject NaN, Inf, negative, and zero prices/percentages."""
+    print("Test 8: Buy Rejects Non-Finite Inputs")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        
+        # Non-finite percentages
+        assert portfolio.buy("SPY", float('nan'), 400.0) is False
+        assert portfolio.buy("SPY", float('inf'), 400.0) is False
+        assert portfolio.buy("SPY", float('-inf'), 400.0) is False
+        assert portfolio.buy("SPY", 0.0, 400.0) is False
+        assert portfolio.buy("SPY", -10.0, 400.0) is False
+        
+        # Non-finite prices
+        assert portfolio.buy("SPY", 50.0, float('nan')) is False
+        assert portfolio.buy("SPY", 50.0, float('inf')) is False
+        assert portfolio.buy("SPY", 50.0, float('-inf')) is False
+        assert portfolio.buy("SPY", 50.0, 0.0) is False
+        assert portfolio.buy("SPY", 50.0, -5.0) is False
+        
+        assert "SPY" not in portfolio.positions
+        assert portfolio.cash == 10000.0
+        
+        print("  ✓ NaN/Inf/negative/zero percentages and prices rejected")
+        print("✓ Buy non-finite inputs test passed\n")
+
+
+def test_sell_rejects_non_finite_inputs():
+    """Sell should reject NaN, Inf, negative, and zero prices/percentages."""
+    print("Test 9: Sell Rejects Non-Finite Inputs")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        portfolio.buy("SPY", 40.0, 400.0)
+        
+        # Non-finite prices
+        assert portfolio.sell("SPY", float('nan')) is False
+        assert portfolio.sell("SPY", float('inf')) is False
+        assert portfolio.sell("SPY", float('-inf')) is False
+        assert portfolio.sell("SPY", 0.0) is False
+        assert portfolio.sell("SPY", -5.0) is False
+        
+        # Non-finite percentages
+        assert portfolio.sell("SPY", 410.0, pct=float('nan')) is False
+        assert portfolio.sell("SPY", 410.0, pct=float('inf')) is False
+        assert portfolio.sell("SPY", 410.0, pct=float('-inf')) is False
+        assert portfolio.sell("SPY", 410.0, pct=0.0) is False
+        assert portfolio.sell("SPY", 410.0, pct=-10.0) is False
+        
+        # Position should still exist unchanged
+        assert "SPY" in portfolio.positions
+        assert abs(portfolio.positions["SPY"].quantity - 10.0) < 0.01
+        assert portfolio.cash == 6000.0
+        
+        print("  ✓ NaN/Inf/negative/zero prices and percentages rejected")
+        print("✓ Sell non-finite inputs test passed\n")
+
+
+def test_update_prices_ignores_non_finite_values():
+    """update_prices should ignore non-finite price updates."""
+    print("Test 10: Update Prices Ignores Non-Finite Values")
+    print("-" * 40)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        portfolio.buy("SPY", 40.0, 400.0)
+        
+        portfolio.update_prices({
+            "SPY": 410.0,
+            "QQQ": float('nan'),
+            "IWM": float('inf'),
+            "GLD": float('-inf'),
+            "TLT": 0.0,
+            "VIX": -1.0
+        })
+        
+        assert portfolio.positions["SPY"].current_price == 410.0
+        
+        print("  ✓ Finite price updated; non-finite prices ignored")
+        print("✓ Update prices non-finite test passed\n")
+
+
+def test_position_unrealized_pnl_pct_non_finite_cost_basis():
+    """Position.unrealized_pnl_pct should return 0.0 for non-finite cost basis."""
+    print("Test 11: Position Unrealized PnL % Non-Finite Cost Basis")
+    print("-" * 40)
+    
+    for cost_basis in [0.0, float('nan'), float('inf'), float('-inf'), -100.0]:
+        pos = Position(
+            ticker="SPY",
+            quantity=10.0,
+            avg_price=cost_basis,
+            current_price=410.0
+        )
+        assert pos.unrealized_pnl_pct == 0.0, f"Failed for cost_basis={cost_basis}"
+    
+    print("  ✓ Non-finite and non-positive cost basis returns 0.0%")
+    print("✓ Position unrealized PnL % non-finite test passed\n")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Portfolio Module Test Suite")
@@ -256,6 +359,10 @@ if __name__ == "__main__":
     test_insufficient_funds()
     test_position_update()
     test_portfolio_persistence()
+    test_buy_rejects_non_finite_inputs()
+    test_sell_rejects_non_finite_inputs()
+    test_update_prices_ignores_non_finite_values()
+    test_position_unrealized_pnl_pct_non_finite_cost_basis()
     
     print("=" * 60)
     print("All tests passed! ✓")
