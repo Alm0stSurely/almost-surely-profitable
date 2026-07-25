@@ -471,6 +471,162 @@ class TestBreakoutMarginHelpers:
         assert monitor._is_significant_breakout(100.0, 0.0, 1.0) is False
 
 
+class TestFiniteValueGuards:
+    """Non-finite values must not propagate into alert history or JSON output."""
+
+    def test_is_finite_number(self):
+        assert monitor._is_finite_number(1.0) is True
+        assert monitor._is_finite_number(1) is True
+        assert monitor._is_finite_number(0.0) is True
+        assert monitor._is_finite_number(float('nan')) is False
+        assert monitor._is_finite_number(float('inf')) is False
+        assert monitor._is_finite_number(float('-inf')) is False
+        assert monitor._is_finite_number(None) is False
+        assert monitor._is_finite_number("1.0") is False
+        assert monitor._is_finite_number(True) is False
+
+    def test_record_alert_skips_non_finite_movement(self, tmp_path, monkeypatch):
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+
+        history = {'alerts': [], 'last_reset': datetime.now().isoformat()}
+        monitor.record_alert('SPY', float('nan'), 'position_movement', 'high', history)
+        monitor.record_alert('SPY', float('inf'), 'position_movement', 'high', history)
+        monitor.record_alert('SPY', 2.5, 'position_movement', 'high', history)
+
+        assert len(history['alerts']) == 1
+        assert history['alerts'][0]['movement_pct'] == 2.5
+
+    def test_save_alert_history_rejects_nan(self, tmp_path, monkeypatch):
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+
+        bad_history = {
+            'alerts': [{'ticker': 'SPY', 'movement_pct': float('nan')}],
+            'last_reset': datetime.now().isoformat()
+        }
+        with pytest.raises(ValueError):
+            monitor.save_alert_history(bad_history)
+
+    def test_stop_losses_skip_non_finite_current_price(self):
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir="/tmp/test_finite_stop")
+        portfolio.positions['SPY'] = Position(
+            ticker='SPY', quantity=10, avg_price=100, current_price=100
+        )
+
+        alerts = monitor.check_stop_losses(
+            {'SPY': float('nan')}, portfolio
+        )
+        assert alerts == []
+
+    def test_stop_losses_skip_non_finite_drawdown(self):
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir="/tmp/test_finite_stop2")
+        portfolio.positions['SPY'] = Position(
+            ticker='SPY', quantity=10, avg_price=0, current_price=100
+        )
+
+        alerts = monitor.check_stop_losses(
+            {'SPY': 100.0}, portfolio
+        )
+        assert alerts == []
+
+    def test_check_movements_skip_non_finite_reference(self):
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir="/tmp/test_finite_ref")
+        portfolio.positions['SPY'] = Position(
+            ticker='SPY', quantity=10, avg_price=float('nan'), current_price=100
+        )
+
+        with patch('monitor.load_alert_history', return_value={'alerts': [], 'last_reset': datetime.now().isoformat()}), \
+             patch('monitor.save_alert_history'), \
+             patch('monitor.CHECK_BOLLINGER', False):
+            alerts = monitor.check_movements(
+                {'SPY': 110.0}, {'SPY': float('nan')}, portfolio
+            )
+        assert alerts == []
+
+    def test_check_movements_skip_non_finite_movement(self):
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir="/tmp/test_finite_move")
+        portfolio.positions['SPY'] = Position(
+            ticker='SPY', quantity=10, avg_price=100, current_price=100
+        )
+
+        with patch('monitor.load_alert_history', return_value={'alerts': [], 'last_reset': datetime.now().isoformat()}), \
+             patch('monitor.save_alert_history'), \
+             patch('monitor.CHECK_BOLLINGER', False):
+            alerts = monitor.check_movements(
+                {'SPY': float('inf')}, {'SPY': 100.0}, portfolio
+            )
+        assert alerts == []
+
+    def test_check_index_movements_skip_non_finite(self):
+        alerts = monitor.check_index_movements(
+            {'SPY': float('nan')}, {'SPY': 100.0}, ['SPY'], 2.0
+        )
+        assert alerts == []
+
+        alerts = monitor.check_index_movements(
+            {'SPY': 110.0}, {'SPY': float('inf')}, ['SPY'], 2.0
+        )
+        assert alerts == []
+
+    def test_check_portfolio_drawdown_returns_none_for_non_finite(self):
+        assert monitor.check_portfolio_drawdown(float('nan'), 1000.0) is None
+        assert monitor.check_portfolio_drawdown(1000.0, float('inf')) is None
+        assert monitor.check_portfolio_drawdown(1000.0, 0.0) is None
+
+    def test_check_bollinger_breakouts_skip_non_finite_bands(
+        self, tmp_path, monkeypatch
+    ):
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+        monkeypatch.setattr(monitor, "CHECK_BOLLINGER", True)
+
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir=str(tmp_path / "data"))
+        portfolio.positions['DBA'] = Position(
+            ticker='DBA', quantity=10, avg_price=100.0, current_price=110.0
+        )
+
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, \
+             patch("data.indicators.calculate_bollinger_bands") as mock_bands:
+
+            mock_fetch.return_value = {"DBA": pd.DataFrame({"Close": [100.0] * 30})}
+            mock_bands.return_value = (
+                pd.Series([float('nan')] * 30),
+                pd.Series([100.0] * 30),
+                pd.Series([90.0] * 30),
+            )
+
+            alerts = monitor.check_bollinger_breakouts({'DBA': 110.0}, portfolio)
+            assert alerts == []
+
+    def test_alert_history_serializes_finite_alerts(self, tmp_path, monkeypatch):
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+
+        history = {
+            'alerts': [
+                {'ticker': 'SPY', 'type': 'position_movement', 'movement_pct': -2.5,
+                 'severity': 'medium', 'timestamp': datetime.now().isoformat()}
+            ],
+            'last_reset': datetime.now().isoformat()
+        }
+        monitor.save_alert_history(history)
+
+        with open(history_path, 'r') as f:
+            loaded = json.load(f)
+        assert len(loaded['alerts']) == 1
+        assert loaded['alerts'][0]['movement_pct'] == -2.5
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running Intraday Monitor Tests")

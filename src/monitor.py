@@ -12,6 +12,7 @@ Alert Deduplication Logic:
 """
 
 import json
+import math
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,16 @@ from portfolio.portfolio import Portfolio
 # from any working directory (e.g. via cron from the parent workspace).
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 DATA_DIR = REPO_ROOT / "data"
+
+
+def _is_finite_number(value) -> bool:
+    """Return True if value is a real finite scalar (int, float, or numpy/pandas convertible)."""
+    if value is None or isinstance(value, bool) or isinstance(value, str):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 # Load thresholds from config
@@ -93,10 +104,15 @@ def load_alert_history() -> Dict:
 
 
 def save_alert_history(history: Dict):
-    """Save alert history."""
+    """Save alert history.
+
+    Uses ``allow_nan=False`` so any non-finite values that slip through are
+    caught immediately rather than written as non-standard JSON (``NaN``,
+    ``Infinity``) that downstream consumers cannot parse.
+    """
     ALERT_HISTORY_PATH.parent.mkdir(exist_ok=True)
     with open(ALERT_HISTORY_PATH, 'w') as f:
-        json.dump(history, f, indent=2)
+        json.dump(history, f, indent=2, allow_nan=False)
 
 
 def should_alert(ticker: str, movement_pct: float, alert_type: str, history: Dict) -> Tuple[bool, str]:
@@ -145,6 +161,13 @@ def should_alert(ticker: str, movement_pct: float, alert_type: str, history: Dic
 
 def record_alert(ticker: str, movement_pct: float, alert_type: str, severity: str, history: Dict):
     """Record an alert in history."""
+    if not _is_finite_number(movement_pct):
+        print(
+            f"Skipping alert record for {ticker} ({alert_type}): "
+            f"non-finite movement_pct {movement_pct!r}"
+        )
+        return
+
     history['alerts'].append({
         'ticker': ticker,
         'type': alert_type,
@@ -152,7 +175,7 @@ def record_alert(ticker: str, movement_pct: float, alert_type: str, severity: st
         'severity': severity,
         'timestamp': datetime.now().isoformat()
     })
-    
+
     # Keep only last 100 alerts to prevent file bloat
     history['alerts'] = history['alerts'][-100:]
 
@@ -190,25 +213,42 @@ def load_previous_close(portfolio: Portfolio) -> Dict[str, float]:
         try:
             with open(MARKET_STATE_PATH, 'r') as f:
                 state = json.load(f)
-            return state.get('previous_close', {})
+            previous_close = state.get('previous_close', {})
+            # Only return finite prices; non-finite references break movement math.
+            return {
+                ticker: price for ticker, price in previous_close.items()
+                if _is_finite_number(price)
+            }
         except:
             pass
-    
+
     # If no saved state, use average price of positions as reference
-    return {ticker: pos.avg_price for ticker, pos in portfolio.positions.items()}
+    return {
+        ticker: pos.avg_price for ticker, pos in portfolio.positions.items()
+        if _is_finite_number(pos.avg_price) and pos.avg_price > 0
+    }
 
 
 def save_market_state(prices: Dict[str, float]):
-    """Save current prices as reference for next check."""
+    """Save current prices as reference for next check.
+
+    Non-finite prices are filtered out so the saved JSON remains standard and
+    cannot corrupt the next monitor run.
+    """
     MARKET_STATE_PATH.parent.mkdir(exist_ok=True)
-    
+
+    finite_prices = {
+        ticker: price for ticker, price in prices.items()
+        if _is_finite_number(price)
+    }
+
     state = {
         'timestamp': datetime.now().isoformat(),
-        'previous_close': prices
+        'previous_close': finite_prices
     }
-    
+
     with open(MARKET_STATE_PATH, 'w') as f:
-        json.dump(state, f, indent=2)
+        json.dump(state, f, indent=2, allow_nan=False)
 
 
 def check_stop_losses(
@@ -224,11 +264,17 @@ def check_stop_losses(
     
     for ticker, position in portfolio.positions.items():
         current_price = current_prices.get(ticker)
-        if not current_price or position.avg_price <= 0:
+        if not _is_finite_number(current_price) or position.avg_price <= 0:
             continue
-        
+
         drawdown_pct = ((current_price - position.avg_price) / position.avg_price) * 100
-        
+
+        if not _is_finite_number(drawdown_pct):
+            print(
+                f"Skipping stop-loss check for {ticker}: non-finite drawdown_pct {drawdown_pct!r}"
+            )
+            continue
+
         if drawdown_pct <= -STOP_LOSS_THRESHOLD:
             should_alert_flag, reason = should_alert(
                 ticker, drawdown_pct, 'stop_loss_triggered', history
@@ -274,33 +320,46 @@ def check_bollinger_breakouts(
     
     for ticker in portfolio.positions.keys():
         current_price = current_prices.get(ticker)
-        if not current_price:
+        if not _is_finite_number(current_price):
             continue
-        
+
         try:
             # Fetch recent data for Bollinger calculation
             df = fetch_historical_data([ticker], period='20d')
             if not df or ticker not in df or len(df[ticker]) < 20:
                 continue
-            
+
             upper, middle, lower = calculate_bollinger_bands(df[ticker]['Close'])
-            
+
             if upper is None or lower is None:
                 continue
-            
+
             latest_upper = upper.iloc[-1]
             latest_lower = lower.iloc[-1]
-            
+
+            if not (_is_finite_number(latest_upper) and _is_finite_number(latest_lower)):
+                print(
+                    f"Skipping Bollinger check for {ticker}: non-finite bands "
+                    f"upper={latest_upper!r}, lower={latest_lower!r}"
+                )
+                continue
+
             # Check for breakout, requiring a minimum margin beyond the band to
             # avoid firing on micro-pierces (e.g. price 0.05% above the band).
             if current_price > latest_upper:
                 breakout_margin_pct = _breakout_margin(current_price, latest_upper)
+                if not _is_finite_number(breakout_margin_pct):
+                    print(
+                        f"Skipping Bollinger upper breakout for {ticker}: "
+                        f"non-finite margin {breakout_margin_pct!r}"
+                    )
+                    continue
                 if not _is_significant_breakout(current_price, latest_upper, BOLLINGER_MIN_BREAKOUT_PCT):
                     continue
                 should_alert_flag, reason = should_alert(
                     ticker, breakout_margin_pct, 'bollinger_breakout_upper', history
                 )
-                
+
                 if should_alert_flag:
                     alerts.append({
                         'type': 'bollinger_breakout',
@@ -314,15 +373,21 @@ def check_bollinger_breakouts(
                         'alert_reason': reason
                     })
                     record_alert(ticker, breakout_margin_pct, 'bollinger_breakout_upper', 'medium', history)
-                    
+
             elif current_price < latest_lower:
                 breakout_margin_pct = _breakout_margin(current_price, latest_lower)
+                if not _is_finite_number(breakout_margin_pct):
+                    print(
+                        f"Skipping Bollinger lower breakout for {ticker}: "
+                        f"non-finite margin {breakout_margin_pct!r}"
+                    )
+                    continue
                 if not _is_significant_breakout(current_price, latest_lower, BOLLINGER_MIN_BREAKOUT_PCT):
                     continue
                 should_alert_flag, reason = should_alert(
                     ticker, breakout_margin_pct, 'bollinger_breakout_lower', history
                 )
-                
+
                 if should_alert_flag:
                     alerts.append({
                         'type': 'bollinger_breakout',
@@ -336,7 +401,7 @@ def check_bollinger_breakouts(
                         'alert_reason': reason
                     })
                     record_alert(ticker, breakout_margin_pct, 'bollinger_breakout_lower', 'medium', history)
-                    
+
         except Exception as e:
             # Silently skip if calculation fails
             continue
@@ -364,64 +429,94 @@ def check_movements(
     # Check portfolio positions for significant movements
     for ticker, position in portfolio.positions.items():
         current_price = current_prices.get(ticker)
-        if not current_price:
+        if not _is_finite_number(current_price):
             continue
-        
+
         # Skip if stop-loss already triggered
         if ticker in stop_loss_tickers:
             continue
-        
+
         # Use previous close as reference for intraday movement detection;
         # fall back to avg_price if previous close unavailable
         reference_price = reference_prices.get(ticker, position.avg_price)
-        
-        if reference_price > 0:
-            movement_pct = ((current_price - reference_price) / reference_price) * 100
-            
-            if abs(movement_pct) >= THRESHOLDS.get('position_movement_pct', 2.0):
-                should_alert_flag, reason = should_alert(
-                    ticker, movement_pct, 'position_movement', history
-                )
-                
-                if should_alert_flag:
-                    alerts.append({
-                        'type': 'position_movement',
-                        'ticker': ticker,
-                        'severity': 'high' if abs(movement_pct) > 5 else 'medium',
-                        'current_price': current_price,
-                        'reference_price': reference_price,
-                        'movement_pct': movement_pct,
-                        'position_size': position.market_value,
-                        'unrealized_pnl': position.unrealized_pnl,
-                        'alert_reason': reason
-                    })
-                    record_alert(ticker, movement_pct, 'position_movement', 
-                               'high' if abs(movement_pct) > 5 else 'medium', history)
+
+        if not _is_finite_number(reference_price) or reference_price <= 0:
+            continue
+
+        movement_pct = ((current_price - reference_price) / reference_price) * 100
+
+        if not _is_finite_number(movement_pct):
+            print(
+                f"Skipping position movement check for {ticker}: "
+                f"non-finite movement_pct {movement_pct!r}"
+            )
+            continue
+
+        if abs(movement_pct) >= THRESHOLDS.get('position_movement_pct', 2.0):
+            should_alert_flag, reason = should_alert(
+                ticker, movement_pct, 'position_movement', history
+            )
+
+            if should_alert_flag:
+                position_size = position.market_value
+                unrealized_pnl = position.unrealized_pnl
+                if not (_is_finite_number(position_size) and _is_finite_number(unrealized_pnl)):
+                    print(
+                        f"Skipping position movement alert for {ticker}: "
+                        f"non-finite position_size={position_size!r} or "
+                        f"unrealized_pnl={unrealized_pnl!r}"
+                    )
+                    continue
+
+                alerts.append({
+                    'type': 'position_movement',
+                    'ticker': ticker,
+                    'severity': 'high' if abs(movement_pct) > 5 else 'medium',
+                    'current_price': current_price,
+                    'reference_price': reference_price,
+                    'movement_pct': movement_pct,
+                    'position_size': position_size,
+                    'unrealized_pnl': unrealized_pnl,
+                    'alert_reason': reason
+                })
+                record_alert(ticker, movement_pct, 'position_movement',
+                           'high' if abs(movement_pct) > 5 else 'medium', history)
     
     # Check indices
     for index in INDICES:
         current_price = current_prices.get(index)
         reference_price = reference_prices.get(index)
-        
-        if current_price and reference_price:
-            movement_pct = ((current_price - reference_price) / reference_price) * 100
-            
-            if abs(movement_pct) >= THRESHOLDS['index_movement_pct']:
-                should_alert_flag, reason = should_alert(
-                    index, movement_pct, 'index_movement', history
-                )
-                
-                if should_alert_flag:
-                    alerts.append({
-                        'type': 'index_movement',
-                        'ticker': index,
-                        'severity': 'high',
-                        'current_price': current_price,
-                        'reference_price': reference_price,
-                        'movement_pct': movement_pct,
-                        'alert_reason': reason
-                    })
-                    record_alert(index, movement_pct, 'index_movement', 'high', history)
+
+        if not (_is_finite_number(current_price) and _is_finite_number(reference_price)):
+            continue
+        if reference_price <= 0:
+            continue
+
+        movement_pct = ((current_price - reference_price) / reference_price) * 100
+
+        if not _is_finite_number(movement_pct):
+            print(
+                f"Skipping index movement check for {index}: "
+                f"non-finite movement_pct {movement_pct!r}"
+            )
+            continue
+
+        if abs(movement_pct) >= THRESHOLDS['index_movement_pct']:
+            should_alert_flag, reason = should_alert(
+                index, movement_pct, 'index_movement', history
+            )
+
+            if should_alert_flag:
+                alerts.append({
+                    'type': 'index_movement',
+                    'ticker': index,
+                    'severity': 'high',
+                    'current_price': current_price,
+                    'reference_price': reference_price,
+                    'movement_pct': movement_pct,
+                    'alert_reason': reason
+                })
+                record_alert(index, movement_pct, 'index_movement', 'high', history)
     
     # Check portfolio drawdown
     if portfolio.positions:
@@ -430,27 +525,38 @@ def check_movements(
             current_prices.get(ticker, pos.current_price) * pos.quantity
             for ticker, pos in portfolio.positions.items()
         )
-        
-        if total_cost > 0:
+
+        if not (_is_finite_number(total_cost) and _is_finite_number(total_current)):
+            print(
+                f"Skipping portfolio drawdown check: non-finite "
+                f"total_cost={total_cost!r} or total_current={total_current!r}"
+            )
+        elif total_cost > 0:
             drawdown_pct = ((total_current - total_cost) / total_cost) * 100
-            
-            threshold = THRESHOLDS.get('portfolio_drawdown_pct', 1.5)
-            if drawdown_pct <= -threshold:
-                should_alert_flag, reason = should_alert(
-                    'PORTFOLIO', drawdown_pct, 'portfolio_drawdown', history
+
+            if not _is_finite_number(drawdown_pct):
+                print(
+                    f"Skipping portfolio drawdown check: "
+                    f"non-finite drawdown_pct {drawdown_pct!r}"
                 )
-                
-                if should_alert_flag:
-                    alerts.append({
-                        'type': 'portfolio_drawdown',
-                        'ticker': 'PORTFOLIO',
-                        'severity': 'critical',
-                        'current_value': total_current,
-                        'cost_basis': total_cost,
-                        'drawdown_pct': drawdown_pct,
-                        'alert_reason': reason
-                    })
-                    record_alert('PORTFOLIO', drawdown_pct, 'portfolio_drawdown', 'critical', history)
+            else:
+                threshold = THRESHOLDS.get('portfolio_drawdown_pct', 1.5)
+                if drawdown_pct <= -threshold:
+                    should_alert_flag, reason = should_alert(
+                        'PORTFOLIO', drawdown_pct, 'portfolio_drawdown', history
+                    )
+
+                    if should_alert_flag:
+                        alerts.append({
+                            'type': 'portfolio_drawdown',
+                            'ticker': 'PORTFOLIO',
+                            'severity': 'critical',
+                            'current_value': total_current,
+                            'cost_basis': total_cost,
+                            'drawdown_pct': drawdown_pct,
+                            'alert_reason': reason
+                        })
+                        record_alert('PORTFOLIO', drawdown_pct, 'portfolio_drawdown', 'critical', history)
     
     # Check Bollinger Band breakouts
     bollinger_alerts = check_bollinger_breakouts(current_prices, portfolio)
@@ -480,11 +586,16 @@ def check_position_movements(positions: Dict, previous_close: Dict, current_pric
 
 def check_portfolio_drawdown(portfolio_value: float, cost_basis: float, threshold_pct: float = 1.5) -> Dict:
     """Check if portfolio drawdown exceeds threshold."""
+    if not (_is_finite_number(portfolio_value) and _is_finite_number(cost_basis)):
+        return None
     if cost_basis <= 0:
         return None
-    
+
     drawdown_pct = ((portfolio_value - cost_basis) / cost_basis) * 100
-    
+
+    if not _is_finite_number(drawdown_pct):
+        return None
+
     if drawdown_pct <= -threshold_pct:
         return {
             'type': 'portfolio_drawdown',
@@ -494,31 +605,38 @@ def check_portfolio_drawdown(portfolio_value: float, cost_basis: float, threshol
             'cost_basis': cost_basis,
             'drawdown_pct': drawdown_pct
         }
-    
+
     return None
 
 
 def check_index_movements(current_prices: Dict, reference_prices: Dict, indices: List[str], threshold_pct: float = 3.0) -> List[Dict]:
     """Check for significant index movements."""
     alerts = []
-    
+
     for index in indices:
         current_price = current_prices.get(index)
         reference_price = reference_prices.get(index)
-        
-        if current_price and reference_price and reference_price > 0:
-            movement_pct = ((current_price - reference_price) / reference_price) * 100
-            
-            if abs(movement_pct) >= threshold_pct:
-                alerts.append({
-                    'type': 'index_movement',
-                    'ticker': index,
-                    'severity': 'high',
-                    'current_price': current_price,
-                    'reference_price': reference_price,
-                    'movement_pct': movement_pct
-                })
-    
+
+        if not (_is_finite_number(current_price) and _is_finite_number(reference_price)):
+            continue
+        if reference_price <= 0:
+            continue
+
+        movement_pct = ((current_price - reference_price) / reference_price) * 100
+
+        if not _is_finite_number(movement_pct):
+            continue
+
+        if abs(movement_pct) >= threshold_pct:
+            alerts.append({
+                'type': 'index_movement',
+                'ticker': index,
+                'severity': 'high',
+                'current_price': current_price,
+                'reference_price': reference_price,
+                'movement_pct': movement_pct
+            })
+
     return alerts
 
 
@@ -613,16 +731,30 @@ def run_monitor():
             'timestamp': datetime.now().isoformat(),
             'alert_count': len(alerts),
             'alerts': alerts,
-            'portfolio_value': portfolio.total_value
+            'portfolio_value': portfolio.total_value if _is_finite_number(portfolio.total_value) else None
         }
         print("\nJSON_OUTPUT:")
-        print(json.dumps(output, indent=2))
-        
+        try:
+            print(json.dumps(output, indent=2, allow_nan=False))
+        except ValueError as e:
+            print(f"Alert output contains non-finite values: {e}")
+            # Fallback: emit an empty but valid JSON summary rather than crashing.
+            print(json.dumps({
+                'timestamp': output['timestamp'],
+                'alert_count': len(alerts),
+                'alerts': [],
+                'portfolio_value': output['portfolio_value'],
+                'error': 'Non-finite values were filtered from alert output'
+            }, indent=2, allow_nan=False))
+
         return alerts, 1
     else:
         print("✓ No significant movements detected.")
-        print(f"Portfolio Value: €{portfolio.total_value:.2f}")
-        
+        if _is_finite_number(portfolio.total_value):
+            print(f"Portfolio Value: €{portfolio.total_value:.2f}")
+        else:
+            print(f"Portfolio Value: {portfolio.total_value!r} (non-finite)")
+
         # Show suppressed alerts count
         history = load_alert_history()
         recent_suppressed = len([
@@ -631,7 +763,7 @@ def run_monitor():
         ])
         if recent_suppressed > 0:
             print(f"(Alert history: {recent_suppressed} tickers in cooldown period)")
-        
+
         return [], 0
 
 
