@@ -11,6 +11,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _is_finite_number(value) -> bool:
+    """Return True if *value* is a finite scalar number."""
+    try:
+        return bool(np.isfinite(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """Return *value* as a float when it is finite, otherwise *default*."""
+    try:
+        f = float(value)
+        return f if np.isfinite(f) else default
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def calculate_sma(prices: pd.Series, window: int) -> pd.Series:
     """Calculate Simple Moving Average."""
     return prices.rolling(window=window, min_periods=1).mean()
@@ -104,14 +121,16 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with added indicator columns
     """
-    # Drop rows with NaN Close prices to avoid indicator corruption
+    # Drop rows with non-finite Close prices to avoid indicator corruption.
     # This handles cases where yfinance returns a row for today before market close
+    # or returns Inf/NaN ticks from sparse data.
     df = df.dropna(subset=['Close']).copy()
-    
+    df = df[df['Close'].apply(_is_finite_number)].copy()
+
     if df.empty:
-        logger.warning("DataFrame is empty after dropping NaN Close prices")
+        logger.warning("DataFrame is empty after dropping non-finite Close prices")
         return df
-    
+
     prices = df['Close']
     
     # Moving averages
@@ -214,20 +233,20 @@ def get_latest_indicators(df: pd.DataFrame) -> Dict:
         return {}
     
     latest = df.iloc[-1]
-    
+
     return {
-        "price": float(latest['Close']),
-        "sma_20": float(latest.get('SMA_20', 0)),
-        "sma_50": float(latest.get('SMA_50', 0)),
-        "sma_200": float(latest.get('SMA_200', 0)),
-        "rsi_14": float(latest.get('RSI_14', 50)),
-        "bb_upper": float(latest.get('BB_upper', 0)),
-        "bb_lower": float(latest.get('BB_lower', 0)),
-        "bb_position": float(latest.get('BB_position', 0.5)),
-        "volatility_annual": float(latest.get('Volatility_20', 0)),
-        "drawdown": float(latest.get('Drawdown', 0)),
-        "max_drawdown": float(latest.get('Max_Drawdown', 0)),
-        "daily_return": float(latest.get('Daily_Return', 0)),
+        "price": _safe_float(latest['Close'], 0.0),
+        "sma_20": _safe_float(latest.get('SMA_20', 0), 0.0),
+        "sma_50": _safe_float(latest.get('SMA_50', 0), 0.0),
+        "sma_200": _safe_float(latest.get('SMA_200', 0), 0.0),
+        "rsi_14": _safe_float(latest.get('RSI_14', 50), 50.0),
+        "bb_upper": _safe_float(latest.get('BB_upper', 0), 0.0),
+        "bb_lower": _safe_float(latest.get('BB_lower', 0), 0.0),
+        "bb_position": _safe_float(latest.get('BB_position', 0.5), 0.5),
+        "volatility_annual": _safe_float(latest.get('Volatility_20', 0), 0.0),
+        "drawdown": _safe_float(latest.get('Drawdown', 0), 0.0),
+        "max_drawdown": _safe_float(latest.get('Max_Drawdown', 0), 0.0),
+        "daily_return": _safe_float(latest.get('Daily_Return', 0), 0.0),
     }
 
 
@@ -247,11 +266,21 @@ def analyze_market_data(data_dict: Dict[str, pd.DataFrame]) -> Dict:
     for ticker, df in data_dict.items():
         try:
             df_with_indicators = calculate_all_indicators(df.copy())
+            total_return_raw = (
+                (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0
+            )
+            total_return = _safe_float(total_return_raw, 0.0)
+            daily_returns = (
+                df_with_indicators['Daily_Return']
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+                .tolist()
+            )
             results[ticker] = {
                 "dataframe": df_with_indicators,
                 "latest": get_latest_indicators(df_with_indicators),
-                "total_return": (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0,
-                "returns": df_with_indicators['Daily_Return'].dropna().tolist()
+                "total_return": total_return,
+                "returns": daily_returns,
             }
         except Exception as e:
             logger.error(f"Error calculating indicators for {ticker}: {e}")
