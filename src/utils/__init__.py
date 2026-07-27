@@ -1,7 +1,8 @@
 """Utilities for loading and validating daily trading results."""
 import json
+import math
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 MIN_ASSETS_FOR_VALID_RUN = 5
@@ -66,3 +67,55 @@ def load_valid_daily_results_limited(
     """Load the most recent ``days`` valid daily results."""
     all_results = load_valid_daily_results(results_dir)
     return all_results[-days:]
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return True if *value* is a finite scalar number."""
+    if value is None or isinstance(value, bool) or isinstance(value, str):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively replace non-finite floats in dicts/lists with ``None``.
+
+    Integers, strings, and finite floats are preserved. Non-finite floats
+    (``NaN``, ``Infinity``, ``-Infinity``) become ``None`` so that downstream
+    JSON consumers never have to parse non-standard tokens such as ``NaN``.
+
+    This is a defensive last line of defense: upstream modules should still
+    validate their own numeric outputs.
+    """
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(sanitize_for_json(v) for v in obj)
+    if isinstance(obj, float):
+        return obj if _is_finite_number(obj) else None
+    return obj
+
+
+def dump_json_safe(
+    obj: Any,
+    f,
+    indent: int = 2,
+    default=None,
+    **kwargs,
+) -> None:
+    """Serialize *obj* to JSON using ``allow_nan=False``.
+
+    Non-finite floats are sanitized to ``None`` before writing so that a single
+    missed guard does not crash the pipeline or produce invalid JSON. Any
+    remaining serialization error is re-raised with the object type to help
+    debugging.
+    """
+    cleaned = sanitize_for_json(obj)
+    try:
+        json.dump(cleaned, f, indent=indent, default=default, allow_nan=False, **kwargs)
+    except ValueError as exc:
+        raise ValueError(f"JSON serialization failed for {type(obj).__name__}: {exc}") from exc

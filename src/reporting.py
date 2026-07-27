@@ -2,14 +2,13 @@
 Reporting module for weekly and monthly performance reports.
 """
 
-import json
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 
-from utils import load_valid_daily_results
+from utils import load_valid_daily_results, dump_json_safe
 
 
 logging.basicConfig(level=logging.INFO)
@@ -258,7 +257,7 @@ class ReportGenerator:
         filepath = output_path / filename
         
         with open(filepath, 'w') as f:
-            json.dump(report, f, indent=2)
+            dump_json_safe(report, f, indent=2)
         
         logger.info(f"Report saved to {filepath}")
         return str(filepath)

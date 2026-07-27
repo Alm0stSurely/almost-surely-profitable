@@ -253,3 +253,29 @@ def test_no_risk_metrics_when_no_positions(tmp_path, monkeypatch):
     assert result_file.exists()
     result = json.loads(result_file.read_text())
     assert result["portfolio_before"].get("risk_metrics") is None
+
+
+def test_non_finite_benchmark_values_sanitized_for_json(tmp_path, monkeypatch):
+    """Non-finite floats in the equal-weight benchmark must be serialized as null."""
+    fixed_date = datetime(2026, 7, 14, 10, 30, 0)
+    patches, _ = _patch_pipeline(
+        tmp_path, monkeypatch, fixed_date, include_risk_metrics=False
+    )
+    result_file = tmp_path / "results" / "daily" / "2026-07-14.json"
+
+    # Inject a degenerate benchmark summary as if a guard upstream had missed it.
+    mock_benchmark = patches["LiveEqualWeightBenchmark"].return_value
+    mock_benchmark.rebalance.return_value = {
+        "total_value": float("nan"),
+        "total_return_pct": float("inf"),
+        "num_positions": 0,
+    }
+
+    with patch.multiple("daily_run", **patches):
+        run_daily_pipeline(dry_run=False, no_overwrite=False)
+
+    assert result_file.exists()
+    result = json.loads(result_file.read_text())
+    assert result["equalweight_benchmark"]["total_value"] is None
+    assert result["equalweight_benchmark"]["total_return_pct"] is None
+    assert result["equalweight_benchmark"]["num_positions"] == 0

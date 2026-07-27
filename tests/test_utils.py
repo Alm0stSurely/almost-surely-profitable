@@ -1,11 +1,14 @@
 """Tests for the daily result validation utilities."""
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from utils import is_valid_daily_result, load_valid_daily_results, load_valid_daily_results_limited
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from utils import is_valid_daily_result, load_valid_daily_results, load_valid_daily_results_limited, sanitize_for_json, dump_json_safe
 
 
 @pytest.fixture
@@ -135,3 +138,65 @@ def test_load_valid_daily_results_returns_sorted(sample_results):
     results = load_valid_daily_results(str(sample_results))
     dates = [r["date"] for r in results]
     assert dates == sorted(dates)
+
+
+class TestSanitizeForJson:
+    """Tests for the recursive JSON sanitization helper."""
+
+    def test_finite_values_preserved(self):
+        data = {
+            "int": 42,
+            "float": 3.14,
+            "string": "ok",
+            "bool": True,
+            "none": None,
+            "list": [1, 2.5, "x"],
+        }
+        assert sanitize_for_json(data) == data
+
+    def test_nan_replaced_with_none(self):
+        assert sanitize_for_json({"x": float("nan")})["x"] is None
+
+    def test_infinity_replaced_with_none(self):
+        assert sanitize_for_json({"x": float("inf")})["x"] is None
+        assert sanitize_for_json({"x": float("-inf")})["x"] is None
+
+    def test_nested_structures_sanitized(self):
+        data = {
+            "outer": [
+                {"inner": float("nan")},
+                [1.0, float("inf"), 3.0],
+            ]
+        }
+        result = sanitize_for_json(data)
+        assert result["outer"][0]["inner"] is None
+        assert result["outer"][1] == [1.0, None, 3.0]
+
+    def test_numpy_scalar_non_finite_sanitized(self):
+        numpy = pytest.importorskip("numpy")
+        assert sanitize_for_json({"x": numpy.nan})["x"] is None
+        assert sanitize_for_json({"x": numpy.inf})["x"] is None
+
+
+class TestDumpJsonSafe:
+    """Tests for the JSON-safe serialization wrapper."""
+
+    def test_writes_valid_json_for_non_finite_input(self, tmp_path):
+        data = {"good": 1.0, "bad": float("nan"), "worse": float("inf")}
+        path = tmp_path / "out.json"
+        with open(path, "w") as f:
+            dump_json_safe(data, f)
+
+        loaded = json.loads(path.read_text())
+        assert loaded["good"] == 1.0
+        assert loaded["bad"] is None
+        assert loaded["worse"] is None
+
+    def test_default_callback_still_used(self, tmp_path):
+        data = {"date": object()}  # not JSON serializable without default
+        path = tmp_path / "out.json"
+        with open(path, "w") as f:
+            dump_json_safe(data, f, default=str)
+
+        loaded = json.loads(path.read_text())
+        assert loaded["date"].startswith("<object object at")
