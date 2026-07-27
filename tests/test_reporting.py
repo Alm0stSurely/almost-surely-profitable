@@ -325,3 +325,26 @@ class TestSaveAndPrintReport:
         rg.print_report({})
         captured = capsys.readouterr()
         assert "No report data available" in captured.out
+
+    def test_save_report_sanitizes_non_finite_values(self, tmp_path):
+        """Non-finite floats in a report must be written as null, not JSON NaN tokens."""
+        report = {
+            "period": "2026-W02",
+            "period_type": "weekly",
+            "start_value": float("nan"),
+            "end_value": float("inf"),
+            "weekly_return_pct": 1.5,
+            "total_trades": 1,
+            "num_trading_days": 5,
+        }
+        rg = ReportGenerator()
+        output_dir = str(tmp_path / "reports")
+        filepath = rg.save_report(report, output_dir=output_dir)
+
+        with open(filepath) as f:
+            loaded = json.load(f)
+
+        assert loaded["start_value"] is None
+        assert loaded["end_value"] is None
+        assert loaded["weekly_return_pct"] == 1.5
+        assert loaded["total_trades"] == 1

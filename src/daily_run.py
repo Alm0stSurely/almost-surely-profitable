@@ -24,6 +24,7 @@ from risk.performance_metrics import calculate_all_metrics, format_metrics_repor
 from risk.position_cooldown import PositionCooldownManager, CooldownConfig
 from analysis.regime_detector import RegimeDetector, format_regime_for_llm
 from benchmark import LiveEqualWeightBenchmark
+from utils import dump_json_safe
 
 
 # Resolve all paths relative to the repository root so the script is safe to run
@@ -462,7 +463,7 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         print(f"  ⚠ Result file {result_file} already exists; skipping write (no_overwrite=True)")
     else:
         with open(result_file, 'w') as f:
-            json.dump(result, f, indent=2, default=str)
+            dump_json_safe(result, f, indent=2, default=str)
         print(f"  ✓ Results saved to {result_file}")
     
     # Final summary
