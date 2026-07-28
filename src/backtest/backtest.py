@@ -18,6 +18,7 @@ from data.indicators import calculate_all_indicators, get_latest_indicators
 from portfolio.portfolio import Portfolio
 from llm.trading_agent import TradingAgent
 from backtest.backtest_cooldown import BacktestCooldownManager, CooldownConfig
+from utils import dump_json_safe
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -576,7 +577,7 @@ class BacktestEngine:
         # Omega ratio (sum of gains / sum of losses)
         gains = sum([r for r in returns if r > 0])
         losses = sum([abs(r) for r in returns if r < 0])
-        omega_ratio = gains / losses if losses > 0 else float('inf')
+        omega_ratio = gains / losses if losses > 0 else 0.0
         
         # Win rate (profitable days / total days)
         profitable_days = sum([1 for r in returns if r > 0])
@@ -585,7 +586,7 @@ class BacktestEngine:
         # Profit factor (gross profit / gross loss)
         gross_profit = sum([r for r in returns if r > 0])
         gross_loss = sum([abs(r) for r in returns if r < 0])
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0.0
         
         # Sortino ratio (downside deviation only)
         downside_returns = [r for r in returns if r < 0]
@@ -743,7 +744,7 @@ if __name__ == "__main__":
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
     
     with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
+        dump_json_safe(results, f, indent=2, default=str)
     
     print(f"\nDetailed results saved to: {output_file}")
     print(f"\nBacktest complete. Run 'python -m src.backtest.visualize' to generate charts.")
