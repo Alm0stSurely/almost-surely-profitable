@@ -240,8 +240,8 @@ class TestBacktestEngine:
         assert metrics["sharpe_ratio"] > 0
         assert metrics["max_drawdown"] == 0  # monotonic increase
         assert metrics["win_rate"] == 1.0  # every day profitable
-        assert metrics["profit_factor"] == float("inf")  # no losses
-        assert metrics["omega_ratio"] == float("inf")
+        assert metrics["profit_factor"] == 0.0  # no losses -> finite sentinel
+        assert metrics["omega_ratio"] == 0.0  # no losses -> finite sentinel
         assert metrics["calmar_ratio"] >= 0
         assert metrics["annualized_return"] > 0
         assert len(metrics["equity_curve"]) == 10
@@ -277,8 +277,8 @@ class TestBacktestEngine:
         assert metrics["sortino_ratio"] == 0.0
         assert metrics["calmar_ratio"] == 0.0  # max_drawdown = 0
         assert metrics["win_rate"] == 0.0  # no profitable returns
-        # profit_factor undefined (no losses) → inf
-        assert metrics["profit_factor"] == float("inf")
+        # profit_factor undefined (no losses) -> finite sentinel 0.0
+        assert metrics["profit_factor"] == 0.0
 
     def test_calculate_metrics_with_benchmark(self, tmp_path):
         engine = self._make_engine()

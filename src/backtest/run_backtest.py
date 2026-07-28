@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backtest.backtest import BacktestEngine, print_backtest_report
+from utils import dump_json_safe
 
 try:
     from backtest.visualize import plot_backtest_results
@@ -305,7 +306,7 @@ Examples:
                     result_serializable[key] = value
             
             with open(output_path, 'w') as f:
-                json.dump(result_serializable, f, indent=2, default=str)
+                dump_json_safe(result_serializable, f, indent=2, default=str)
             print(f"\n✓ Results saved to {output_path}")
         
         # Generate plots if requested
