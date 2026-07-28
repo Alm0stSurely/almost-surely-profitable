@@ -22,7 +22,7 @@ from analysis.decision_analyzer import DecisionAnalyzer
 from risk.performance_metrics import calculate_all_metrics
 from risk.cvar import calculate_portfolio_cvar
 from data.fetch_market_data import fetch_historical_data
-from utils import load_valid_daily_results_limited
+from utils import load_valid_daily_results, load_valid_daily_results_limited
 
 
 def load_portfolio_data():
@@ -196,14 +196,15 @@ def generate_comprehensive_report():
         total_return = (portfolio['total_value'] - 10000) / 10000 * 100
         print(f"Total Return: {total_return:+.2f}%")
         
-        # Compare to benchmark if we have date range from results
-        if results:
-            dates = [r.get('date') for r in results if r.get('date')]
-            if dates:
-                bench_return = _get_benchmark_return(min(dates), max(dates))
+        # Compare to benchmark over the full live period (since earliest result)
+        all_results = load_valid_daily_results("results/daily")
+        if all_results:
+            all_dates = [r.get('date') for r in all_results if r.get('date')]
+            if all_dates:
+                bench_return = _get_benchmark_return(min(all_dates), max(all_dates))
                 if bench_return is not None:
                     alpha = total_return - bench_return * 100
-                    print(f"vs Buy & Hold (SPY): {'+' if alpha >= 0 else ''}{alpha:.2f}%")
+                    print(f"vs Buy & Hold (SPY) since {min(all_dates)}: {'+' if alpha >= 0 else ''}{alpha:.2f}%")
     
     print("\n✓ Evaluation complete.")
     print("="*70)

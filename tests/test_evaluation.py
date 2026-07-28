@@ -16,12 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 import numpy as np
+import pandas as pd
 
 from evaluation import (
     load_portfolio_data,
     load_recent_results,
     calculate_performance_trends,
     generate_comprehensive_report,
+    _get_benchmark_return,
 )
 
 
@@ -444,3 +446,86 @@ class TestEvaluationConsistency:
             assert "Total Trades: 1" in captured.out
             assert "Avg Trades/Day: 0.1" in captured.out
             assert "Win Rate: 0.0%" in captured.out
+
+
+class TestBenchmarkReturn:
+    """Tests for the SPY buy-and-hold benchmark helper."""
+
+    def test_get_benchmark_return_computes_spy_return(self, monkeypatch):
+        """_get_benchmark_return should compute (end/start - 1) for SPY closes."""
+        fake_df = pd.DataFrame({"Close": [100.0, 105.0]})
+        fake_data = {"SPY": fake_df}
+
+        def fake_fetch(tickers, start, end):
+            assert tickers == ["SPY"]
+            return fake_data
+
+        monkeypatch.setattr("evaluation.fetch_historical_data", fake_fetch)
+        result = _get_benchmark_return("2026-01-01", "2026-01-02")
+        assert result == pytest.approx(0.05)
+
+    def test_get_benchmark_return_none_when_data_empty(self, monkeypatch):
+        """_get_benchmark_return should return None when the fetched data is empty."""
+        monkeypatch.setattr(
+            "evaluation.fetch_historical_data",
+            lambda *a, **k: {"SPY": pd.DataFrame()},
+        )
+        assert _get_benchmark_return("2026-01-01", "2026-01-02") is None
+
+
+class TestBenchmarkSummaryConsistency:
+    """Tests that the benchmark comparison uses the same horizon as the portfolio."""
+
+    def test_summary_uses_full_history_for_benchmark(self, monkeypatch, capsys):
+        """The benchmark comparison must use the earliest valid result, not the 30-day window."""
+        # Portfolio state: down 5% since the 10 000 EUR inception
+        monkeypatch.setattr(
+            "evaluation.load_portfolio_data",
+            lambda: {
+                "total_value": 9500.0,
+                "cash": 2500.0,
+                "total_realized_pnl": -200.0,
+                "positions": {"SPY": {"quantity": 1, "avg_price": 100, "current_price": 95}},
+            },
+        )
+
+        # 30-day window starts at 2026-07-01
+        recent_results = [{"date": "2026-07-01"}, {"date": "2026-07-28"}]
+        monkeypatch.setattr(
+            "evaluation.load_valid_daily_results_limited",
+            lambda *a, **k: recent_results,
+        )
+
+        # Full history starts at 2026-02-17
+        all_results = [{"date": "2026-02-17"}, {"date": "2026-07-28"}]
+        monkeypatch.setattr(
+            "evaluation.load_valid_daily_results",
+            lambda *a, **k: all_results,
+        )
+
+        # SPY buy-and-hold return over the full period: +10%
+        def fake_fetch(tickers, start, end):
+            assert start == "2026-02-17"
+            assert end == "2026-07-28"
+            return {"SPY": pd.DataFrame({"Close": [100.0, 110.0]})}
+
+        monkeypatch.setattr("evaluation.fetch_historical_data", fake_fetch)
+        # Mock fetch_current_prices used locally inside generate_comprehensive_report
+        monkeypatch.setattr(
+            "data.fetch_market_data.fetch_current_prices",
+            lambda *a, **k: {"SPY": 95.0},
+        )
+
+        # Mock DecisionAnalyzer to avoid loading real decision history
+        mock_analyzer = MagicMock()
+        mock_analyzer.load_decisions.return_value = []
+        mock_analyzer.analyze_outcomes.return_value = {}
+        monkeypatch.setattr("evaluation.DecisionAnalyzer", lambda: mock_analyzer)
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+
+        assert "Total Return: -5.00%" in captured.out
+        assert "vs Buy & Hold (SPY) since 2026-02-17: -15.00%" in captured.out
+        # Make sure we do NOT compare against the 30-day window start
+        assert "since 2026-07-01" not in captured.out
