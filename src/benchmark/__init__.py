@@ -6,55 +6,81 @@ Provides a fair baseline for comparison.
 """
 
 import json
+import math
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+
+from utils import _is_finite_number, dump_json_safe
 
 
 class LiveEqualWeightBenchmark:
     """
     Live equal-weight benchmark for real-time strategy comparison.
-    
+
     Holds equal weight in all available universe tickers.
     Rebalances daily (or on a configured frequency) to maintain equal weight.
     """
-    
+
     def __init__(
         self,
         initial_capital: float = 10000.0,
         data_dir: str = "data",
-        target_cash_buffer_pct: float = 10.0  # Keep 10% cash, invest 90%
+        target_cash_buffer_pct: float = 10.0,  # Keep 10% cash, invest 90%
     ):
-        self.initial_capital = initial_capital
+        if not _is_finite_number(initial_capital) or initial_capital <= 0:
+            raise ValueError("initial_capital must be a positive finite number")
+        if not _is_finite_number(target_cash_buffer_pct):
+            raise ValueError("target_cash_buffer_pct must be a finite number")
+
+        self.initial_capital = float(initial_capital)
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
         self.state_file = self.data_dir / "equalweight_benchmark_state.json"
-        self.target_cash_buffer_pct = target_cash_buffer_pct
-        
+        self.target_cash_buffer_pct = float(target_cash_buffer_pct)
+
         self.shares: Dict[str, float] = {}
-        self.cash: float = initial_capital
+        self.cash: float = self.initial_capital
         self.start_date: Optional[str] = None
         self.last_rebalanced: Optional[str] = None
-        
+
         self._load_state()
-    
+
     def _load_state(self) -> None:
         if not self.state_file.exists():
             return
         try:
             with open(self.state_file, "r") as f:
                 state = json.load(f)
-            self.shares = state.get("shares", {})
-            self.cash = state.get("cash", self.initial_capital)
-            self.start_date = state.get("start_date")
-            self.last_rebalanced = state.get("last_rebalanced")
         except Exception:
-            self.shares = {}
-            self.cash = self.initial_capital
-            self.start_date = None
-            self.last_rebalanced = None
-    
+            state = {}
+
+        # Sanitize any non-finite values that may have been written by a buggy
+        # previous version or a corrupted file; reset to safe defaults instead of
+        # letting NaN/Infinity propagate into daily-run output.
+        self.shares = self._sanitize_shares(state.get("shares", {}))
+        self.cash = self._sanitize_scalar(state.get("cash"), self.initial_capital)
+        self.start_date = state.get("start_date")
+        self.last_rebalanced = state.get("last_rebalanced")
+
+    def _sanitize_scalar(self, value: Any, default: float) -> float:
+        """Return a finite float, or *default* if the value is unusable."""
+        if _is_finite_number(value):
+            return float(value)
+        return float(default)
+
+    def _sanitize_shares(self, shares: Any) -> Dict[str, float]:
+        """Return a dict of finite share counts, dropping invalid entries."""
+        if not isinstance(shares, dict):
+            return {}
+        return {
+            ticker: float(quantity)
+            for ticker, quantity in shares.items()
+            if _is_finite_number(quantity) and float(quantity) >= 0
+        }
+
     def save_state(self) -> None:
+        """Persist benchmark state as strict JSON (no NaN/Infinity tokens)."""
         state = {
             "shares": self.shares,
             "cash": self.cash,
@@ -64,16 +90,16 @@ class LiveEqualWeightBenchmark:
             "last_updated": datetime.now().isoformat(),
         }
         with open(self.state_file, "w") as f:
-            json.dump(state, f, indent=2)
-    
+            dump_json_safe(state, f, indent=2)
+
     def get_value(self, current_prices: Dict[str, float]) -> Dict:
         """Calculate current benchmark value given current prices."""
         positions_value = 0.0
         position_details = {}
-        
+
         for ticker, shares in self.shares.items():
             price = current_prices.get(ticker)
-            if price is not None:
+            if _is_finite_number(price) and price > 0:
                 value = shares * price
                 positions_value += value
                 position_details[ticker] = {
@@ -81,10 +107,12 @@ class LiveEqualWeightBenchmark:
                     "price": price,
                     "value": value,
                 }
-        
+
         total_value = self.cash + positions_value
-        total_return_pct = ((total_value - self.initial_capital) / self.initial_capital) * 100
-        
+        total_return_pct = (
+            (total_value - self.initial_capital) / self.initial_capital
+        ) * 100
+
         return {
             "total_value": total_value,
             "cash": self.cash,
@@ -93,55 +121,62 @@ class LiveEqualWeightBenchmark:
             "num_positions": len(self.shares),
             "position_details": position_details,
         }
-    
+
     def rebalance(self, current_prices: Dict[str, float]) -> Dict:
         """
         Rebalance to equal weight across all available tickers.
-        
+
         Returns the updated benchmark value.
         """
-        available_tickers = [t for t in current_prices.keys() if current_prices[t] > 0]
+        available_tickers = [
+            t for t in current_prices.keys()
+            if _is_finite_number(current_prices[t]) and current_prices[t] > 0
+        ]
         n_tickers = len(available_tickers)
-        
+
         if n_tickers == 0:
             return self.get_value(current_prices)
-        
+
         # First time initialization
         if not self.start_date:
             self.start_date = datetime.now().strftime("%Y-%m-%d")
-        
-        # Calculate total value
+
+        # Calculate total value using only finite prices.
         total_value = self.cash
         for ticker, shares in self.shares.items():
             price = current_prices.get(ticker)
-            if price is not None:
+            if _is_finite_number(price):
                 total_value += shares * price
-        
+
         # Target allocation: invest (100 - cash_buffer)% equally across all tickers
         investable_pct = 1.0 - (self.target_cash_buffer_pct / 100)
         target_value_per_ticker = (total_value * investable_pct) / n_tickers
-        
+
+        # Guard against a degenerate total value (should not happen because
+        # initial_capital > 0, but protects downstream loops).
+        if not _is_finite_number(target_value_per_ticker) or target_value_per_ticker <= 0:
+            return self.get_value(current_prices)
+
         # Rebalance: sell all positions first, then buy equal weight
         self.cash = total_value
         self.shares = {}
-        
+
         for ticker in available_tickers:
             price = current_prices[ticker]
-            if price > 0:
-                shares = target_value_per_ticker / price
-                cost = shares * price
-                self.shares[ticker] = shares
-                self.cash -= cost
-        
+            shares = target_value_per_ticker / price
+            cost = shares * price
+            self.shares[ticker] = shares
+            self.cash -= cost
+
         self.last_rebalanced = datetime.now().isoformat()
         self.save_state()
-        
+
         return self.get_value(current_prices)
-    
+
     def update(self, current_prices: Dict[str, float]) -> Dict:
         """Update benchmark value without rebalancing (just mark-to-market)."""
         return self.get_value(current_prices)
-    
+
     def get_daily_summary(self, current_prices: Dict[str, float]) -> Dict:
         """Get a summary for daily reporting."""
         value = self.get_value(current_prices)
