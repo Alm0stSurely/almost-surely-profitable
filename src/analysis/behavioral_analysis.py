@@ -28,7 +28,7 @@ KEYWORD_CONCEPTS = {
     "tail risk": ["tail risk", "tail-risk"],
     "correlation": ["correlation", "correlated", "correlations"],
     "diversification": ["diversification", "diversified"],
-    "prospect theory": ["prospect theory"],
+    "deflated sharpe": ["deflated sharpe", "dsr", "sharpe ratio"],
     "regime": ["regime", "volatility regime", "market regime"],
     "momentum": ["momentum", "trend", "trending"],
     "drawdown": ["drawdown", "max drawdown"],

@@ -32,11 +32,12 @@ HIGHLIGHT_CONCEPTS = [
     "mean reversion",
     "momentum",
     "cash buffer",
+    "drawdown",
     "stop-loss",
     "trade cap",
     "cooldown",
     "let winners run",
-    "prospect theory",
+    "deflated sharpe",
 ]
 
 
