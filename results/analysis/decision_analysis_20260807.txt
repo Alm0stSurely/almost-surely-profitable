@@ -1,8 +1,20 @@
+Starting LLM Decision Quality Analysis...
+
+Loading 30 daily result files...
+Loaded 6 decision records with trades
+
+Analyzing outcomes with 5-day forward window...
+  Buy decisions: 10
+  Sell decisions: 0
+
+Analyzing outcomes with 1-day forward window...
+  Buy decisions: 10
+  Sell decisions: 0
 
 ======================================================================
 LLM DECISION QUALITY ANALYSIS (Enhanced)
 Analysis Period: Last 6 trading days
-Generated: 2026-08-07 22:35:32
+Generated: 2026-08-07 22:42:39
 ======================================================================
 
 TRADE STATISTICS
@@ -53,3 +65,5 @@ ASSESSMENT
 ~ Marginal risk-adjusted returns
 
 ======================================================================
+
+Report saved to: results/analysis/decision_analysis_20260807.txt

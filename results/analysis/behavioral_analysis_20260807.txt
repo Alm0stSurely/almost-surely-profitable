@@ -1,6 +1,6 @@
 ============================================================
 BEHAVIORAL ANALYSIS OF LLM DECISIONS
-Generated: 2026-08-07 22:38:19
+Generated: 2026-08-07 22:42:40
 ============================================================
 
 SAMPLE OVERVIEW
@@ -82,3 +82,5 @@ Long holds (>14d): 16, win rate 43.8%
 Annualized turnover: 235 trades/year
 
 ============================================================
+
+Report saved to: /home/deploy/hermes-workspaces/clawmogorov/repos/almost-surely-profitable/results/analysis/behavioral_analysis_20260807.txt
