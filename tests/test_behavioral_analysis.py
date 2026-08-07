@@ -99,3 +99,32 @@ class TestCountKeywordConcepts:
         decisions = [make_decision("This decision has no relevant keywords.")]
         counts = count_keyword_concepts(decisions, KEYWORD_CONCEPTS)
         assert all(v == 0 for v in counts.values())
+
+
+class TestRoundTripConsistency:
+    def test_get_round_trips_matches_churn_analysis(self):
+        """behavioral_analysis should use the same FIFO matcher as churn_analysis."""
+        from analysis.behavioral_analysis import get_round_trips
+        from analysis.churn_analysis import match_round_trips
+
+        trades = [
+            {"ticker": "SPY", "action": "buy", "timestamp": "2026-05-01T21:00:00", "price": 100, "realized_pnl": 0},
+            {"ticker": "SPY", "action": "buy", "timestamp": "2026-05-10T21:00:00", "price": 105, "realized_pnl": 0},
+            {"ticker": "SPY", "action": "sell", "timestamp": "2026-05-03T21:00:00", "price": 102, "realized_pnl": 2},
+            {"ticker": "SPY", "action": "sell", "timestamp": "2026-05-15T21:00:00", "price": 103, "realized_pnl": -2},
+        ]
+        expected = [
+            {"ticker": rt.ticker, "hold_days": rt.hold_days, "pnl": rt.pnl}
+            for rt in match_round_trips(trades)
+        ]
+        assert get_round_trips(trades) == expected
+        assert len(expected) == 2  # buys matched to sells in FIFO order
+
+    def test_orphan_sell_is_skipped(self):
+        """A sell without a preceding buy should not create a round trip."""
+        from analysis.behavioral_analysis import get_round_trips
+
+        trades = [
+            {"ticker": "TLT", "action": "sell", "timestamp": "2026-05-01T21:00:00", "price": 100, "realized_pnl": 5},
+        ]
+        assert get_round_trips(trades) == []

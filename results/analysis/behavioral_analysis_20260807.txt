@@ -1,6 +1,6 @@
 ============================================================
 BEHAVIORAL ANALYSIS OF LLM DECISIONS
-Generated: 2026-08-07 22:31:49
+Generated: 2026-08-07 22:38:19
 ============================================================
 
 SAMPLE OVERVIEW
@@ -73,10 +73,10 @@ Date           Cash %  Positions   Total Return  Trades
 2026-08-07       37.7          8           0.10       1
 
 CHURN / ROUND-TRIP ANALYSIS
-Round trips: 33
-Win rate: 27.3%
-Avg hold period: 26.5 days
-Short holds (≤3d): 5, win rate 0.0%
+Round trips: 32
+Win rate: 28.1%
+Avg hold period: 28.7 days
+Short holds (≤3d): 4, win rate 0.0%
 Medium holds (4-14d): 12, win rate 16.7%
 Long holds (>14d): 16, win rate 43.8%
 Annualized turnover: 235 trades/year

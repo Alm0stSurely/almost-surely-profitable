@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from analysis.churn_analysis import match_round_trips
 from utils import load_valid_daily_results
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -55,6 +56,14 @@ def count_keyword_concepts(decisions, keyword_concepts=None):
             if any(variant in r for variant in variants):
                 keyword_counts[concept] += 1
     return keyword_counts
+
+def get_round_trips(trades):
+    """Return round-trip dicts using the same FIFO matcher as churn_analysis.py."""
+    return [
+        {"ticker": rt.ticker, "hold_days": rt.hold_days, "pnl": rt.pnl}
+        for rt in match_round_trips(trades)
+    ]
+
 
 def main():
     with open(DATA_DIR / "decision_history.json") as f:
@@ -144,27 +153,9 @@ def main():
         lines.append(f"{data['date']:12s} {cash/total*100:8.1f} {num_pos:10d} {ret:14.2f} {trades_count:7d}")
     lines.append("")
 
-    # Round-trip churn analysis
-    ticker_trades = defaultdict(list)
-    for t in trades:
-        ticker_trades[t["ticker"]].append(t)
-
-    round_trips = []
-    for tk, tl in ticker_trades.items():
-        buys = [t for t in tl if t["action"] == "buy"]
-        sells = [t for t in tl if t["action"] == "sell"]
-        buy_idx = 0
-        for sell in sells:
-            if buy_idx < len(buys):
-                buy_dt = datetime.fromisoformat(buys[buy_idx]["timestamp"])
-                sell_dt = datetime.fromisoformat(sell["timestamp"])
-                hold_days = (sell_dt - buy_dt).total_seconds() / 86400
-                round_trips.append({
-                    "ticker": tk,
-                    "hold_days": hold_days,
-                    "pnl": sell.get("realized_pnl", 0),
-                })
-                buy_idx += 1
+    # Round-trip churn analysis (use the same FIFO matching logic as churn_analysis.py
+    # so the two reports stay consistent and avoid negative/mismatched round trips).
+    round_trips = get_round_trips(trades)
 
     winning = [r for r in round_trips if r["pnl"] > 0]
     short = [r for r in round_trips if r["hold_days"] <= 3]
