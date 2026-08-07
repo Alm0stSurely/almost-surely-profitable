@@ -118,6 +118,12 @@ class DecisionAnalyzer:
                     ticker, date, price, forward_days
                 )
                 
+                # If we cannot observe the forward price yet, do not count this
+                # decision as a success or failure. A 0.0 sentinel would be
+                # misclassified as a wrong decision.
+                if np.isnan(forward_return):
+                    continue
+                
                 record = {
                     "ticker": ticker,
                     "date": date,
@@ -147,6 +153,11 @@ class DecisionAnalyzer:
         
         Looks up the price N trading days after the decision date
         and calculates the return.
+        
+        Returns NaN when the forward window is not yet observable
+        (e.g., the most recent decision) so that the caller can exclude
+        the record from accuracy calculations rather than scoring it as
+        a failed decision.
         """
         try:
             # Fetch historical data - get enough days to cover forward window
@@ -155,7 +166,7 @@ class DecisionAnalyzer:
             data = fetch_historical_data([ticker], period=f"{buffer_days}d")
             
             if ticker not in data or data[ticker].empty:
-                return 0.0
+                return np.nan
             
             df = data[ticker].copy()
             
@@ -175,13 +186,13 @@ class DecisionAnalyzer:
             # Find the entry date or next available trading day
             mask = df.index >= entry_date
             if not mask.any():
-                return 0.0
+                return np.nan
             
             # Get data from entry date onwards
             future_data = df[mask].sort_index()
             
             if len(future_data) < 2:  # Need at least entry + 1 day
-                return 0.0
+                return np.nan
             
             # Get price at decision time (entry)
             entry_day_price = future_data["Close"].iloc[0]
@@ -196,9 +207,9 @@ class DecisionAnalyzer:
             return return_pct
             
         except Exception as e:
-            # Silent fail - return 0 for this calculation
-            return 0.0
-    
+            # Silent fail - return NaN so the record is excluded
+            return np.nan
+
     def _calculate_metrics(self, outcomes: Dict) -> Dict:
         """Calculate aggregate metrics from outcomes."""
         if not HAS_DEPS:
@@ -215,34 +226,33 @@ class DecisionAnalyzer:
         }
         
         # Buy metrics
-        if outcomes["buys"]:
-            buy_returns = [r["forward_return"] for r in outcomes["buys"]]
-            buy_successes = sum(1 for r in outcomes["buys"] if r["success"])
+        clean_buys = [r for r in outcomes["buys"] if not np.isnan(r["forward_return"])]
+        if clean_buys:
+            buy_returns = [r["forward_return"] for r in clean_buys]
+            buy_successes = sum(1 for r in clean_buys if r["success"])
             
-            metrics["buy_accuracy"] = buy_successes / len(outcomes["buys"])
-            # NaN can occur when forward window exceeds available data; ignore NaNs.
-            clean_buy_returns = [x for x in buy_returns if not np.isnan(x)]
-            metrics["avg_forward_return_buy"] = np.nanmean(buy_returns) if clean_buy_returns else 0.0
-            metrics["buy_count"] = len(outcomes["buys"])
+            metrics["buy_accuracy"] = buy_successes / len(clean_buys)
+            metrics["avg_forward_return_buy"] = np.mean(buy_returns)
+            metrics["buy_count"] = len(clean_buys)
         else:
             metrics["buy_count"] = 0
         
         # Sell metrics
-        if outcomes["sells"]:
-            sell_returns = [r["forward_return"] for r in outcomes["sells"]]
-            sell_successes = sum(1 for r in outcomes["sells"] if r["success"])
+        clean_sells = [r for r in outcomes["sells"] if not np.isnan(r["forward_return"])]
+        if clean_sells:
+            sell_returns = [r["forward_return"] for r in clean_sells]
+            sell_successes = sum(1 for r in clean_sells if r["success"])
             
-            metrics["sell_accuracy"] = sell_successes / len(outcomes["sells"])
+            metrics["sell_accuracy"] = sell_successes / len(clean_sells)
             # For sells, negative return means we avoided loss (good)
-            # So we negate to show the "saved" return; ignore NaNs.
-            clean_sell_returns = [x for x in sell_returns if not np.isnan(x)]
-            metrics["avg_forward_return_sell"] = -np.nanmean(sell_returns) if clean_sell_returns else 0.0
-            metrics["sell_count"] = len(outcomes["sells"])
+            # So we negate to show the "saved" return.
+            metrics["avg_forward_return_sell"] = -np.mean(sell_returns)
+            metrics["sell_count"] = len(clean_sells)
         else:
             metrics["sell_count"] = 0
         
         # Overall metrics
-        all_decisions = outcomes["buys"] + outcomes["sells"]
+        all_decisions = clean_buys + clean_sells
         if all_decisions:
             metrics["total_decisions"] = len(all_decisions)
             wins = sum(1 for d in all_decisions if d["success"])
@@ -253,10 +263,9 @@ class DecisionAnalyzer:
             for r in all_decisions:
                 # For sells, invert the return (selling before a drop is good)
                 ret = r["forward_return"]
-                if r in outcomes["sells"]:
+                if r in clean_sells:
                     ret = -ret
-                if not np.isnan(ret):
-                    returns.append(ret)
+                returns.append(ret)
             
             if len(returns) > 1 and np.std(returns) > 0:
                 metrics["sharpe_of_decisions"] = np.mean(returns) / np.std(returns)

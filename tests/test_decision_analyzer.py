@@ -211,28 +211,28 @@ def test_forward_return_sell_scenario(mock_fetch, analyzer, mock_price_data):
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
 def test_forward_return_missing_ticker(mock_fetch, analyzer):
-    """Missing ticker in fetched data should return 0.0."""
+    """Missing ticker in fetched data should return NaN."""
     mock_fetch.return_value = {}
     ret = analyzer._get_forward_return("XXX", "2026-05-10", 100.0, days=5)
-    assert ret == 0.0
+    assert np.isnan(ret)
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
 def test_forward_return_empty_dataframe(mock_fetch, analyzer):
-    """Empty DataFrame should return 0.0."""
+    """Empty DataFrame should return NaN."""
     mock_fetch.return_value = {"SPY": pd.DataFrame()}
     ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=5)
-    assert ret == 0.0
+    assert np.isnan(ret)
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
 def test_forward_return_not_enough_data(mock_fetch, analyzer):
-    """Less than 2 rows of future data should return 0.0."""
+    """Less than 2 rows of future data should return NaN."""
     mock_fetch.return_value = {
         "SPY": pd.DataFrame({"Close": [100]}, index=pd.to_datetime(["2026-05-10"]))
     }
     ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=5)
-    assert ret == 0.0
+    assert np.isnan(ret)
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
@@ -247,10 +247,10 @@ def test_forward_return_timezone_aware(mock_fetch, analyzer):
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
 def test_forward_return_exception_handling(mock_fetch, analyzer):
-    """Exceptions in fetch should return 0.0 silently."""
+    """Exceptions in fetch should return NaN silently."""
     mock_fetch.side_effect = Exception("Network error")
     ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=5)
-    assert ret == 0.0
+    assert np.isnan(ret)
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
@@ -371,6 +371,20 @@ def test_analyze_outcomes_zero_price_skipped(analyzer):
     assert metrics["total_decisions"] == 0
 
 
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_analyze_outcomes_skips_nan_forward_return(mock_fetch, analyzer):
+    """A decision whose forward return is NaN must not penalize accuracy."""
+    mock_fetch.return_value = {}  # Missing data → _get_forward_return returns NaN
+    decisions = [{
+        "date": "2026-05-10",
+        "trades": [{"ticker": "SPY", "action": "buy", "price": 100.0}],
+    }]
+    metrics = analyzer.analyze_outcomes(decisions, forward_days=5)
+    assert metrics["buy_count"] == 0
+    assert metrics["total_decisions"] == 0
+    assert metrics["win_rate"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # _calculate_metrics
 # ---------------------------------------------------------------------------
@@ -443,8 +457,8 @@ def test_calculate_metrics_sharpe_with_vol(analyzer):
     assert metrics["sharpe_of_decisions"] > 0
 
 
-def test_calculate_metrics_ignores_nan_forward_returns(analyzer):
-    """NaN forward returns should not poison the average return metrics."""
+def test_calculate_metrics_excludes_nan_forward_returns(analyzer):
+    """NaN forward returns should be excluded from all metrics."""
     outcomes = {
         "buys": [
             {"forward_return": 0.05, "success": True},
@@ -457,13 +471,15 @@ def test_calculate_metrics_ignores_nan_forward_returns(analyzer):
         ],
     }
     metrics = analyzer._calculate_metrics(outcomes)
-    # NaN should be ignored in the average, not propagate.
-    assert metrics["buy_count"] == 3
-    assert metrics["sell_count"] == 2
+    # Only the finite records should be counted.
+    assert metrics["buy_count"] == 2
+    assert metrics["sell_count"] == 1
     assert metrics["avg_forward_return_buy"] == pytest.approx((0.05 - 0.03) / 2)
     assert metrics["avg_forward_return_sell"] == pytest.approx(0.04)
-    assert metrics["buy_accuracy"] == pytest.approx(1/3)
-    assert metrics["sell_accuracy"] == pytest.approx(0.5)
+    assert metrics["buy_accuracy"] == pytest.approx(0.5)
+    assert metrics["sell_accuracy"] == pytest.approx(1.0)
+    assert metrics["total_decisions"] == 3
+    assert metrics["win_rate"] == pytest.approx(2/3)
 
 
 def test_calculate_metrics_all_nan_returns_default_to_zero(analyzer):
@@ -620,7 +636,7 @@ def test_analyze_outcomes_skips_no_price(mock_fetch, analyzer):
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
 def test_analyze_outcomes_date_before_data(mock_fetch, analyzer):
-    """Decision date before available data should return 0.0 forward return."""
+    """Decision date before available data uses the data; date after returns NaN."""
     dates = pd.date_range("2026-05-15", periods=5, freq="D")
     df = pd.DataFrame({"Close": [100, 101, 102, 103, 104]}, index=dates)
     mock_fetch.return_value = {"SPY": df}
@@ -639,7 +655,7 @@ def test_analyze_outcomes_date_before_data(mock_fetch, analyzer):
         "trades": [{"ticker": "SPY", "action": "buy", "price": 100.0}],
     }]
     metrics2 = analyzer.analyze_outcomes(decisions2, forward_days=5)
-    # mask = df.index >= "2026-05-20" → all False → _get_forward_return returns 0.0
-    # forward_return=0.0 → success=False → total_decisions=1, win_rate=0.0
-    assert metrics2["total_decisions"] == 1
+    # mask = df.index >= "2026-05-20" → all False → _get_forward_return returns NaN
+    # NaN records are excluded, so no decisions are scored.
+    assert metrics2["total_decisions"] == 0
     assert metrics2["win_rate"] == 0.0
