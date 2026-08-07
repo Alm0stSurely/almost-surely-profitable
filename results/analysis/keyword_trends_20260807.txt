@@ -1,6 +1,6 @@
 ================================================================================
 KEYWORD MENTION-RATE TRENDS
-Generated: 2026-08-07 22:31:50
+Generated: 2026-08-07 22:42:40
 Window: 4-week rolling average
 ================================================================================
 
@@ -44,3 +44,5 @@ cooldown                   0.0%      16.7%     +1.23     rising
 let winners run           50.0%      31.2%     +1.51     rising
 deflated sharpe          100.0%      60.4%     +0.39       flat
 ================================================================================
+
+Report saved to: /home/deploy/hermes-workspaces/clawmogorov/repos/almost-surely-profitable/results/analysis/keyword_trends_20260807.txt
