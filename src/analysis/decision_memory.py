@@ -231,7 +231,7 @@ class DecisionMemory:
         summary = self.get_decision_summary(days=90)
         patterns = self.get_pattern_analysis()
         
-        if summary["total_decisions"] == 0:
+        if summary["total_decisions"] == 0 and patterns.get("status") != "ok":
             return ["No trading history yet. Focus on building a track record."]
         
         # Win rate lesson
