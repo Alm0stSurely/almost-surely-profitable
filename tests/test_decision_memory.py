@@ -554,6 +554,18 @@ class TestGenerateLessonsLearned:
         # Should have building track record or similar (no win_rate lesson since 0.5)
         assert any("track record" in l or "consistent" in l for l in lessons)
 
+    def test_pattern_lessons_use_full_history_not_recent_window(self, tmp_path):
+        # Regression: older-than-90-day records still produce pattern lessons
+        # because get_pattern_analysis looks at the full history, not the recent window.
+        records = [
+            make_record(date="2026-01-15", rsi=80.0 - i * 5, pnl_pct=-5.0 + i * 2.5)
+            for i in range(10)
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        lessons = mem.generate_lessons_learned()
+        assert any("Lower RSI" in l or "mean reversion" in l.lower() for l in lessons)
+
 
 # ---------------------------------------------------------------------------
 # get_memory_context_for_llm
