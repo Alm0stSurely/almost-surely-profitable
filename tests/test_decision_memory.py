@@ -353,6 +353,27 @@ class TestGetPatternAnalysis:
         # Short term should average (2+3+1+0.5)/4 = 1.625
         assert abs(hp["short_term_5d"] - 1.625) < 0.001
 
+    def test_zero_day_holding_period_included(self, tmp_path):
+        # Regression: a 0-day holding period is valid and must not be dropped by
+        # a truthiness check. It belongs in the short-term bucket (h <= 5).
+        records = [
+            make_record(pnl_pct=4.0, holding_period_days=0),
+            make_record(pnl_pct=2.0, holding_period_days=3),
+            make_record(pnl_pct=-1.0, holding_period_days=10),
+            make_record(pnl_pct=-2.0, holding_period_days=15),
+            make_record(pnl_pct=5.0, holding_period_days=25),
+        ] + [make_record(pnl_pct=1.0, holding_period_days=5) for _ in range(5)]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        analysis = mem.get_pattern_analysis()
+        hp = analysis["holding_period_performance"]
+        # short_term includes 0-day (+4.0), 3-day (+2.0), and five 5-day (+1.0 each)
+        # => (4 + 2 + 5*1) / 7 = 11/7 ≈ 1.5714
+        assert hp["short_term_5d"] is not None
+        assert abs(hp["short_term_5d"] - (11.0 / 7.0)) < 0.001
+        assert hp["medium_term_5_20d"] is not None
+        assert hp["long_term_20d_plus"] is not None
+
     def test_behavioral_overtrading_flag(self, tmp_path):
         today = datetime.now().strftime("%Y-%m-%d")
         # Need 10+ completed trades for pattern analysis + 20 decisions for behavioral calc
