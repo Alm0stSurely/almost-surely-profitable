@@ -194,7 +194,7 @@ class DecisionMemory:
             analysis["bollinger_correlation"] = np.corrcoef(bbs, pnls)[0, 1] if len(bbs) > 1 else 0
         
         # Optimal holding period
-        hold_data = [(d.holding_period_days, d.pnl_pct) for d in completed if d.holding_period_days]
+        hold_data = [(d.holding_period_days, d.pnl_pct) for d in completed if d.holding_period_days is not None]
         if hold_data:
             holds, pnls = zip(*hold_data)
             # Simple binning by holding period
