@@ -43,6 +43,8 @@ def test_system_prompt_exists():
     assert "NORMAL volatility: 15-30% cash" in SYSTEM_PROMPT
     assert "LOW volatility: 10-20% cash" in SYSTEM_PROMPT
     assert "you are under-invested" in SYSTEM_PROMPT
+    assert "capital is being dragged" in SYSTEM_PROMPT
+    assert "Default to deploying available cash" in SYSTEM_PROMPT
     
     # Check for drawdown clarification (added 2026-06-29)
     assert "single trading day" in SYSTEM_PROMPT
