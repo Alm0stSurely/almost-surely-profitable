@@ -93,8 +93,13 @@ def get_barrier_levels(
         config: Barrier configuration
     
     Returns:
-        Tuple of (upper_barrier, lower_barrier)
+        Tuple of (upper_barrier, lower_barrier). Returns (NaN, NaN) if inputs
+        are non-finite, entry_price is zero, or daily_vol is negative.
     """
+    if not np.isfinite(entry_price) or entry_price == 0:
+        return float('nan'), float('nan')
+    if not np.isfinite(daily_vol) or daily_vol < 0:
+        return float('nan'), float('nan')
     upper = entry_price * (1 + config.profit_take_std * daily_vol)
     lower = entry_price * (1 - config.stop_loss_std * daily_vol)
     return upper, lower
@@ -127,8 +132,14 @@ def apply_triple_barrier(
     entry_price = price_series.iloc[entry_idx]
     entry_time = price_series.index[entry_idx]
     
+    # A non-finite or non-positive entry price makes barrier arithmetic undefined.
+    if not np.isfinite(entry_price) or entry_price == 0:
+        return None
+    
     # Calculate barrier levels
     upper_barrier, lower_barrier = get_barrier_levels(entry_price, daily_vol, config)
+    if not np.isfinite(upper_barrier) or not np.isfinite(lower_barrier):
+        return None
     
     # Determine vertical barrier (max holding period)
     vertical_barrier_idx = min(entry_idx + config.max_holding, len(price_series) - 1)
@@ -212,6 +223,8 @@ def label_events(
         
         # Get volatility at entry (use minimum threshold to avoid zero vol)
         daily_vol = volatility.loc[event_time] if event_time in volatility.index else 0.01
+        if not np.isfinite(daily_vol):
+            continue
         daily_vol = max(daily_vol, 0.005)  # Minimum 0.5% daily vol
         
         # Apply triple barrier
@@ -276,11 +289,19 @@ def analyze_barrier_distribution(
     lower = sum(1 for l in labels if l.barrier_type == BarrierType.LOWER)
     vertical = sum(1 for l in labels if l.barrier_type == BarrierType.VERTICAL)
     
-    returns = [l.return_pct for l in labels]
+    returns = np.array([l.return_pct for l in labels], dtype=float)
     holding_periods = [l.holding_periods for l in labels]
     
-    # Win rate: upper touches + positive vertical touches
-    wins = upper + sum(1 for l in labels if l.barrier_type == BarrierType.VERTICAL and l.return_pct > 0)
+    # Aggregate return statistics only over finite returns so NaN/Inf from
+    # degenerate prices do not propagate into reports.
+    finite_returns = returns[np.isfinite(returns)]
+    finite_count = len(finite_returns)
+    
+    # Win rate: upper touches + positive vertical touches (requires finite return)
+    wins = upper + sum(
+        1 for l in labels
+        if l.barrier_type == BarrierType.VERTICAL and np.isfinite(l.return_pct) and l.return_pct > 0
+    )
     
     return {
         'total_events': len(labels),
@@ -291,10 +312,10 @@ def analyze_barrier_distribution(
         'lower_pct': lower / len(labels) * 100,
         'vertical_pct': vertical / len(labels) * 100,
         'win_rate': wins / len(labels) * 100,
-        'avg_return': np.mean(returns) * 100,
-        'median_return': np.median(returns) * 100,
+        'avg_return': np.mean(finite_returns) * 100 if finite_count > 0 else 0.0,
+        'median_return': np.median(finite_returns) * 100 if finite_count > 0 else 0.0,
         'avg_holding_periods': np.mean(holding_periods),
-        'total_return': np.prod([1 + r for r in returns]) - 1
+        'total_return': np.prod(1 + finite_returns) - 1 if finite_count > 0 else 0.0,
     }
 
 
