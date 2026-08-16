@@ -11,17 +11,20 @@ Runs all analysis modules and generates a complete performance report:
 """
 
 import json
+import math
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent / ".."))
 
 from analysis.decision_analyzer import DecisionAnalyzer
-from risk.performance_metrics import calculate_all_metrics
-from risk.cvar import calculate_portfolio_cvar
 from data.fetch_market_data import fetch_historical_data
+from risk.cvar import calculate_portfolio_cvar
+from risk.performance_metrics import _has_non_finite, calculate_all_metrics
 from utils import load_valid_daily_results, load_valid_daily_results_limited
 
 
@@ -96,8 +99,13 @@ def generate_comprehensive_report():
     if portfolio:
         print("\n📊 PORTFOLIO STATUS")
         print("-" * 40)
-        print(f"Total Value: €{portfolio['total_value']:,.2f}")
-        print(f"Cash: €{portfolio['cash']:,.2f} ({portfolio['cash']/portfolio['total_value']*100:.1f}%)")
+        total_value = portfolio.get("total_value", 0)
+        cash = portfolio.get("cash", 0)
+        print(f"Total Value: €{total_value:,.2f}")
+        if total_value and math.isfinite(total_value) and math.isfinite(cash):
+            print(f"Cash: €{cash:,.2f} ({cash / total_value * 100:.1f}%)")
+        else:
+            print(f"Cash: €{cash:,.2f} (—)")
         print(f"Realized P&L: €{portfolio['total_realized_pnl']:,.2f}")
         print(f"Positions: {len(portfolio['positions'])}")
     
@@ -109,16 +117,16 @@ def generate_comprehensive_report():
         print("\n📈 PERFORMANCE TRENDS (30 days)")
         print("-" * 40)
         values = trends["portfolio_values"]
-        if len(values) >= 2:
+        if len(values) >= 2 and values[0] and math.isfinite(values[0]) and math.isfinite(values[-1]):
             change = (values[-1] - values[0]) / values[0] * 100
             print(f"Period Return: {change:+.2f}%")
-            print(f"Highest Value: €{max(values):,.2f}")
-            print(f"Lowest Value: €{min(values):,.2f}")
+            print(f"Highest Value: €{max(v for v in values if math.isfinite(v)):,.2f}")
+            print(f"Lowest Value: €{min(v for v in values if math.isfinite(v)):,.2f}")
         
         if trends.get("daily_returns"):
-            import numpy as np
-            returns = trends["daily_returns"]
-            print(f"Volatility (ann): {np.std(returns) * np.sqrt(252) * 100:.1f}%")
+            returns = np.array(trends["daily_returns"])
+            if len(returns) >= 2 and not _has_non_finite(returns):
+                print(f"Volatility (ann): {np.std(returns) * np.sqrt(252) * 100:.1f}%")
     
     # 3. LLM Decision Quality
     print("\n🤖 LLM DECISION QUALITY")
@@ -147,16 +155,20 @@ def generate_comprehensive_report():
     print("-" * 40)
     
     if trends.get("daily_returns"):
-        import numpy as np
         returns = np.array(trends["daily_returns"])
         
-        # CVaR estimation
-        var_95 = np.percentile(returns, 5)
-        cvar_95 = returns[returns <= var_95].mean() if len(returns[returns <= var_95]) > 0 else var_95
-        
-        print(f"VaR (95%): {var_95*100:.2f}%")
-        print(f"CVaR (95%): {cvar_95*100:.2f}%")
-        print(f"Max Drawdown (est): {np.min(returns)*100:.2f}%")
+        if len(returns) >= 2 and not _has_non_finite(returns):
+            # CVaR estimation
+            var_95 = np.percentile(returns, 5)
+            if math.isfinite(var_95):
+                cvar_95 = returns[returns <= var_95].mean() if len(returns[returns <= var_95]) > 0 else var_95
+                if math.isfinite(cvar_95):
+                    print(f"VaR (95%): {var_95*100:.2f}%")
+                    print(f"CVaR (95%): {cvar_95*100:.2f}%")
+            
+            min_return = float(np.min(returns))
+            if math.isfinite(min_return):
+                print(f"Max Drawdown (est): {min_return*100:.2f}%")
     
     # 5. System Health
     print("\n🔧 SYSTEM HEALTH")
@@ -193,8 +205,13 @@ def generate_comprehensive_report():
     print("="*70)
     
     if portfolio:
-        total_return = (portfolio['total_value'] - 10000) / 10000 * 100
-        print(f"Total Return: {total_return:+.2f}%")
+        total_value = portfolio.get("total_value", 10000)
+        total_return = None
+        if math.isfinite(total_value):
+            total_return = (total_value - 10000) / 10000 * 100
+            print(f"Total Return: {total_return:+.2f}%")
+        else:
+            print("Total Return: n/a")
         
         # Compare to benchmark over the full live period (since earliest result)
         all_results = load_valid_daily_results("results/daily")
@@ -202,7 +219,7 @@ def generate_comprehensive_report():
             all_dates = [r.get('date') for r in all_results if r.get('date')]
             if all_dates:
                 bench_return = _get_benchmark_return(min(all_dates), max(all_dates))
-                if bench_return is not None:
+                if bench_return is not None and math.isfinite(bench_return) and total_return is not None and math.isfinite(total_return):
                     alpha = total_return - bench_return * 100
                     print(f"vs Buy & Hold (SPY) since {min(all_dates)}: {'+' if alpha >= 0 else ''}{alpha:.2f}%")
     
