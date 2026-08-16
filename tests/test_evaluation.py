@@ -410,6 +410,139 @@ class TestGenerateComprehensiveReport:
         captured = capsys.readouterr()
         assert "Missing files:" in captured.out
 
+class TestNonFiniteGuards:
+    """Regression tests for non-finite and zero portfolio values."""
+
+    def test_zero_total_value_does_not_raise(self, tmp_path, monkeypatch, capsys):
+        """Zero total value should not trigger a ZeroDivisionError."""
+        monkeypatch.chdir(tmp_path)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        portfolio = {
+            "cash": 0.0,
+            "total_value": 0.0,
+            "total_realized_pnl": 0.0,
+            "positions": {},
+        }
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            json.dump(portfolio, f)
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "Cash: €0.00 (—)" in captured.out
+        assert "Total Return: -100.00%" in captured.out
+
+    def test_nan_total_value_shows_na(self, tmp_path, monkeypatch, capsys):
+        """Non-finite total value should not produce NaN output."""
+        monkeypatch.chdir(tmp_path)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        portfolio = {
+            "cash": 1000.0,
+            "total_value": float("nan"),
+            "total_realized_pnl": 0.0,
+            "positions": {},
+        }
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            json.dump(portfolio, f)
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "Cash: €1,000.00 (—)" in captured.out
+        assert "Total Return: n/a" in captured.out
+        assert "nan%" not in captured.out
+
+    def test_nan_daily_returns_skip_risk_metrics(self, tmp_path, monkeypatch, capsys):
+        """Non-finite daily returns should skip risk/volatility metrics."""
+        monkeypatch.chdir(tmp_path)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        portfolio = {
+            "cash": 5000.0,
+            "total_value": 10000.0,
+            "total_realized_pnl": 0.0,
+            "positions": {},
+        }
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            json.dump(portfolio, f)
+
+        results_dir = tmp_path / "results" / "daily"
+        results_dir.mkdir(parents=True)
+        values = [10000, float("nan"), 10100]
+        for i, val in enumerate(values):
+            date_str = f"2026-01-{i+1:02d}"
+            with open(results_dir / f"{date_str}.json", "w") as f:
+                json.dump({
+                    "date": date_str,
+                    "portfolio_after": {
+                        "total_value": val,
+                        "cash": 5000,
+                        "num_positions": 0,
+                    }
+                }, f)
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "PERFORMANCE TRENDS" in captured.out
+        assert "Period Return:" in captured.out
+        assert "VaR (95%)" not in captured.out
+        assert "CVaR (95%)" not in captured.out
+        assert "nan%" not in captured.out
+
+    def test_infinite_total_return_skips_benchmark_alpha(self, tmp_path, monkeypatch, capsys):
+        """If total return is non-finite, the benchmark comparison should be skipped."""
+        monkeypatch.chdir(tmp_path)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        portfolio = {
+            "cash": 0.0,
+            "total_value": float("inf"),
+            "total_realized_pnl": 0.0,
+            "positions": {},
+        }
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            json.dump(portfolio, f)
+
+        results_dir = tmp_path / "results" / "daily"
+        results_dir.mkdir(parents=True)
+        with open(results_dir / "2026-01-01.json", "w") as f:
+            json.dump({"date": "2026-01-01"}, f)
+
+        monkeypatch.setattr(
+            "evaluation.fetch_historical_data",
+            lambda *a, **k: {"SPY": pd.DataFrame({"Close": [100.0, 105.0]})},
+        )
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "Total Return: n/a" in captured.out
+        assert "vs Buy & Hold" not in captured.out
+
+    def test_first_portfolio_value_zero_skips_period_return(self, tmp_path, monkeypatch, capsys):
+        """If the first portfolio value is zero, the period return block should be skipped."""
+        monkeypatch.chdir(tmp_path)
+        results_dir = tmp_path / "results" / "daily"
+        results_dir.mkdir(parents=True)
+        values = [0, 100, 200]
+        for i, val in enumerate(values):
+            date_str = f"2026-01-{i+1:02d}"
+            with open(results_dir / f"{date_str}.json", "w") as f:
+                json.dump({
+                    "date": date_str,
+                    "portfolio_after": {
+                        "total_value": val,
+                        "cash": 0,
+                        "num_positions": 0,
+                    }
+                }, f)
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "PERFORMANCE TRENDS" in captured.out
+        assert "Period Return:" not in captured.out
+        assert "Highest Value:" not in captured.out
+
+
 class TestEvaluationConsistency:
     def test_trade_counts_use_analyzed_outcomes(self, capsys):
         """Ensure trade counts match the analyzable trades from DecisionAnalyzer."""
