@@ -1,0 +1,27 @@
+======================================================================
+CASH DRAG REPORT
+Generated: 2026-08-17 22:36:17
+======================================================================
+
+Days analyzed: 1
+  Within target  : 1 (100.0%)
+  Above target   : 0 (0.0%)
+  Below target   : 0 (0.0%)
+
+Regime targets: HIGH 30-50%, NORMAL 15-30%, LOW 10-20%
+
+Per-day detail (most recent last):
+----------------------------------------------------------------------
+Date         Regime     Cash % Target         Status   Trades      Cap
+----------------------------------------------------------------------
+2026-08-10   high        40.0% 30-50%         ok            0        -
+
+======================================================================
+DIAGNOSIS
+======================================================================
+Cash-drag days (above target with cap headroom): 0
+Cap-binding days (above target but cap reached): 0
+
+Interpretation:
+- drag days    → prompt is not deploying cash aggressively enough
+- cap days     → the weekly trade cap is the binding constraint
