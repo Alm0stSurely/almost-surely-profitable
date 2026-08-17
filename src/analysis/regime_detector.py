@@ -7,10 +7,12 @@ Détecte les régimes de marché pour adapter la stratégie:
 - Correlation regime (diversification vs concentration)
 """
 
-import pandas as pd
-import numpy as np
-from typing import Literal, Dict, Tuple, Any
+import math
 from dataclasses import dataclass
+from typing import Any, Dict, Literal, Tuple
+
+import numpy as np
+import pandas as pd
 
 
 @dataclass
@@ -57,7 +59,32 @@ class RegimeDetector:
         self.adx_trending_threshold = adx_trending_threshold
         self.adx_mean_reverting_threshold = adx_mean_reverting_threshold
         self.correlation_lookback = correlation_lookback
-    
+
+    def _default_state(self) -> RegimeState:
+        """Return a safe default regime state for invalid or degenerate inputs."""
+        return RegimeState(
+            volatility_regime="normal",
+            trend_regime="neutral",
+            correlation_regime="normal",
+            volatility_percentile=50.0,
+            adx_value=0.0,
+            avg_correlation=0.0,
+        )
+
+    def _prices_are_valid(self, prices: pd.DataFrame) -> bool:
+        """Validate that prices are suitable for regime analysis."""
+        if not isinstance(prices, pd.DataFrame):
+            return False
+        if prices.empty or prices.shape[1] == 0 or len(prices) < 2:
+            return False
+        if not np.isfinite(prices.to_numpy()).all():
+            return False
+        return True
+
+    def _finite(self, value: float, default: float = 0.0) -> float:
+        """Return value if finite, otherwise default."""
+        return value if isinstance(value, (int, float, np.floating)) and math.isfinite(float(value)) else default
+
     def detect_volatility_regime(
         self,
         prices: pd.DataFrame,
@@ -71,10 +98,10 @@ class RegimeDetector:
         """
         # Calcul des rendements
         returns = prices.pct_change().dropna()
-        
+
         # Volatilité actuelle (annualisée)
         current_vol = returns.iloc[-self.vol_lookback:].std() * np.sqrt(252)
-        
+
         # Historique des volatilités rolling
         rolling_vols = (
             returns.rolling(self.vol_lookback)
@@ -83,24 +110,27 @@ class RegimeDetector:
             .iloc[-historical_window:]
             * np.sqrt(252)
         )
-        
+
         # Moyenne des vols actuelles cross-asset
         avg_current_vol = current_vol.mean()
         avg_historical_vols = rolling_vols.mean(axis=1)
-        
+
         # Percentile
         n = len(avg_historical_vols)
         percentile = (
             (avg_historical_vols < avg_current_vol).sum() / n * 100
         ) if n > 0 else 50.0
-        
+
+        avg_current_vol = self._finite(avg_current_vol, 0.0)
+        percentile = self._finite(percentile, 50.0)
+
         if percentile >= self.vol_percentile_threshold_high:
             regime = "high"
         elif percentile <= self.vol_percentile_threshold_low:
             regime = "low"
         else:
             regime = "normal"
-        
+
         return regime, percentile
     
     def calculate_adx(
@@ -147,13 +177,25 @@ class RegimeDetector:
             
             # Smoothed averages
             atr = tr.ewm(alpha=1/self.adx_period, min_periods=self.adx_period).mean()
-            plus_di = 100 * plus_dm.ewm(alpha=1/self.adx_period, min_periods=self.adx_period).mean() / atr
-            minus_di = 100 * minus_dm.ewm(alpha=1/self.adx_period, min_periods=self.adx_period).mean() / atr
-            
+
+            # Avoid division by zero when ATR is flat/constant
+            plus_di = 100 * plus_dm.ewm(alpha=1/self.adx_period, min_periods=self.adx_period).mean() / atr.replace(0, np.nan)
+            minus_di = 100 * minus_dm.ewm(alpha=1/self.adx_period, min_periods=self.adx_period).mean() / atr.replace(0, np.nan)
+
+            plus_di = plus_di.fillna(0)
+            minus_di = minus_di.fillna(0)
+
             # DX et ADX
-            dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+            di_sum = plus_di + minus_di
+            dx = np.where(
+                di_sum == 0,
+                0.0,
+                100 * abs(plus_di - minus_di) / di_sum
+            )
+            dx = pd.Series(dx, index=close.index)
             adx = dx.ewm(alpha=1/self.adx_period, min_periods=self.adx_period).mean()
-            
+            adx = adx.fillna(0).replace([np.inf, -np.inf], 0)
+
             adx_values[ticker] = adx
         
         return pd.DataFrame(adx_values)
@@ -171,16 +213,17 @@ class RegimeDetector:
         """
         if adx is None:
             adx = self.calculate_adx(prices)
-        
-        current_adx = adx.iloc[-1].mean()
-        
+
+        current_adx = self._finite(adx.iloc[-1].mean(), 0.0)
+
         # Déterminer la direction avec les moyennes mobiles
         sma_20 = prices.rolling(20).mean().iloc[-1]
         sma_50 = prices.rolling(50).mean().iloc[-1]
-        
+
         # Score de tendance par asset
-        trend_scores = (sma_20 > sma_50).astype(int).mean()
-        
+        trend_scores = (sma_20 > sma_50).astype(float).mean()
+        trend_scores = self._finite(trend_scores, 0.5)
+
         if current_adx >= self.adx_trending_threshold:
             if trend_scores > 0.6:
                 regime = "trending_up"
@@ -192,7 +235,7 @@ class RegimeDetector:
             regime = "mean_reverting"
         else:
             regime = "neutral"
-        
+
         return regime, current_adx
     
     def detect_correlation_regime(
@@ -206,26 +249,29 @@ class RegimeDetector:
         Low correlation = good diversification opportunities
         """
         returns = prices.pct_change().dropna()
-        
+
         # Matrice de corrélation sur lookback
         if len(returns) < self.correlation_lookback:
             # Pas assez d'historique
             return "normal", 0.5
-        
+
         corr_matrix = returns.iloc[-self.correlation_lookback:].corr()
-        
+
         # Moyenne des corrélations (hors diagonale)
         mask = ~np.eye(corr_matrix.shape[0], dtype=bool)
         corr_values = corr_matrix.values[mask]
+        # Drop NaN/inf correlations that arise from constant or degenerate series
+        corr_values = corr_values[np.isfinite(corr_values)]
         avg_corr = corr_values.mean() if len(corr_values) > 0 else 0.0
-        
+        avg_corr = float(np.clip(avg_corr, -1.0, 1.0))
+
         if avg_corr > 0.7:
             regime = "high_correlation"
         elif avg_corr < 0.3:
             regime = "low_correlation"
         else:
             regime = "normal"
-        
+
         return regime, avg_corr
     
     def analyze(
@@ -245,23 +291,26 @@ class RegimeDetector:
         Returns:
             RegimeState avec tous les régimes détectés
         """
+        if not self._prices_are_valid(prices):
+            return self._default_state()
+
         # Volatilité
         vol_regime, vol_pct = self.detect_volatility_regime(prices)
-        
+
         # Tendance
         adx = self.calculate_adx(prices, high, low)
         trend_regime, adx_value = self.detect_trend_regime(prices, adx)
-        
+
         # Corrélation
         corr_regime, avg_corr = self.detect_correlation_regime(prices)
-        
+
         return RegimeState(
             volatility_regime=vol_regime,
             trend_regime=trend_regime,
             correlation_regime=corr_regime,
-            volatility_percentile=vol_pct,
-            adx_value=adx_value,
-            avg_correlation=avg_corr
+            volatility_percentile=self._finite(vol_pct, 50.0),
+            adx_value=self._finite(adx_value, 0.0),
+            avg_correlation=self._finite(avg_corr, 0.0),
         )
     
     def get_strategy_recommendation(self, state: RegimeState) -> Dict[str, Any]:

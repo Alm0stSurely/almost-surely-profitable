@@ -10,6 +10,7 @@ Covers:
 - LLM formatting (prompt generation)
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -24,7 +25,6 @@ from analysis.regime_detector import (
     RegimeState,
     format_regime_for_llm,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -689,3 +689,60 @@ class TestEdgeCases:
         regime, avg_corr = detector.detect_correlation_regime(prices)
         assert regime == "low_correlation"
         assert avg_corr < -0.9
+
+    def test_empty_dataframe_returns_default_state(self, detector):
+        state = detector.analyze(pd.DataFrame())
+        assert isinstance(state, RegimeState)
+        assert state.volatility_regime == "normal"
+        assert state.trend_regime == "neutral"
+        assert state.correlation_regime == "normal"
+        assert state.volatility_percentile == 50.0
+        assert state.adx_value == 0.0
+        assert state.avg_correlation == 0.0
+
+    def test_non_finite_prices_return_default_state(self, detector):
+        dates = pd.date_range("2024-01-01", periods=50, freq="D")
+        prices = pd.DataFrame({
+            "A": np.where(np.arange(50) == 25, np.inf, 100.0),
+            "B": np.where(np.arange(50) == 25, -np.inf, 50.0),
+        }, index=dates)
+        state = detector.analyze(prices)
+        assert isinstance(state, RegimeState)
+        assert state.volatility_regime == "normal"
+        assert state.trend_regime == "neutral"
+        assert state.correlation_regime == "normal"
+        assert math.isfinite(state.adx_value)
+        assert math.isfinite(state.volatility_percentile)
+        assert math.isfinite(state.avg_correlation)
+
+    def test_all_constant_prices_return_finite_state(self, detector):
+        dates = pd.date_range("2024-01-01", periods=100, freq="D")
+        prices = pd.DataFrame({"A": np.full(100, 100.0), "B": np.full(100, 50.0)}, index=dates)
+        state = detector.analyze(prices)
+        assert isinstance(state, RegimeState)
+        assert math.isfinite(state.adx_value)
+        assert math.isfinite(state.volatility_percentile)
+        assert math.isfinite(state.avg_correlation)
+        assert state.trend_regime in ("neutral", "mean_reverting")
+
+    def test_single_row_dataframe_returns_default_state(self, detector):
+        dates = pd.date_range("2024-01-01", periods=1, freq="D")
+        prices = pd.DataFrame({"A": [100.0], "B": [50.0]}, index=dates)
+        state = detector.analyze(prices)
+        assert isinstance(state, RegimeState)
+        assert state.volatility_regime == "normal"
+        assert state.trend_regime == "neutral"
+        assert state.correlation_regime == "normal"
+        assert state.adx_value == 0.0
+        assert state.avg_correlation == 0.0
+
+    def test_single_asset_returns_finite_state(self, detector):
+        dates = pd.date_range("2024-01-01", periods=100, freq="D")
+        prices = pd.DataFrame({
+            "ONLY": 100 * np.exp(np.cumsum(np.random.RandomState(61).normal(0, 0.01, 100)))
+        }, index=dates)
+        state = detector.analyze(prices)
+        assert isinstance(state, RegimeState)
+        assert math.isfinite(state.adx_value)
+        assert math.isfinite(state.volatility_percentile)
+        assert math.isfinite(state.avg_correlation)
