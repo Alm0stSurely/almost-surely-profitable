@@ -5,16 +5,16 @@ This report helps distinguish two common pathologies:
 2. Cap binding - cash is above target but the weekly trade cap is already hit,
    so the constraint is the cap, not the prompt.
 """
-import json
+
+import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from utils import load_valid_daily_results
+from utils import _is_finite_number, load_valid_daily_results
 
 REGIME_BOUNDS = {
     "high": (0.30, 0.50),
@@ -29,7 +29,9 @@ OUTPUT_DIR = ROOT / "results" / "analysis"
 def _get_regime(result):
     """Extract volatility regime from a daily result, defaulting to normal."""
     status = result.get("cooldown", {}).get("status", {})
-    regime = status.get("current_vol_regime") or status.get("config", {}).get("current_vol_regime")
+    regime = status.get("current_vol_regime") or status.get("config", {}).get(
+        "current_vol_regime"
+    )
     return (regime or DEFAULT_REGIME).lower()
 
 
@@ -37,6 +39,20 @@ def _cap_info(result):
     """Return (trades_this_week, weekly_cap) if available, else (None, None)."""
     status = result.get("cooldown", {}).get("status", {})
     return status.get("trades_this_week"), status.get("weekly_cap")
+
+
+def _safe_cash_pct(cash, total):
+    """Return cash / total only when both are finite and total is positive.
+
+    A missing, non-finite, zero, or negative total makes the percentage
+    undefined, so the caller should flag the day as invalid rather than
+    silently defaulting to a misleading value.
+    """
+    if not _is_finite_number(cash) or not _is_finite_number(total):
+        return None
+    if total <= 0:
+        return None
+    return cash / total
 
 
 def analyze_cash_drag(results_dir, output_path=None):
@@ -47,14 +63,15 @@ def analyze_cash_drag(results_dir, output_path=None):
     status_counter = Counter()
     for result in results:
         portfolio = result.get("portfolio_after", {})
-        cash = portfolio.get("cash", 0.0)
-        total = portfolio.get("total_value") or portfolio.get("total_value", 1.0)
-        total = total or 1.0
-        cash_pct = cash / total
+        cash = portfolio.get("cash")
+        total = portfolio.get("total_value")
+        cash_pct = _safe_cash_pct(cash, total)
         regime = _get_regime(result)
         lower, upper = REGIME_BOUNDS.get(regime, REGIME_BOUNDS[DEFAULT_REGIME])
 
-        if cash_pct < lower:
+        if cash_pct is None:
+            status = "invalid"
+        elif cash_pct < lower:
             status = "below"
         elif cash_pct > upper:
             status = "above"
@@ -65,33 +82,36 @@ def analyze_cash_drag(results_dir, output_path=None):
         trades = len(result.get("executed_trades", []))
         trades_this_week, weekly_cap = _cap_info(result)
 
-        rows.append({
-            "date": result.get("date", "unknown"),
-            "cash_pct": cash_pct,
-            "regime": regime,
-            "lower": lower,
-            "upper": upper,
-            "status": status,
-            "trades": trades,
-            "trades_this_week": trades_this_week,
-            "weekly_cap": weekly_cap,
-        })
+        rows.append(
+            {
+                "date": result.get("date", "unknown"),
+                "cash_pct": cash_pct,
+                "regime": regime,
+                "lower": lower,
+                "upper": upper,
+                "status": status,
+                "trades": trades,
+                "trades_this_week": trades_this_week,
+                "weekly_cap": weekly_cap,
+            }
+        )
 
     if output_path is None:
-        output_path = OUTPUT_DIR / f"cash_drag_{datetime.now().strftime('%Y%m%d')}.txt"
+        output_path = OUTPUT_DIR / f"cash_drag_{datetime.now().strftime('%Y%m%d')}.txt"  # noqa: DTZ005
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines = [
         "=" * 70,
         "CASH DRAG REPORT",
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",  # noqa: DTZ005
         "=" * 70,
         "",
         f"Days analyzed: {len(rows)}",
-        f"  Within target  : {status_counter['ok']} ({status_counter['ok']/max(len(rows),1)*100:.1f}%)",
-        f"  Above target   : {status_counter['above']} ({status_counter['above']/max(len(rows),1)*100:.1f}%)",
-        f"  Below target   : {status_counter['below']} ({status_counter['below']/max(len(rows),1)*100:.1f}%)",
+        f"  Within target  : {status_counter.get('ok', 0)} ({status_counter.get('ok', 0) / max(len(rows), 1) * 100:.1f}%)",
+        f"  Above target   : {status_counter.get('above', 0)} ({status_counter.get('above', 0) / max(len(rows), 1) * 100:.1f}%)",
+        f"  Below target   : {status_counter.get('below', 0)} ({status_counter.get('below', 0) / max(len(rows), 1) * 100:.1f}%)",
+        f"  Invalid data   : {status_counter.get('invalid', 0)} ({status_counter.get('invalid', 0) / max(len(rows), 1) * 100:.1f}%)",
         "",
         "Regime targets: HIGH 30-50%, NORMAL 15-30%, LOW 10-20%",
         "",
@@ -102,43 +122,58 @@ def analyze_cash_drag(results_dir, output_path=None):
     ]
 
     for row in rows:
-        target = f"{row['lower']*100:.0f}-{row['upper']*100:.0f}%"
+        if row["cash_pct"] is None:
+            cash_pct_str = "    n/a"
+            target = "n/a"
+        else:
+            cash_pct_str = f"{row['cash_pct'] * 100:>7.1f}%"
+            target = f"{row['lower'] * 100:.0f}-{row['upper'] * 100:.0f}%"
         cap = "-"
         if row["trades_this_week"] is not None and row["weekly_cap"] is not None:
             cap = f"{row['trades_this_week']}/{row['weekly_cap']}"
         lines.append(
-            f"{row['date']:<12} {row['regime']:<8} {row['cash_pct']*100:>7.1f}% "
+            f"{row['date']:<12} {row['regime']:<8} {cash_pct_str} "
             f"{target:<14} {row['status']:<8} {row['trades']:>6} {cap:>8}"
         )
 
     # Flag days where cash was above target and the cap was not yet hit:
     # these are pure cash-drag days (the prompt should have acted).
     drag_days = [
-        r for r in rows
+        r
+        for r in rows
         if r["status"] == "above"
-        and (r["weekly_cap"] is None or (r["trades_this_week"] is not None and r["trades_this_week"] < r["weekly_cap"]))
+        and (
+            r["weekly_cap"] is None
+            or (
+                r["trades_this_week"] is not None
+                and r["trades_this_week"] < r["weekly_cap"]
+            )
+        )
     ]
     cap_bound_days = [
-        r for r in rows
+        r
+        for r in rows
         if r["status"] == "above"
         and r["weekly_cap"] is not None
         and r["trades_this_week"] is not None
         and r["trades_this_week"] >= r["weekly_cap"]
     ]
 
-    lines.extend([
-        "",
-        "=" * 70,
-        "DIAGNOSIS",
-        "=" * 70,
-        f"Cash-drag days (above target with cap headroom): {len(drag_days)}",
-        f"Cap-binding days (above target but cap reached): {len(cap_bound_days)}",
-        "",
-        "Interpretation:",
-        "- drag days    → prompt is not deploying cash aggressively enough",
-        "- cap days     → the weekly trade cap is the binding constraint",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "=" * 70,
+            "DIAGNOSIS",
+            "=" * 70,
+            f"Cash-drag days (above target with cap headroom): {len(drag_days)}",
+            f"Cap-binding days (above target but cap reached): {len(cap_bound_days)}",
+            "",
+            "Interpretation:",
+            "- drag days    → prompt is not deploying cash aggressively enough",
+            "- cap days     → the weekly trade cap is the binding constraint",
+            "",
+        ]
+    )
 
     text = "\n".join(lines)
     output_path.write_text(text)
