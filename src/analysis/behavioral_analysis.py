@@ -1,15 +1,30 @@
 """Behavioral analysis of LLM decision history for trading research."""
 import json
+import math
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from analysis.churn_analysis import match_round_trips
 from utils import load_valid_daily_results
+
+
+def _safe_cash_pct(cash, total):
+    """Return cash as a percentage of total, or None when the ratio is undefined.
+
+    Guards against zero/negative totals, missing values, and non-finite
+    inputs that can leak from degenerate daily result files.
+    """
+    if not isinstance(cash, (int, float)) or not isinstance(total, (int, float)):
+        return None
+    if not math.isfinite(cash) or not math.isfinite(total) or total <= 0:
+        return None
+    return cash / total * 100
+
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "results"
@@ -63,6 +78,26 @@ def get_round_trips(trades):
         {"ticker": rt.ticker, "hold_days": rt.hold_days, "pnl": rt.pnl}
         for rt in match_round_trips(trades)
     ]
+
+
+def _format_cash_levels(daily_results):
+    """Format the cash-levels table, guarding against degenerate portfolio values."""
+    lines = [
+        "CASH LEVELS (recent 20 daily results)",
+        f"{'Date':12s} {'Cash %':>8s} {'Positions':>10s} {'Total Return':>14s} {'Trades':>7s}",
+    ]
+    for data in daily_results:
+        pa = data.get("portfolio_after", {})
+        cash = pa.get("cash", 0)
+        total = pa.get("total_value", 1)
+        num_pos = pa.get("num_positions", 0)
+        ret = pa.get("total_return_pct", 0)
+        trades_count = len(data.get("executed_trades", []))
+        cash_pct = _safe_cash_pct(cash, total)
+        cash_str = f"{cash_pct:8.1f}" if cash_pct is not None else "     n/a"
+        lines.append(f"{data['date']:12s} {cash_str} {num_pos:10d} {ret:14.2f} {trades_count:7d}")
+    lines.append("")
+    return lines
 
 
 def main():
@@ -141,17 +176,7 @@ def main():
 
     # Cash creep from daily results (skip dry-run/test artifacts)
     daily_results = load_valid_daily_results(str(RESULTS_DIR / "daily"))[-20:]
-    lines.append("CASH LEVELS (recent 20 daily results)")
-    lines.append(f"{'Date':12s} {'Cash %':>8s} {'Positions':>10s} {'Total Return':>14s} {'Trades':>7s}")
-    for data in daily_results:
-        pa = data.get("portfolio_after", {})
-        cash = pa.get("cash", 0)
-        total = pa.get("total_value", 1)
-        num_pos = pa.get("num_positions", 0)
-        ret = pa.get("total_return_pct", 0)
-        trades_count = len(data.get("executed_trades", []))
-        lines.append(f"{data['date']:12s} {cash/total*100:8.1f} {num_pos:10d} {ret:14.2f} {trades_count:7d}")
-    lines.append("")
+    lines.extend(_format_cash_levels(daily_results))
 
     # Round-trip churn analysis (use the same FIFO matching logic as churn_analysis.py
     # so the two reports stay consistent and avoid negative/mismatched round trips).

@@ -128,3 +128,77 @@ class TestRoundTripConsistency:
             {"ticker": "TLT", "action": "sell", "timestamp": "2026-05-01T21:00:00", "price": 100, "realized_pnl": 5},
         ]
         assert get_round_trips(trades) == []
+
+
+class TestSafeCashPct:
+    def test_valid_ratio(self):
+        from analysis.behavioral_analysis import _safe_cash_pct
+        assert _safe_cash_pct(2500, 10000) == 25.0
+
+    def test_zero_total_returns_none(self):
+        from analysis.behavioral_analysis import _safe_cash_pct
+        assert _safe_cash_pct(2500, 0) is None
+
+    def test_negative_total_returns_none(self):
+        from analysis.behavioral_analysis import _safe_cash_pct
+        assert _safe_cash_pct(2500, -100) is None
+
+    def test_non_finite_cash_returns_none(self):
+        from analysis.behavioral_analysis import _safe_cash_pct
+        assert _safe_cash_pct(float("nan"), 10000) is None
+        assert _safe_cash_pct(float("inf"), 10000) is None
+        assert _safe_cash_pct(-float("inf"), 10000) is None
+
+    def test_non_finite_total_returns_none(self):
+        from analysis.behavioral_analysis import _safe_cash_pct
+        assert _safe_cash_pct(2500, float("nan")) is None
+        assert _safe_cash_pct(2500, float("inf")) is None
+
+    def test_non_numeric_inputs_return_none(self):
+        from analysis.behavioral_analysis import _safe_cash_pct
+        assert _safe_cash_pct("2500", 10000) is None
+        assert _safe_cash_pct(2500, None) is None
+        assert _safe_cash_pct(None, None) is None
+
+
+class TestFormatCashLevels:
+    def test_valid_daily_result_formats_cash_pct(self):
+        from analysis.behavioral_analysis import _format_cash_levels
+        result = {"date": "2026-08-19", "portfolio_after": {"cash": 2500, "total_value": 10000, "num_positions": 5, "total_return_pct": 1.23}, "executed_trades": []}
+        lines = _format_cash_levels([result])
+        assert "2026-08-19" in lines[2]
+        assert "    25.0" in lines[2]
+
+    def test_zero_total_shows_na(self):
+        from analysis.behavioral_analysis import _format_cash_levels
+        result = {"date": "2026-08-19", "portfolio_after": {"cash": 2500, "total_value": 0, "num_positions": 5, "total_return_pct": 1.23}, "executed_trades": []}
+        lines = _format_cash_levels([result])
+        assert "     n/a" in lines[2]
+
+    def test_nan_total_shows_na(self):
+        from analysis.behavioral_analysis import _format_cash_levels
+        result = {"date": "2026-08-19", "portfolio_after": {"cash": 2500, "total_value": float("nan"), "num_positions": 5, "total_return_pct": 1.23}, "executed_trades": []}
+        lines = _format_cash_levels([result])
+        assert "     n/a" in lines[2]
+
+    def test_inf_total_shows_na(self):
+        from analysis.behavioral_analysis import _format_cash_levels
+        result = {"date": "2026-08-19", "portfolio_after": {"cash": 2500, "total_value": float("inf"), "num_positions": 5, "total_return_pct": 1.23}, "executed_trades": []}
+        lines = _format_cash_levels([result])
+        assert "     n/a" in lines[2]
+
+    def test_none_total_value_shows_na(self):
+        from analysis.behavioral_analysis import _format_cash_levels
+        result = {"date": "2026-08-19", "portfolio_after": {"cash": 2500, "total_value": None, "num_positions": 5, "total_return_pct": 1.23}, "executed_trades": []}
+        lines = _format_cash_levels([result])
+        assert "     n/a" in lines[2]
+
+    def test_multiple_rows_mixed_validity(self):
+        from analysis.behavioral_analysis import _format_cash_levels
+        results = [
+            {"date": "2026-08-18", "portfolio_after": {"cash": 2000, "total_value": 10000, "num_positions": 5, "total_return_pct": 0}, "executed_trades": []},
+            {"date": "2026-08-19", "portfolio_after": {"cash": 2500, "total_value": 0, "num_positions": 5, "total_return_pct": 1.23}, "executed_trades": []},
+        ]
+        lines = _format_cash_levels(results)
+        assert "    20.0" in lines[2]
+        assert "     n/a" in lines[3]
