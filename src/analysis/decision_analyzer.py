@@ -9,10 +9,10 @@ and behavioral biases in LLM decisions.
 
 import json
 import sys
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 try:
     import numpy as np
@@ -25,7 +25,7 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parent / ".."))
 
-from data.fetch_market_data import fetch_historical_data, fetch_current_prices
+from data.fetch_market_data import fetch_current_prices, fetch_historical_data
 from utils import is_valid_daily_result
 
 
@@ -110,7 +110,7 @@ class DecisionAnalyzer:
                 action = trade["action"]
                 price = trade.get("price", 0)
                 
-                if price == 0 or not price:
+                if not price or not np.isfinite(price) or price <= 0:
                     continue
                 
                 # Calculate forward return
@@ -118,10 +118,11 @@ class DecisionAnalyzer:
                     ticker, date, price, forward_days
                 )
                 
-                # If we cannot observe the forward price yet, do not count this
-                # decision as a success or failure. A 0.0 sentinel would be
-                # misclassified as a wrong decision.
-                if np.isnan(forward_return):
+                # If we cannot observe the forward price yet, or if it is
+                # non-finite, do not count this decision as a success or
+                # failure. A 0.0 sentinel would be misclassified as a wrong
+                # decision, and inf/nan would corrupt aggregate metrics.
+                if not np.isfinite(forward_return):
                     continue
                 
                 record = {
@@ -201,8 +202,19 @@ class DecisionAnalyzer:
             forward_idx = min(days, len(future_data) - 1)
             exit_price = future_data["Close"].iloc[forward_idx]
             
+            # Guard against degenerate prices before computing the return.
+            if (
+                not np.isfinite(entry_day_price)
+                or entry_day_price == 0
+                or not np.isfinite(exit_price)
+            ):
+                return np.nan
+            
             # Calculate return
             return_pct = (exit_price - entry_day_price) / entry_day_price
+            
+            if not np.isfinite(return_pct):
+                return np.nan
             
             return return_pct
             
@@ -226,7 +238,7 @@ class DecisionAnalyzer:
         }
         
         # Buy metrics
-        clean_buys = [r for r in outcomes["buys"] if not np.isnan(r["forward_return"])]
+        clean_buys = [r for r in outcomes["buys"] if np.isfinite(r["forward_return"])]
         if clean_buys:
             buy_returns = [r["forward_return"] for r in clean_buys]
             buy_successes = sum(1 for r in clean_buys if r["success"])
@@ -238,7 +250,7 @@ class DecisionAnalyzer:
             metrics["buy_count"] = 0
         
         # Sell metrics
-        clean_sells = [r for r in outcomes["sells"] if not np.isnan(r["forward_return"])]
+        clean_sells = [r for r in outcomes["sells"] if np.isfinite(r["forward_return"])]
         if clean_sells:
             sell_returns = [r["forward_return"] for r in clean_sells]
             sell_successes = sum(1 for r in clean_sells if r["success"])
