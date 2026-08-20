@@ -10,12 +10,12 @@ Covers:
 - Edge cases: empty data, missing files, timezone handling, zero prices
 """
 
-import sys
 import json
+import sys
 import tempfile
-from pathlib import Path
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -24,7 +24,6 @@ import pandas as pd
 import pytest
 
 from analysis.decision_analyzer import DecisionAnalyzer
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -632,6 +631,82 @@ def test_analyze_outcomes_skips_no_price(mock_fetch, analyzer):
     }]
     metrics = analyzer.analyze_outcomes(decisions, forward_days=5)
     assert metrics["total_decisions"] == 0
+
+
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_forward_return_zero_entry_price_returns_nan(mock_fetch, analyzer):
+    """A zero entry price from the data must be treated as missing."""
+    dates = pd.date_range("2026-05-10", periods=3, freq="D")
+    df = pd.DataFrame({"Close": [0.0, 101.0, 102.0]}, index=dates)
+    mock_fetch.return_value = {"SPY": df}
+    ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=1)
+    assert np.isnan(ret)
+
+
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_forward_return_nonfinite_exit_price_returns_nan(mock_fetch, analyzer):
+    """A non-finite exit price must be treated as missing."""
+    dates = pd.date_range("2026-05-10", periods=3, freq="D")
+    df = pd.DataFrame({"Close": [100.0, np.nan, np.inf]}, index=dates)
+    mock_fetch.return_value = {"SPY": df}
+    assert np.isnan(analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=1))
+    assert np.isnan(analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=2))
+
+
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_analyze_outcomes_skips_nonfinite_forward_return(mock_fetch, analyzer):
+    """A decision whose forward return is inf must not corrupt accuracy."""
+    dates = pd.date_range("2026-05-10", periods=3, freq="D")
+    df = pd.DataFrame({"Close": [0.0, 101.0, 102.0]}, index=dates)
+    mock_fetch.return_value = {"SPY": df}
+    decisions = [{
+        "date": "2026-05-10",
+        "trades": [{"ticker": "SPY", "action": "buy", "price": 100.0}],
+    }]
+    metrics = analyzer.analyze_outcomes(decisions, forward_days=1)
+    assert metrics["buy_count"] == 0
+    assert metrics["total_decisions"] == 0
+    assert metrics["win_rate"] == 0.0
+    # Aggregate averages must remain finite even if a record leaked through.
+    assert np.isfinite(metrics["avg_forward_return_buy"])
+
+
+def test_calculate_metrics_excludes_nonfinite_forward_returns(analyzer):
+    """Inf forward returns should be excluded from all metrics."""
+    outcomes = {
+        "buys": [
+            {"forward_return": 0.05, "success": True},
+            {"forward_return": float("inf"), "success": False},
+            {"forward_return": -0.03, "success": False},
+        ],
+        "sells": [
+            {"forward_return": -0.04, "success": True},
+            {"forward_return": float("-inf"), "success": False},
+        ],
+    }
+    metrics = analyzer._calculate_metrics(outcomes)
+    assert metrics["buy_count"] == 2
+    assert metrics["sell_count"] == 1
+    assert metrics["avg_forward_return_buy"] == pytest.approx((0.05 - 0.03) / 2)
+    assert metrics["avg_forward_return_sell"] == pytest.approx(0.04)
+    assert metrics["buy_accuracy"] == pytest.approx(0.5)
+    assert metrics["sell_accuracy"] == pytest.approx(1.0)
+    assert metrics["total_decisions"] == 3
+    assert metrics["win_rate"] == pytest.approx(2/3)
+
+
+def test_analyze_outcomes_skips_nonfinite_trade_price(analyzer):
+    """Trades with NaN or Inf price should be skipped."""
+    decisions = [{
+        "date": "2026-05-10",
+        "trades": [
+            {"ticker": "SPY", "action": "buy", "price": float("nan")},
+            {"ticker": "TLT", "action": "buy", "price": float("inf")},
+        ],
+    }]
+    metrics = analyzer.analyze_outcomes(decisions, forward_days=5)
+    assert metrics["total_decisions"] == 0
+    assert metrics["buy_count"] == 0
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
