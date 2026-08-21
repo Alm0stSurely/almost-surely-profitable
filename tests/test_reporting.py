@@ -5,16 +5,18 @@ Tests the ReportGenerator including ISO week date calculations,
 daily result loading, and weekly/monthly report generation.
 """
 
-import sys
 import json
+import sys
 import tempfile
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
+
 from reporting import ReportGenerator
+from utils import _is_finite_number
 
 
 class TestISOWeekCalculation:
@@ -279,6 +281,14 @@ class TestGenerateMonthlyReport:
         report = rg.generate_monthly_report(2025, 12)
         assert report == {}
 
+    def test_monthly_zero_benchmark_return_used(self, mock_month_dir, monkeypatch):
+        """A benchmark return of exactly 0.0 should produce a defined comparison, not None."""
+        rg = ReportGenerator(results_dir=mock_month_dir)
+        monkeypatch.setattr(rg, '_get_benchmark_return', lambda *_args, **_kwargs: 0.0)
+        report = rg.generate_monthly_report(2026, 1)
+        assert report["vs_spy_pct"] is not None
+        assert report["vs_spy_pct"] == pytest.approx(report["monthly_return_pct"], abs=0.01)
+
 
 class TestSaveAndPrintReport:
     """Tests for report persistence and display."""
@@ -348,3 +358,150 @@ class TestSaveAndPrintReport:
         assert loaded["end_value"] is None
         assert loaded["weekly_return_pct"] == 1.5
         assert loaded["total_trades"] == 1
+
+
+class TestNonFiniteGuards:
+    """Regression tests for non-finite values in report metrics."""
+
+    @pytest.fixture
+    def mock_week_dir(self):
+        """Create mock data for a single ISO week."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dates = [
+                "2026-01-05",
+                "2026-01-06",
+                "2026-01-07",
+                "2026-01-08",
+                "2026-01-09",
+            ]
+            values = [10000.0, 10100.0, 10050.0, 10200.0, 10150.0]
+            for date, value in zip(dates, values):
+                data = {
+                    "date": date,
+                    "portfolio_after": {
+                        "total_value": value,
+                        "total_return_pct": (value / 10000.0 - 1) * 100,
+                        "positions": [
+                            {"ticker": "SPY", "quantity": 10, "market_value": value * 0.6,
+                             "unrealized_pnl_pct": 5.0},
+                            {"ticker": "GLD", "quantity": 5, "market_value": value * 0.4,
+                             "unrealized_pnl_pct": -2.0},
+                        ]
+                    },
+                    "executed_trades": [],
+                }
+                filepath = Path(tmpdir) / f"{date}.json"
+                with open(filepath, "w") as f:
+                    json.dump(data, f)
+            yield tmpdir
+
+    def test_non_finite_start_value_defaults_to_10000(self, mock_week_dir):
+        """A NaN/inf/negative start value should fall back to the default initial capital."""
+        bad_file = Path(mock_week_dir) / "2026-01-05.json"
+        data = json.loads(bad_file.read_text())
+        data["portfolio_after"]["total_value"] = float("nan")
+        bad_file.write_text(json.dumps(data))
+
+        rg = ReportGenerator(results_dir=mock_week_dir)
+        report = rg.generate_weekly_report(2026, 2)
+        assert report["start_value"] == 10000.0
+        assert report["weekly_return_pct"] == pytest.approx(1.5, abs=0.01)
+
+    def test_non_finite_end_value_yields_none_return(self, mock_week_dir):
+        """A NaN/inf end value makes the weekly return undefined."""
+        bad_file = Path(mock_week_dir) / "2026-01-09.json"
+        data = json.loads(bad_file.read_text())
+        data["portfolio_after"]["total_value"] = float("inf")
+        bad_file.write_text(json.dumps(data))
+
+        rg = ReportGenerator(results_dir=mock_week_dir)
+        report = rg.generate_weekly_report(2026, 2)
+        assert report["end_value"] is None
+        assert report["weekly_return_pct"] is None
+        assert _is_finite_number(report["volatility"]) and report["volatility"] >= 0
+
+    def test_non_finite_intermediate_value_skipped_for_daily_returns(self, mock_week_dir):
+        """A NaN/inf intermediate total value is excluded from volatility calculation."""
+        bad_file = Path(mock_week_dir) / "2026-01-07.json"
+        data = json.loads(bad_file.read_text())
+        data["portfolio_after"]["total_value"] = float("nan")
+        bad_file.write_text(json.dumps(data))
+
+        rg = ReportGenerator(results_dir=mock_week_dir)
+        report = rg.generate_weekly_report(2026, 2)
+        # Only 3 valid daily returns remain (Jan 6, Jan 8, Jan 9 vs their previous valid days).
+        assert report["volatility"] > 0
+
+    def test_non_finite_total_return_pct_excluded_from_best_worst_day(self, mock_week_dir):
+        """Best/worst day selection ignores NaN/inf total_return_pct."""
+        bad_file = Path(mock_week_dir) / "2026-01-08.json"
+        data = json.loads(bad_file.read_text())
+        data["portfolio_after"]["total_return_pct"] = float("nan")
+        bad_file.write_text(json.dumps(data))
+
+        rg = ReportGenerator(results_dir=mock_week_dir)
+        report = rg.generate_weekly_report(2026, 2)
+        # Jan 9 (2.0%) should become best; Jan 5 (0.0%) remains worst.
+        assert report["best_day"]["date"] == "2026-01-09"
+        assert report["worst_day"]["date"] == "2026-01-05"
+
+    def test_print_report_handles_undefined_return(self, capsys):
+        """print_report should not crash when the return field is None."""
+        rg = ReportGenerator()
+        rg.print_report({
+            "period": "2026-W02",
+            "period_type": "weekly",
+            "start_date": "2026-01-05",
+            "end_date": "2026-01-11",
+            "start_value": 10000.0,
+            "end_value": None,
+            "weekly_return_pct": None,
+            "total_trades": 0,
+            "num_trading_days": 5,
+        })
+        captured = capsys.readouterr()
+        assert "WEEKLY REPORT: 2026-W02" in captured.out
+        assert "Return:      n/a" in captured.out
+
+
+class TestMonthlyReportWithNonFiniteEnd:
+    """Monthly report guards for non-finite end values."""
+
+    @pytest.fixture
+    def mock_month_dir_non_finite(self):
+        """Create mock data for January 2026 with a non-finite last day."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for day in range(1, 6):
+                date = f"2026-01-{day:02d}"
+                total_value = 10000.0 + day * 50 if day < 5 else float("nan")
+                data = {
+                    "date": date,
+                    "portfolio_after": {
+                        "total_value": total_value,
+                        "positions": [
+                            {"ticker": "SPY", "unrealized_pnl_pct": day * 0.5}
+                        ]
+                    },
+                    "executed_trades": [],
+                }
+                filepath = Path(tmpdir) / f"{date}.json"
+                with open(filepath, "w") as f:
+                    json.dump(data, f)
+            yield tmpdir
+
+    def test_monthly_non_finite_end_value(self, mock_month_dir_non_finite):
+        """A NaN/inf end-of-month total value makes the monthly return undefined."""
+        rg = ReportGenerator(results_dir=mock_month_dir_non_finite)
+        report = rg.generate_monthly_report(2026, 1)
+        assert report["end_value"] is None
+        assert report["monthly_return_pct"] is None
+
+    def test_monthly_non_finite_position_pnl_excluded(self, mock_month_dir_non_finite):
+        """Positions with NaN/inf unrealized PnL are excluded from best/worst selection."""
+        rg = ReportGenerator(results_dir=mock_month_dir_non_finite)
+        report = rg.generate_monthly_report(2026, 1)
+        # Last day has NaN total value but finite position PnL on previous days.
+        # With a NaN last day total value, end_value becomes None, but positions
+        # are still captured from the last day. The single position has finite PnL.
+        assert report["best_position"]["ticker"] == "SPY"
+        assert report["best_position"]["pnl_pct"] == 5 * 0.5

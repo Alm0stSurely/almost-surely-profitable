@@ -2,17 +2,62 @@
 Reporting module for weekly and monthly performance reports.
 """
 
-import pandas as pd
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
-import logging
+from typing import Any, Dict, List, Optional
 
-from utils import load_valid_daily_results, dump_json_safe
+import pandas as pd
 
+from utils import _is_finite_number, dump_json_safe, load_valid_daily_results
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _safe_start_value(value: Any, default: float = 10000.0) -> float:
+    """Return a finite, positive start value, falling back to *default*."""
+    if _is_finite_number(value) and value > 0:
+        return float(value)
+    return default
+
+
+def _day_return_pct(day: Dict) -> Optional[float]:
+    """Return the finite total_return_pct of a daily result, or None."""
+    value = day.get('portfolio_after', {}).get('total_return_pct')
+    return float(value) if _is_finite_number(value) else None
+
+
+def _best_worst_days(daily_results: List[Dict]) -> tuple:
+    """Return (best_day, worst_day) by finite total_return_pct."""
+    finite = [
+        (day, pct) for day in daily_results
+        if (pct := _day_return_pct(day)) is not None
+    ]
+    if not finite:
+        return daily_results[0], daily_results[0]
+    best = max(finite, key=lambda x: x[1])[0]
+    worst = min(finite, key=lambda x: x[1])[0]
+    return best, worst
+
+
+def _position_pnl_pct(position: Dict) -> Optional[float]:
+    """Return the finite unrealized_pnl_pct of a position, or None."""
+    value = position.get('unrealized_pnl_pct')
+    return float(value) if _is_finite_number(value) else None
+
+
+def _best_worst_positions(positions: List[Dict]) -> tuple:
+    """Return (best_position, worst_position) by finite unrealized_pnl_pct."""
+    finite = [
+        (pos, pct) for pos in positions
+        if (pct := _position_pnl_pct(pos)) is not None
+    ]
+    if not finite:
+        return None, None
+    best = max(finite, key=lambda x: x[1])[0]
+    worst = min(finite, key=lambda x: x[1])[0]
+    return best, worst
 
 
 class ReportGenerator:
@@ -66,23 +111,25 @@ class ReportGenerator:
             return {}
         
         # Calculate metrics
-        start_value = daily_results[0].get('portfolio_after', {}).get('total_value', 0)
-        end_value = daily_results[-1].get('portfolio_after', {}).get('total_value', 0)
-        
-        if start_value == 0:
-            start_value = 10000.0  # Default initial
-        
-        weekly_return = (end_value / start_value) - 1
-        
+        raw_start_value = daily_results[0].get('portfolio_after', {}).get('total_value', 0)
+        start_value = _safe_start_value(raw_start_value)
+        raw_end_value = daily_results[-1].get('portfolio_after', {}).get('total_value', 0)
+        end_value = raw_end_value if _is_finite_number(raw_end_value) else None
+
+        if end_value is None:
+            weekly_return = None
+        else:
+            weekly_return = (end_value / start_value) - 1
+
         # Count trades
         total_trades = sum(
             len(day.get('executed_trades', []))
             for day in daily_results
         )
-        
+
         # Get positions at end of week
         final_positions = daily_results[-1].get('portfolio_after', {}).get('positions', [])
-        
+
         # Calculate daily returns
         daily_returns = []
         for i, day in enumerate(daily_results):
@@ -90,14 +137,13 @@ class ReportGenerator:
                 continue
             prev_value = daily_results[i-1].get('portfolio_after', {}).get('total_value', 0)
             curr_value = day.get('portfolio_after', {}).get('total_value', 0)
-            if prev_value > 0:
+            if _is_finite_number(prev_value) and prev_value > 0 and _is_finite_number(curr_value) and curr_value > 0:
                 daily_returns.append((curr_value / prev_value) - 1)
-        
+
         volatility = pd.Series(daily_returns).std() if daily_returns else 0
-        
+
         # Find best/worst days
-        best_day = max(daily_results, key=lambda x: x.get('portfolio_after', {}).get('total_return_pct', 0))
-        worst_day = min(daily_results, key=lambda x: x.get('portfolio_after', {}).get('total_return_pct', 0))
+        best_day, worst_day = _best_worst_days(daily_results)
         
         report = {
             "period": f"{year}-W{week:02d}",
@@ -105,11 +151,11 @@ class ReportGenerator:
             "start_date": start_str,
             "end_date": end_str,
             "start_value": start_value,
-            "end_value": end_value,
-            "weekly_return_pct": weekly_return * 100,
+            "end_value": end_value if end_value is not None else None,
+            "weekly_return_pct": weekly_return * 100 if weekly_return is not None else None,
             "total_trades": total_trades,
             "num_trading_days": len(daily_results),
-            "volatility": volatility * 100 if volatility else 0,
+            "volatility": volatility * 100 if _is_finite_number(volatility) else 0,
             "best_day": {
                 "date": best_day.get('date'),
                 "return_pct": best_day.get('portfolio_after', {}).get('total_return_pct', 0)
@@ -161,25 +207,30 @@ class ReportGenerator:
         if not daily_results:
             logger.warning(f"No data found for {year}-{month:02d}")
             return {}
-        
+
         # Calculate metrics
-        start_value = daily_results[0].get('portfolio_after', {}).get('total_value', 0)
-        end_value = daily_results[-1].get('portfolio_after', {}).get('total_value', 0)
-        
-        if start_value == 0:
-            start_value = 10000.0
-        
-        monthly_return = (end_value / start_value) - 1
-        
+        raw_start_value = daily_results[0].get('portfolio_after', {}).get('total_value', 0)
+        start_value = _safe_start_value(raw_start_value)
+        raw_end_value = daily_results[-1].get('portfolio_after', {}).get('total_value', 0)
+        end_value = raw_end_value if _is_finite_number(raw_end_value) else None
+
+        if end_value is None:
+            monthly_return = None
+        else:
+            monthly_return = (end_value / start_value) - 1
+
         # Calculate vs benchmarks (if available)
         spy_return = self._get_benchmark_return('SPY', start_str, end_str)
         cac_return = self._get_benchmark_return('^FCHI', start_str, end_str)
-        
+
+        vs_spy_pct = (monthly_return - spy_return) * 100 if monthly_return is not None and spy_return is not None and _is_finite_number(spy_return) else None
+        vs_cac_pct = (monthly_return - cac_return) * 100 if monthly_return is not None and cac_return is not None and _is_finite_number(cac_return) else None
+
         # Count trades
         trades = []
         for day in daily_results:
             trades.extend(day.get('executed_trades', []))
-        
+
         # Group trades by ticker
         trades_by_ticker = {}
         for trade in trades:
@@ -187,25 +238,21 @@ class ReportGenerator:
             if ticker not in trades_by_ticker:
                 trades_by_ticker[ticker] = []
             trades_by_ticker[ticker].append(trade)
-        
+
         # Find best/worst positions
         final_positions = daily_results[-1].get('portfolio_after', {}).get('positions', [])
-        if final_positions:
-            best_position = max(final_positions, key=lambda x: x.get('unrealized_pnl_pct', 0))
-            worst_position = min(final_positions, key=lambda x: x.get('unrealized_pnl_pct', 0))
-        else:
-            best_position = worst_position = None
-        
+        best_position, worst_position = _best_worst_positions(final_positions)
+
         report = {
             "period": f"{year}-{month:02d}",
             "period_type": "monthly",
             "start_date": start_str,
             "end_date": daily_results[-1].get('date'),
             "start_value": start_value,
-            "end_value": end_value,
-            "monthly_return_pct": monthly_return * 100,
-            "vs_spy_pct": (monthly_return - spy_return) * 100 if spy_return else None,
-            "vs_cac_pct": (monthly_return - cac_return) * 100 if cac_return else None,
+            "end_value": end_value if end_value is not None else None,
+            "monthly_return_pct": monthly_return * 100 if monthly_return is not None else None,
+            "vs_spy_pct": vs_spy_pct,
+            "vs_cac_pct": vs_cac_pct,
             "total_trades": len(trades),
             "trades_by_ticker": {
                 ticker: len(t) for ticker, t in trades_by_ticker.items()
@@ -240,6 +287,8 @@ class ReportGenerator:
                 close_values = data['Close'].values.flatten()
                 start_price = float(close_values[0])
                 end_price = float(close_values[-1])
+                if not _is_finite_number(start_price) or start_price <= 0 or not _is_finite_number(end_price):
+                    return None
                 return (end_price / start_price) - 1
         except Exception:
             pass
@@ -279,12 +328,19 @@ class ReportGenerator:
         print(f"Trading Days: {report.get('num_trading_days', 0)}")
         
         print(f"\n--- Performance ---")
-        print(f"Start Value: €{report.get('start_value', 0):,.2f}")
-        print(f"End Value:   €{report.get('end_value', 0):,.2f}")
+        start_value = report.get('start_value')
+        end_value = report.get('end_value')
+        start_str = f"€{start_value:,.2f}" if _is_finite_number(start_value) else "n/a"
+        end_str = f"€{end_value:,.2f}" if _is_finite_number(end_value) else "n/a"
+        print(f"Start Value: {start_str}")
+        print(f"End Value:   {end_str}")
         
         return_key = 'weekly_return_pct' if period_type == 'weekly' else 'monthly_return_pct'
-        return_val = report.get(return_key, 0)
-        print(f"Return:      {return_val:+.2f}%")
+        return_val = report.get(return_key)
+        if return_val is None:
+            print("Return:      n/a")
+        else:
+            print(f"Return:      {return_val:+.2f}%")
         
         # Benchmark comparison (monthly only)
         if 'vs_spy_pct' in report and report['vs_spy_pct'] is not None:
@@ -302,19 +358,27 @@ class ReportGenerator:
         
         if 'best_position' in report and report['best_position']:
             bp = report['best_position']
-            print(f"\nBest Position: {bp.get('ticker')} ({bp.get('pnl_pct'):+.2f}%)")
+            pnl = bp.get('pnl_pct')
+            pnl_str = f"{pnl:+.2f}%" if pnl is not None else "n/a"
+            print(f"\nBest Position: {bp.get('ticker')} ({pnl_str})")
         
         if 'worst_position' in report and report['worst_position']:
             wp = report['worst_position']
-            print(f"Worst Position: {wp.get('ticker')} ({wp.get('pnl_pct'):+.2f}%)")
+            pnl = wp.get('pnl_pct')
+            pnl_str = f"{pnl:+.2f}%" if pnl is not None else "n/a"
+            print(f"Worst Position: {wp.get('ticker')} ({pnl_str})")
         
-        if 'best_day' in report:
+        if 'best_day' in report and report['best_day']:
             bd = report['best_day']
-            print(f"\nBest Day: {bd.get('date')} ({bd.get('return_pct'):+.2f}%)")
+            ret = bd.get('return_pct')
+            ret_str = f"{ret:+.2f}%" if ret is not None else "n/a"
+            print(f"\nBest Day: {bd.get('date')} ({ret_str})")
         
-        if 'worst_day' in report:
+        if 'worst_day' in report and report['worst_day']:
             wd = report['worst_day']
-            print(f"Worst Day: {wd.get('date')} ({wd.get('return_pct'):+.2f}%)")
+            ret = wd.get('return_pct')
+            ret_str = f"{ret:+.2f}%" if ret is not None else "n/a"
+            print(f"Worst Day: {wd.get('date')} ({ret_str})")
         
         print("="*70)
 
