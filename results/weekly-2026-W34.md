@@ -46,7 +46,7 @@
 | Benchmark | Weekly Return | Alpha vs Portfolio |
 |-----------|---------------|---------------------|
 | SPY | -0.90% | +1.12% (Outperform) |
-| CAC.PA | -1.07% | +1.30% (Outperform) |
+| CAC.PA | -1.46% | +1.68% (Outperform) |
 | FEZ | -0.21% | +0.43% (Outperform) |
 
 ## Positions
