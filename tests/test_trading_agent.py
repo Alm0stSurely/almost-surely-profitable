@@ -4,22 +4,19 @@ Uses mocks to avoid actual API calls.
 """
 
 import json
-import sys
 import os
+import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from llm.trading_agent import (
-    SYSTEM_PROMPT,
-    TradingAgent
-)
+from llm.trading_agent import SYSTEM_PROMPT, TradingAgent
 
 
 def test_system_prompt_exists():
@@ -132,6 +129,49 @@ def test_save_and_load_decisions():
         
         print(f"  Saved and loaded {len(loaded)} decision(s)")
         print("✓ Save/load decisions test passed\n")
+
+
+def test_save_decision_sanitizes_non_finite_values():
+    """Test that non-finite floats in a decision are sanitized before saving.
+
+    ``json.loads`` accepts non-standard ``NaN``/``Infinity`` tokens by default.
+    If a parsed LLM response contained such values, the default ``json.dump``
+    would persist them and break strict downstream consumers. The safe
+    serializer must replace them with ``null``.
+    """
+    print("Test 4b: Save Decision Sanitizes Non-Finite Values")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        decision = {
+            "timestamp": datetime.now().isoformat(),
+            "actions": [
+                {"ticker": "SPY", "action": "buy", "pct": float("nan")},
+                {"ticker": "TLT", "action": "sell", "pct": float("inf")},
+            ],
+            "reasoning": "Degenerate LLM output",
+        }
+        agent.save_decision(decision)
+
+        raw_text = history_file.read_text()
+        # Strict JSON must not contain non-standard tokens
+        assert "NaN" not in raw_text
+        assert "Infinity" not in raw_text
+
+        loaded = json.loads(raw_text)
+        assert len(loaded) == 1
+        assert loaded[0]["actions"][0]["pct"] is None
+        assert loaded[0]["actions"][1]["pct"] is None
+
+        # Loading through the agent should also work
+        recent = agent.load_recent_decisions(days=1)
+        assert recent[0]["actions"][0]["pct"] is None
+
+        print("  Non-finite action percentages sanitized to null")
+        print("✓ Save decision sanitization test passed\n")
 
 
 def test_load_decisions_empty_file():

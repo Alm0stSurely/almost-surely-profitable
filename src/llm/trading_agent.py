@@ -3,18 +3,20 @@ LLM trading agent module.
 Integrates with LLM API to get trading decisions based on market state and portfolio.
 """
 
-import os
 import json
 import logging
-import time
+import os
 import random
-from typing import Dict, List, Optional
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, List, Optional
+
 import requests
+
 try:
-    import pandas as pd
     import numpy as np
+    import pandas as pd
     HAS_DEPS = True
 except ImportError:
     HAS_DEPS = False
@@ -26,6 +28,13 @@ try:
 except ImportError:
     pass  # Use environment variables directly
 
+# Import shared JSON-safe serialization helpers
+try:
+    from utils import dump_json_safe, sanitize_for_json
+    JSON_SAFE_AVAILABLE = True
+except ImportError:
+    JSON_SAFE_AVAILABLE = False
+
 # Import risk metrics module
 try:
     from ..risk import calculate_portfolio_risk_metrics, get_risk_summary_for_llm
@@ -35,8 +44,9 @@ except ImportError:
 
 # Import Deflated Sharpe Ratio module
 try:
-    from ..backtest.deflated_sharpe import DeflatedSharpeRatio
     import numpy as np
+
+    from ..backtest.deflated_sharpe import DeflatedSharpeRatio
     DSR_MODULE_AVAILABLE = True
 except ImportError:
     DSR_MODULE_AVAILABLE = False
@@ -236,12 +246,15 @@ class TradingAgent:
                 decisions = []
         
         decisions.append(decision)
-        
+
         # Keep only last 100 decisions
         decisions = decisions[-100:]
-        
+
         with open(self.history_file, 'w') as f:
-            json.dump(decisions, f, indent=2)
+            if JSON_SAFE_AVAILABLE:
+                dump_json_safe(decisions, f, indent=2)
+            else:
+                json.dump(decisions, f, indent=2)
     
     def build_prompt(
         self,
@@ -708,6 +721,9 @@ if __name__ == "__main__":
     if os.getenv("LLM_API_KEY"):
         decision = agent.get_trading_decision(market_data, portfolio)
         print("\nDecision:")
-        print(json.dumps(decision, indent=2))
+        if JSON_SAFE_AVAILABLE:
+            print(json.dumps(sanitize_for_json(decision), indent=2))
+        else:
+            print(json.dumps(decision, indent=2))
     else:
         print("No API key configured - skipping LLM call")
