@@ -5,21 +5,27 @@ Tests the weekly report generator including return calculations,
 benchmark fetching, and report generation logic.
 """
 
-import sys
 import json
+import sys
 import tempfile
 import warnings
-from pathlib import Path
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
 
-from weekly_report import calculate_weekly_returns, fetch_benchmark_returns
+from weekly_report import (
+    _safe_benchmark_alpha,
+    _safe_positive_scalar,
+    _safe_weekly_return,
+    calculate_weekly_returns,
+    fetch_benchmark_returns,
+)
 
 
 class TestCalculateWeeklyReturns:
@@ -253,3 +259,122 @@ class TestWeeklyReportImports:
         """Function should be callable."""
         from weekly_report import fetch_benchmark_returns
         assert callable(fetch_benchmark_returns)
+
+
+class TestNonFiniteGuards:
+    """Regression tests for non-finite value handling in weekly_report.py."""
+
+    def test_calculate_weekly_returns_skips_nan_previous_value(self):
+        """A NaN previous total_value should not produce a RuntimeWarning."""
+        week_results = [
+            {"portfolio_after": {"total_value": float("nan")}},
+            {"portfolio_after": {"total_value": 10100.0}},
+        ]
+        dates, returns = calculate_weekly_returns(week_results)
+        assert len(returns) == 0
+        assert len(dates) == 0
+
+    def test_calculate_weekly_returns_skips_nan_current_value(self):
+        """A NaN current total_value breaks adjacent return pairs."""
+        week_results = [
+            {"portfolio_after": {"total_value": 10000.0}},
+            {"portfolio_after": {"total_value": float("nan")}},
+            {"portfolio_after": {"total_value": 10200.0}},
+        ]
+        dates, returns = calculate_weekly_returns(week_results)
+        # Both pairs (10000->NaN and NaN->10200) must be discarded.
+        assert len(returns) == 0
+        assert len(dates) == 0
+
+    def test_calculate_weekly_returns_skips_inf_previous_value(self):
+        """An infinite previous total_value should not poison the return array."""
+        week_results = [
+            {"portfolio_after": {"total_value": float("inf")}},
+            {"portfolio_after": {"total_value": 10100.0}},
+        ]
+        dates, returns = calculate_weekly_returns(week_results)
+        assert len(returns) == 0
+
+    def test_calculate_weekly_returns_skips_non_finite_return(self):
+        """A computed return that is not finite should be dropped."""
+        week_results = [
+            {"portfolio_after": {"total_value": 10000.0}},
+            {"portfolio_after": {"total_value": float("inf")}},
+        ]
+        dates, returns = calculate_weekly_returns(week_results)
+        assert len(returns) == 0
+
+    @patch("weekly_report.fetch_historical_data")
+    def test_fetch_benchmark_returns_drops_nan_closes(self, mock_fetch):
+        """NaN close prices should be filtered before return calculation."""
+        mock_fetch.return_value = {
+            "SPY": pd.DataFrame({"Close": [400.0, float("nan"), 405.0]}),
+        }
+        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
+        assert result is not None
+        assert "SPY" in result
+        assert len(result["SPY"]["returns"]) == 1
+        assert result["SPY"]["cumulative_return"] == pytest.approx(0.0125, abs=1e-6)
+
+    @patch("weekly_report.fetch_historical_data")
+    def test_fetch_benchmark_returns_drops_inf_closes(self, mock_fetch):
+        """Infinite close prices should be filtered before return calculation."""
+        mock_fetch.return_value = {
+            "SPY": pd.DataFrame({"Close": [400.0, float("inf"), 405.0]}),
+        }
+        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
+        assert result is not None
+        assert "SPY" in result
+        assert len(result["SPY"]["returns"]) == 1
+        assert result["SPY"]["cumulative_return"] == pytest.approx(0.0125, abs=1e-6)
+
+    @patch("weekly_report.fetch_historical_data")
+    def test_fetch_benchmark_returns_returns_none_when_all_closes_non_finite(self, mock_fetch):
+        """All non-finite closes should make the benchmark unavailable."""
+        mock_fetch.return_value = {
+            "SPY": pd.DataFrame({"Close": [float("nan"), float("nan")]}),
+        }
+        result = fetch_benchmark_returns("2026-01-01", "2026-01-10", benchmarks=["SPY"])
+        assert result is None
+
+    def test_safe_positive_scalar_rejects_non_finite(self):
+        assert _safe_positive_scalar(float("nan")) == 0.0
+        assert _safe_positive_scalar(float("inf")) == 0.0
+        assert _safe_positive_scalar(-100.0) == 0.0
+        assert _safe_positive_scalar(0.0) == 0.0
+        assert _safe_positive_scalar(None) == 0.0
+        assert _safe_positive_scalar("100") == 0.0
+
+    def test_safe_positive_scalar_accepts_valid_with_default_override(self):
+        assert _safe_positive_scalar(100.0, default=None) == 100.0
+
+    def test_safe_weekly_return_with_valid_values(self):
+        assert _safe_weekly_return(10000.0, 10100.0) == pytest.approx(1.0, abs=1e-6)
+
+    def test_safe_weekly_return_with_nan_start(self):
+        assert _safe_weekly_return(float("nan"), 10100.0) is None
+
+    def test_safe_weekly_return_with_nan_end(self):
+        assert _safe_weekly_return(10000.0, float("nan")) is None
+
+    def test_safe_benchmark_alpha_with_valid_inputs(self):
+        alpha = _safe_benchmark_alpha(1.0, 0.005)
+        assert alpha == pytest.approx(0.005, abs=1e-6)
+
+    def test_safe_benchmark_alpha_with_nan_benchmark(self):
+        assert _safe_benchmark_alpha(1.0, float("nan")) is None
+
+    def test_safe_benchmark_alpha_with_none_weekly_return(self):
+        assert _safe_benchmark_alpha(None, 0.005) is None
+
+    def test_no_runtime_warning_with_non_finite_inputs(self):
+        """Non-finite inputs should not emit RuntimeWarnings under the guards."""
+        week_results = [
+            {"portfolio_after": {"total_value": float("nan")}},
+            {"portfolio_after": {"total_value": 10100.0}},
+        ]
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            calculate_weekly_returns(week_results)
+        runtime_warnings = [w for w in recorded if issubclass(w.category, RuntimeWarning)]
+        assert not runtime_warnings

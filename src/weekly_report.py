@@ -5,19 +5,20 @@ Run every Friday after market close to generate weekly performance report.
 """
 
 import sys
-import numpy as np
-import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from reporting import ReportGenerator
-from portfolio.portfolio import Portfolio
 from data.fetch_market_data import fetch_current_prices, fetch_historical_data
-from risk.performance_metrics import calculate_all_metrics, PerformanceMetrics
+from portfolio.portfolio import Portfolio
+from reporting import ReportGenerator
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
-
+from risk.performance_metrics import PerformanceMetrics, calculate_all_metrics
+from utils import _is_finite_number
 
 # Resolve paths relative to the repository root so the script is safe to run
 # from any working directory (e.g. via cron from the parent workspace).
@@ -35,10 +36,13 @@ def calculate_weekly_returns(week_results):
     for i in range(1, len(week_results)):
         prev_value = week_results[i-1].get('portfolio_after', {}).get('total_value', 0)
         curr_value = week_results[i].get('portfolio_after', {}).get('total_value', 0)
-        if prev_value > 0:
+        # Guard against non-finite or non-positive previous values so a single
+        # corrupt daily result cannot poison the whole week's return series.
+        if _is_finite_number(prev_value) and _is_finite_number(curr_value) and prev_value > 0:
             daily_return = (curr_value - prev_value) / prev_value
-            returns.append(daily_return)
-            dates.append(week_results[i].get('date'))
+            if _is_finite_number(daily_return):
+                returns.append(daily_return)
+                dates.append(week_results[i].get('date'))
     return dates, np.array(returns)
 
 
@@ -71,8 +75,15 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
                 if hasattr(df.index, 'tz') and df.index.tz is not None:
                     df.index = df.index.tz_localize(None)
                 closes = df['Close'].dropna().values
+                closes = closes[np.isfinite(closes)]
+                if len(closes) < 2:
+                    print(f"  ⚠ Not enough finite close prices for benchmark {benchmark}")
+                    continue
                 returns = np.diff(closes) / closes[:-1]
                 cumulative_return = float(closes[-1] / closes[0] - 1)
+                if not _is_finite_number(cumulative_return):
+                    print(f"  ⚠ Non-finite cumulative return for benchmark {benchmark}")
+                    continue
                 result[benchmark] = {
                     'returns': returns,
                     'cumulative_return': cumulative_return,
@@ -83,6 +94,31 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
         print(f"  ⚠ Could not fetch benchmarks: {e}")
     
     return result if result else None
+
+
+def _safe_positive_scalar(value, default=0.0):
+    """Return *value* if it is a finite positive number, else *default*."""
+    if _is_finite_number(value) and value > 0:
+        return float(value)
+    return default
+
+
+def _safe_weekly_return(start_value, end_value):
+    """Return a safe weekly return percentage or None when inputs are invalid."""
+    start = _safe_positive_scalar(start_value, default=None)
+    end = _safe_positive_scalar(end_value, default=None)
+    if start is None or end is None:
+        return None
+    weekly_return = (end - start) / start * 100
+    return weekly_return if _is_finite_number(weekly_return) else None
+
+
+def _safe_benchmark_alpha(weekly_return, bench_cum):
+    """Return alpha vs benchmark or None if either input is non-finite."""
+    if weekly_return is None or not _is_finite_number(bench_cum):
+        return None
+    alpha = weekly_return / 100 - bench_cum
+    return alpha if _is_finite_number(alpha) else None
 
 
 def generate_weekly_report():
@@ -125,15 +161,20 @@ def generate_weekly_report():
     print(f"   Unrealized P&L: €{summary['total_unrealized_pnl']:.2f}")
     
     # Weekly performance
-    start_value = week_results[0].get('portfolio_before', {}).get('total_value', summary['total_value']) if week_results else summary['total_value']
-    end_value = summary['total_value']
-    weekly_return = ((end_value - start_value) / start_value * 100) if start_value else 0
+    raw_start_value = week_results[0].get('portfolio_before', {}).get('total_value', summary['total_value']) if week_results else summary['total_value']
+    raw_end_value = summary['total_value']
+    start_value = _safe_positive_scalar(raw_start_value, default=None)
+    end_value = _safe_positive_scalar(raw_end_value, default=None)
+    weekly_return = _safe_weekly_return(start_value, end_value)
     
     if len(week_results) >= 1:
         print(f"\n📈 Weekly Performance:")
-        print(f"   Start of week: €{start_value:.2f}")
-        print(f"   End of week: €{end_value:.2f}")
-        print(f"   Weekly return: {weekly_return:+.2f}%")
+        start_str = f"€{start_value:.2f}" if start_value is not None else "n/a"
+        end_str = f"€{end_value:.2f}" if end_value is not None else "n/a"
+        return_str = f"{weekly_return:+.2f}%" if weekly_return is not None else "n/a"
+        print(f"   Start of week: {start_str}")
+        print(f"   End of week: {end_str}")
+        print(f"   Weekly return: {return_str}")
     
     # Calculate performance metrics
     portfolio_dates, portfolio_returns = calculate_weekly_returns(week_results)
@@ -181,8 +222,10 @@ def generate_weekly_report():
         for benchmark in ['SPY', 'CAC.PA', 'FEZ']:
             if benchmark in benchmark_returns:
                 bench_cum = benchmark_returns[benchmark]['cumulative_return']
-                alpha = weekly_return / 100 - bench_cum
-                print(f"   {benchmark}: {bench_cum*100:+.2f}% (alpha: {alpha*100:+.2f}%)")
+                alpha = _safe_benchmark_alpha(weekly_return, bench_cum)
+                bench_str = f"{bench_cum*100:+.2f}%" if _is_finite_number(bench_cum) else "n/a"
+                alpha_str = f"{alpha*100:+.2f}%" if alpha is not None else "n/a"
+                print(f"   {benchmark}: {bench_str} (alpha: {alpha_str})")
     
     # Positions
     if summary['positions']:
@@ -240,9 +283,12 @@ def generate_weekly_report():
         if len(week_results) >= 1:
             f.write(f"| Metric | Value |\n")
             f.write(f"|--------|-------|\n")
-            f.write(f"| Start of Week | €{start_value:.2f} |\n")
-            f.write(f"| End of Week | €{end_value:.2f} |\n")
-            f.write(f"| Weekly Return | {weekly_return:+.2f}% |\n")
+            start_cell = f"€{start_value:.2f}" if start_value is not None else "n/a"
+            end_cell = f"€{end_value:.2f}" if end_value is not None else "n/a"
+            return_cell = f"{weekly_return:+.2f}%" if weekly_return is not None else "n/a"
+            f.write(f"| Start of Week | {start_cell} |\n")
+            f.write(f"| End of Week | {end_cell} |\n")
+            f.write(f"| Weekly Return | {return_cell} |\n")
             f.write(f"| Trading Days | {len(week_results)} |\n")
         
         # Performance Metrics
@@ -283,7 +329,9 @@ def generate_weekly_report():
                 for benchmark in ['SPY', 'CAC.PA', 'FEZ']:
                     if benchmark in benchmark_returns:
                         bench_cum = benchmark_returns[benchmark]['cumulative_return']
-                        alpha = weekly_return / 100 - bench_cum
+                        alpha = _safe_benchmark_alpha(weekly_return, bench_cum)
+                        if not _is_finite_number(bench_cum) or alpha is None:
+                            continue
                         bench_interp = "Outperform" if alpha > 0 else ("Underperform" if alpha < 0 else "Neutral")
                         f.write(f"| {benchmark} | {bench_cum*100:+.2f}% | {alpha*100:+.2f}% ({bench_interp}) |\n")
         
