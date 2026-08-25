@@ -9,23 +9,27 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
+
 import numpy as np
 import pandas as pd
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data.fetch_market_data import fetch_historical_data, fetch_current_prices, ALL_TICKERS
-from data.indicators import analyze_market_data
-from portfolio.portfolio import Portfolio
-from llm.trading_agent import TradingAgent
-from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
-from risk.performance_metrics import calculate_all_metrics, format_metrics_report
-from risk.position_cooldown import PositionCooldownManager, CooldownConfig
 from analysis.regime_detector import RegimeDetector, format_regime_for_llm
 from benchmark import LiveEqualWeightBenchmark
-from utils import dump_json_safe
-
+from data.fetch_market_data import (
+    ALL_TICKERS,
+    fetch_current_prices,
+    fetch_historical_data,
+)
+from data.indicators import analyze_market_data
+from llm.trading_agent import TradingAgent
+from portfolio.portfolio import Portfolio
+from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
+from risk.performance_metrics import calculate_all_metrics, format_metrics_report
+from risk.position_cooldown import CooldownConfig, PositionCooldownManager
+from utils import _is_finite_number, dump_json_safe, safe_format_pct
 
 # Resolve all paths relative to the repository root so the script is safe to run
 # from any working directory (e.g. via cron from the parent workspace).
@@ -178,7 +182,8 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     backpopulate_cooldown_entries(cooldown_mgr, portfolio)
     cooldown_status = cooldown_mgr.get_status()
     print(f"  ✓ Cooldown manager active — trades this week: {cooldown_status['trades_this_week']}/{cooldown_status['weekly_cap']}")
-    print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {cooldown_status['adaptive_stop_loss']:.1f}%")
+    adaptive_stop = cooldown_status.get('adaptive_stop_loss')
+    print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {safe_format_pct(adaptive_stop / 100 if adaptive_stop is not None else None, precision=1, fallback='n/a')}")
     if cooldown_status['active_entries']:
         print(f"  Active entries: {', '.join(cooldown_status['active_entries'].keys())}")
     
@@ -192,6 +197,9 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     position_returns = {}
     portfolio_weights = {}
     total_value = portfolio_summary['total_value']
+    portfolio_has_positive_value = (
+        _is_finite_number(total_value) and total_value > 0
+    )
     
     for position in portfolio_summary.get('positions', []):
         ticker = position['ticker']
@@ -201,7 +209,12 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
             if 'returns' in hist_data:
                 position_returns[ticker] = np.array(hist_data['returns'])
                 # Weight = position value / total portfolio value
-                portfolio_weights[ticker] = position['market_value'] / total_value
+                # Guard the division so a corrupted total_value cannot produce
+                # NaN/Inf weights that pollute the tail-risk aggregation.
+                if portfolio_has_positive_value and _is_finite_number(position.get('market_value')):
+                    portfolio_weights[ticker] = position['market_value'] / total_value
+                else:
+                    portfolio_weights[ticker] = 0.0
     
     if position_returns and len(position_returns) > 0:
         cvar_result = calculate_portfolio_cvar(position_returns, portfolio_weights)
@@ -218,9 +231,9 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
             benchmark_returns=None
         )
         
-        print(f"  CVaR 95%: {cvar_result.cvar_95:.2%}")
-        print(f"  VaR 95%: {cvar_result.var_95:.2%}")
-        print(f"  Max Drawdown: {tail_risk.get('max_drawdown', 0):.2%}")
+        print(f"  CVaR 95%: {safe_format_pct(cvar_result.cvar_95, sign=True)}")
+        print(f"  VaR 95%: {safe_format_pct(cvar_result.var_95, sign=True)}")
+        print(f"  Max Drawdown: {safe_format_pct(tail_risk.get('max_drawdown', 0), sign=True)}")
         
         # Add risk metrics to portfolio summary
         portfolio_summary['risk_metrics'] = {
@@ -345,7 +358,7 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         # Get all current prices for benchmark universe
         benchmark_prices = fetch_current_prices(ALL_TICKERS, max_workers=8)
         benchmark_summary = benchmark.rebalance(benchmark_prices)
-        print(f"  Benchmark value: €{benchmark_summary['total_value']:.2f} ({benchmark_summary['total_return_pct']:+.2f}%)")
+        print(f"  Benchmark value: €{benchmark_summary['total_value']:.2f} ({safe_format_pct(benchmark_summary['total_return_pct'] / 100, sign=True)})")
         print(f"  Benchmark positions: {benchmark_summary['num_positions']}")
     except Exception as e:
         print(f"  ⚠ Benchmark update failed: {e}")
@@ -412,8 +425,8 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         print(f"  Sharpe Ratio: {perf_metrics.sharpe_ratio:.2f}")
         if perf_metrics.beta is not None:
             print(f"  Beta (vs SPY): {perf_metrics.beta:.2f}")
-            print(f"  Alpha: {perf_metrics.alpha:.2%}")
-        print(f"  Volatility: {perf_metrics.volatility:.2%}")
+            print(f"  Alpha: {safe_format_pct(perf_metrics.alpha, sign=True)}")
+        print(f"  Volatility: {safe_format_pct(perf_metrics.volatility, sign=True)}")
     
     # Step 7: Log results
     print("\n[7/7] Logging results...")
@@ -470,11 +483,11 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     print("\n" + "="*70)
     print("DAILY RUN COMPLETE")
     print("="*70)
-    print(f"Strategy Value: €{portfolio_after_summary['total_value']:.2f} ({portfolio_after_summary['total_return_pct']:.2f}%)")
+    print(f"Strategy Value: €{portfolio_after_summary['total_value']:.2f} ({safe_format_pct(portfolio_after_summary['total_return_pct'] / 100, sign=True)})")
     if benchmark_summary:
-        print(f"Benchmark Value: €{benchmark_summary['total_value']:.2f} ({benchmark_summary['total_return_pct']:.2f}%)")
+        print(f"Benchmark Value: €{benchmark_summary['total_value']:.2f} ({safe_format_pct(benchmark_summary['total_return_pct'] / 100, sign=True)})")
         gap = portfolio_after_summary['total_return_pct'] - benchmark_summary['total_return_pct']
-        print(f"Gap vs Benchmark: {gap:+.2f}%")
+        print(f"Gap vs Benchmark: {safe_format_pct(gap / 100, sign=True)}")
     print(f"Trades Executed: {len([t for t in executed_trades if t.get('status') == 'executed'])}")
     print("="*70)
     

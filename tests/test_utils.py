@@ -8,7 +8,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from utils import is_valid_daily_result, load_valid_daily_results, load_valid_daily_results_limited, sanitize_for_json, dump_json_safe
+from utils import (
+    dump_json_safe,
+    is_valid_daily_result,
+    load_valid_daily_results,
+    load_valid_daily_results_limited,
+    safe_format_float,
+    safe_format_pct,
+    sanitize_for_json,
+)
 
 
 @pytest.fixture
@@ -176,6 +184,32 @@ class TestSanitizeForJson:
         numpy = pytest.importorskip("numpy")
         assert sanitize_for_json({"x": numpy.nan})["x"] is None
         assert sanitize_for_json({"x": numpy.inf})["x"] is None
+
+
+class TestSafeFormat:
+    """Tests for safe percentage and float formatters."""
+
+    def test_safe_format_pct_positive(self):
+        assert safe_format_pct(0.1234) == "12.34%"
+
+    def test_safe_format_pct_signed(self):
+        assert safe_format_pct(0.1234, sign=True) == "+12.34%"
+        assert safe_format_pct(-0.05, sign=True) == "-5.00%"
+
+    def test_safe_format_pct_non_finite(self):
+        assert safe_format_pct(float("nan")) == "n/a"
+        assert safe_format_pct(float("inf")) == "n/a"
+        assert safe_format_pct(float("-inf")) == "n/a"
+        assert safe_format_pct(None) == "n/a"
+
+    def test_safe_format_pct_custom_fallback(self):
+        assert safe_format_pct(float("nan"), fallback="--") == "--"
+
+    def test_safe_format_float_signed(self):
+        assert safe_format_float(1.234, sign=True) == "+1.23"
+
+    def test_safe_format_float_non_finite(self):
+        assert safe_format_float(float("nan")) == "n/a"
 
 
 class TestDumpJsonSafe:

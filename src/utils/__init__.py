@@ -4,7 +4,6 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List
 
-
 MIN_ASSETS_FOR_VALID_RUN = 5
 
 
@@ -98,6 +97,47 @@ def sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, float):
         return obj if _is_finite_number(obj) else None
     return obj
+
+
+def _format_numeric(value, precision: int, sign: bool, factor: float, fallback: str) -> str:
+    """Internal formatter for finite numbers; ``factor`` scales the value."""
+    if not _is_finite_number(value):
+        return fallback
+    sign_char = "+" if sign else ""
+    format_spec = f"{sign_char}.{precision}f"
+    return f"{float(value) * factor:{format_spec}}"
+
+
+def safe_format_pct(
+    value: Any,
+    precision: int = 2,
+    sign: bool = False,
+    fallback: str = "n/a",
+) -> str:
+    """Format *value* as a percentage string, falling back to ``fallback``.
+
+    ``safe_format_pct(0.1234)`` returns ``"12.34%"``.
+    ``safe_format_pct(0.1234, sign=True)`` returns ``"+12.34%"``.
+    Non-finite values (``NaN``, ``Inf``, ``None``) return ``fallback``.
+    """
+    numeric = _format_numeric(value, precision, sign, 100.0, fallback)
+    if numeric is fallback:
+        return fallback
+    return numeric + "%"
+
+
+def safe_format_float(
+    value: Any,
+    precision: int = 2,
+    sign: bool = False,
+    fallback: str = "n/a",
+) -> str:
+    """Format *value* as a floating-point string, falling back to ``fallback``.
+
+    Like ``safe_format_pct`` but without the percent sign, for ratios that are
+    already in display units (e.g. Sharpe ratio).
+    """
+    return _format_numeric(value, precision, sign, 1.0, fallback)
 
 
 def dump_json_safe(

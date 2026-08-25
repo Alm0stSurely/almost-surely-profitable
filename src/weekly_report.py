@@ -18,7 +18,7 @@ from portfolio.portfolio import Portfolio
 from reporting import ReportGenerator
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 from risk.performance_metrics import PerformanceMetrics, calculate_all_metrics
-from utils import _is_finite_number
+from utils import _is_finite_number, safe_format_pct
 
 # Resolve paths relative to the repository root so the script is safe to run
 # from any working directory (e.g. via cron from the parent workspace).
@@ -195,10 +195,10 @@ def generate_weekly_report():
         
         if metrics.beta is not None:
             print(f"   Beta (vs SPY): {metrics.beta:.2f}")
-            print(f"   Alpha (vs SPY): {metrics.alpha:.2%}")
+            print(f"   Alpha (vs SPY): {safe_format_pct(metrics.alpha, sign=True)}")
         
-        print(f"   Max Drawdown: {metrics.max_drawdown:.2%}")
-        print(f"   Volatility: {metrics.volatility:.2%}")
+        print(f"   Max Drawdown: {safe_format_pct(metrics.max_drawdown, sign=True)}")
+        print(f"   Volatility: {safe_format_pct(metrics.volatility, sign=True)}")
         
         if metrics.information_ratio is not None:
             print(f"   Information Ratio (vs SPY): {metrics.information_ratio:.2f}")
@@ -208,8 +208,8 @@ def generate_weekly_report():
             {'portfolio': portfolio_returns},
             {'portfolio': 1.0}
         )
-        print(f"   CVaR 95%: {cvar_result.cvar_95:.2%}")
-        print(f"   VaR 95%: {cvar_result.var_95:.2%}")
+        print(f"   CVaR 95%: {safe_format_pct(cvar_result.cvar_95, sign=True)}")
+        print(f"   VaR 95%: {safe_format_pct(cvar_result.var_95, sign=True)}")
         
         # Tail risk analysis (vs SPY as primary benchmark)
         tail = tail_risk_analysis(portfolio_returns, spy_returns)
@@ -303,10 +303,10 @@ def generate_weekly_report():
                 beta_interp = "Neutral" if 0.9 < metrics.beta < 1.1 else ("Defensive" if metrics.beta < 0.9 else "Aggressive")
                 f.write(f"| Beta (vs SPY) | {metrics.beta:.2f} | {beta_interp} |\n")
                 alpha_interp = "Outperform" if metrics.alpha and metrics.alpha > 0 else "Underperform"
-                f.write(f"| Alpha | {metrics.alpha:.2%} | {alpha_interp} |\n")
+                f.write(f"| Alpha | {safe_format_pct(metrics.alpha, sign=True)} | {alpha_interp} |\n")
             
-            f.write(f"| Max Drawdown | {metrics.max_drawdown:.2%} | {'High' if metrics.max_drawdown < -0.1 else 'Moderate' if metrics.max_drawdown < -0.05 else 'Low'} |\n")
-            f.write(f"| Volatility | {metrics.volatility:.2%} | {'High' if metrics.volatility > 0.3 else 'Moderate' if metrics.volatility > 0.15 else 'Low'} |\n")
+            f.write(f"| Max Drawdown | {safe_format_pct(metrics.max_drawdown, sign=True)} | {'High' if metrics.max_drawdown < -0.1 else 'Moderate' if metrics.max_drawdown < -0.05 else 'Low'} |\n")
+            f.write(f"| Volatility | {safe_format_pct(metrics.volatility, sign=True)} | {'High' if metrics.volatility > 0.3 else 'Moderate' if metrics.volatility > 0.15 else 'Low'} |\n")
             
             if metrics.information_ratio is not None:
                 ir_interp = "Good" if metrics.information_ratio > 0.5 else "Neutral"
@@ -316,8 +316,8 @@ def generate_weekly_report():
             f.write(f"\n## Risk Metrics\n\n")
             f.write(f"| Metric | Value |\n")
             f.write(f"|--------|-------|\n")
-            f.write(f"| CVaR 95% | {cvar_result.cvar_95:.2%} |\n")
-            f.write(f"| VaR 95% | {cvar_result.var_95:.2%} |\n")
+            f.write(f"| CVaR 95% | {safe_format_pct(cvar_result.cvar_95, sign=True)} |\n")
+            f.write(f"| VaR 95% | {safe_format_pct(cvar_result.var_95, sign=True)} |\n")
             f.write(f"| Skewness | {tail.get('skewness', 0):.2f} |\n")
             f.write(f"| Kurtosis | {tail.get('kurtosis', 0):.2f} |\n")
             

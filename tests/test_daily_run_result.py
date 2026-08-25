@@ -255,6 +255,33 @@ def test_no_risk_metrics_when_no_positions(tmp_path, monkeypatch):
     assert result["portfolio_before"].get("risk_metrics") is None
 
 
+def test_non_finite_total_value_does_not_crash(tmp_path, monkeypatch):
+    """A corrupted total_value must not produce NaN weights or crash formatting."""
+    fixed_date = datetime(2026, 7, 14, 10, 30, 0)
+    patches, _ = _patch_pipeline(
+        tmp_path, monkeypatch, fixed_date, include_risk_metrics=True
+    )
+    result_file = tmp_path / "results" / "daily" / "2026-07-14.json"
+
+    # Corrupt the portfolio total value and a position market value.
+    mock_portfolio = patches["Portfolio"].return_value
+    bad_summary = mock_portfolio.get_summary.return_value.copy()
+    bad_summary["total_value"] = float("nan")
+    bad_summary["positions_value"] = float("inf")
+    bad_positions = [dict(p) for p in bad_summary["positions"]]
+    bad_positions[0]["market_value"] = float("nan")
+    bad_summary["positions"] = bad_positions
+    mock_portfolio.get_summary.return_value = bad_summary
+
+    with patch.multiple("daily_run", **patches):
+        run_daily_pipeline(dry_run=False, no_overwrite=False)
+
+    assert result_file.exists()
+    result = json.loads(result_file.read_text())
+    # The pipeline must complete and sanitize non-finite benchmark values.
+    assert result["portfolio_after"]["total_value"] is None
+
+
 def test_non_finite_benchmark_values_sanitized_for_json(tmp_path, monkeypatch):
     """Non-finite floats in the equal-weight benchmark must be serialized as null."""
     fixed_date = datetime(2026, 7, 14, 10, 30, 0)
