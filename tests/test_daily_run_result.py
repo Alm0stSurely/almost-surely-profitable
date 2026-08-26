@@ -279,3 +279,50 @@ def test_non_finite_benchmark_values_sanitized_for_json(tmp_path, monkeypatch):
     assert result["equalweight_benchmark"]["total_value"] is None
     assert result["equalweight_benchmark"]["total_return_pct"] is None
     assert result["equalweight_benchmark"]["num_positions"] == 0
+
+
+def test_non_finite_total_value_does_not_crash_weight_calculation(tmp_path, monkeypatch):
+    """A degenerate total_value must not produce inf weights or crash the pipeline."""
+    fixed_date = datetime(2026, 7, 14, 10, 30, 0)
+    patches, _ = _patch_pipeline(
+        tmp_path, monkeypatch, fixed_date, include_risk_metrics=True
+    )
+    result_file = tmp_path / "results" / "daily" / "2026-07-14.json"
+
+    # Make the portfolio report a non-finite total value.
+    mock_portfolio = patches["Portfolio"].return_value
+    summary = mock_portfolio.get_summary.return_value
+    summary["total_value"] = float("nan")
+    summary["total_return_pct"] = float("nan")
+
+    with patch.multiple("daily_run", **patches):
+        run_daily_pipeline(dry_run=False, no_overwrite=False)
+
+    assert result_file.exists()
+    text = result_file.read_text()
+    result = json.loads(text)
+    # No NaN/Infinity tokens can appear in the JSON output.
+    assert "NaN" not in text
+    assert "Infinity" not in text
+    # The degenerate portfolio values are sanitized to null.
+    assert result["portfolio_after"]["total_value"] is None
+    assert result["portfolio_after"]["total_return_pct"] is None
+
+
+def test_safe_format_helpers_handle_non_finite():
+    """Private format helpers must fall back to 'n/a' for non-finite inputs."""
+    from daily_run import _safe_pct_str, _safe_value_str, _safe_weight
+
+    assert _safe_weight(100.0, 0.0) == 0.0
+    assert _safe_weight(100.0, float("nan")) == 0.0
+    assert _safe_weight(float("inf"), 1000.0) == 0.0
+    assert _safe_weight(250.0, 1000.0) == 0.25
+
+    assert _safe_pct_str(0.05) == "+5.00%"
+    assert _safe_pct_str(-0.005) == "-0.50%"
+    assert _safe_pct_str(float("nan")) == "n/a"
+    assert _safe_pct_str(float("inf"), fallback="-") == "-"
+
+    assert _safe_value_str(123.456) == "€123.46"
+    assert _safe_value_str(float("nan")) == "n/a"
+    assert _safe_value_str(float("-inf")) == "n/a"
