@@ -5,6 +5,7 @@ and action flip detection.
 """
 
 import json
+import math
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -16,16 +17,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from analysis.churn_analysis import (
     RoundTrip,
-    load_trades,
-    load_decisions,
-    match_round_trips,
-    analyze_churn,
-    print_report,
-    _parse_trade_timestamp,
     _bucket_metrics,
+    _filter_valid_round_trips,
+    _is_valid_round_trip,
+    _parse_trade_timestamp,
+    analyze_churn,
     analyze_cohort,
+    load_decisions,
+    load_trades,
+    match_round_trips,
+    print_report,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -594,3 +596,127 @@ class TestAnalyzeCohort:
         # The buy has no matching post-cutoff sell, so no post-cutoff round trip.
         assert pre["total_round_trips"] == 0
         assert post["total_round_trips"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Non-finite value guards
+# ---------------------------------------------------------------------------
+
+def _make_round_trip(**overrides):
+    defaults = {
+        "ticker": "AAPL",
+        "buy_date": datetime(2026, 1, 1, 10, 0, 0),
+        "sell_date": datetime(2026, 1, 5, 10, 0, 0),
+        "hold_days": 4.0,
+        "pnl": 10.0,
+        "buy_price": 100.0,
+        "sell_price": 110.0,
+    }
+    defaults.update(overrides)
+    return RoundTrip(**defaults)
+
+
+class TestIsValidRoundTrip:
+    def test_valid_round_trip(self):
+        rt = _make_round_trip()
+        assert _is_valid_round_trip(rt) is True
+
+    def test_invalid_for_nan_pnl(self):
+        rt = _make_round_trip(pnl=float("nan"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_inf_pnl(self):
+        rt = _make_round_trip(pnl=float("inf"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_nan_hold_days(self):
+        rt = _make_round_trip(hold_days=float("nan"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_inf_hold_days(self):
+        rt = _make_round_trip(hold_days=float("inf"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_nan_buy_price(self):
+        rt = _make_round_trip(buy_price=float("nan"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_inf_buy_price(self):
+        rt = _make_round_trip(buy_price=float("inf"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_nan_sell_price(self):
+        rt = _make_round_trip(sell_price=float("nan"))
+        assert _is_valid_round_trip(rt) is False
+
+    def test_invalid_for_inf_sell_price(self):
+        rt = _make_round_trip(sell_price=float("inf"))
+        assert _is_valid_round_trip(rt) is False
+
+
+class TestFilterValidRoundTrips:
+    def test_keeps_valid_and_drops_invalid(self):
+        valid = _make_round_trip()
+        invalid = _make_round_trip(pnl=float("nan"))
+        assert _filter_valid_round_trips([valid, invalid]) == [valid]
+
+    def test_empty_input(self):
+        assert _filter_valid_round_trips([]) == []
+
+    def test_all_invalid_returns_empty(self):
+        invalid = _make_round_trip(pnl=float("nan"))
+        assert _filter_valid_round_trips([invalid]) == []
+
+
+class TestMatchRoundTripsNonFiniteGuards:
+    def test_skips_non_finite_buy_price(self):
+        trades = [
+            make_trade("AAPL", "buy", float("nan"), timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-01-02T10:00:00"),
+        ]
+        assert match_round_trips(trades) == []
+
+    def test_skips_non_finite_sell_price(self):
+        trades = [
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "sell", float("nan"), realized_pnl=10.0, timestamp="2026-01-02T10:00:00"),
+        ]
+        assert match_round_trips(trades) == []
+
+    def test_coerces_non_finite_realized_pnl_to_nan_and_filters(self):
+        trades = [
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "sell", 160.0, realized_pnl=float("inf"), timestamp="2026-01-02T10:00:00"),
+        ]
+        rts = match_round_trips(trades)
+        assert len(rts) == 0
+
+    def test_keeps_valid_pair_when_other_pair_is_corrupt(self):
+        trades = [
+            make_trade("AAPL", "buy", 150.0, timestamp="2026-01-01T10:00:00"),
+            make_trade("AAPL", "sell", 160.0, realized_pnl=10.0, timestamp="2026-01-02T10:00:00"),
+            make_trade("TSLA", "buy", float("nan"), timestamp="2026-01-01T10:00:00"),
+            make_trade("TSLA", "sell", 220.0, realized_pnl=5.0, timestamp="2026-01-02T10:00:00"),
+        ]
+        rts = match_round_trips(trades)
+        assert len(rts) == 1
+        assert rts[0].ticker == "AAPL"
+
+
+class TestBucketMetricsNonFiniteGuards:
+    def test_excludes_non_finite_round_trips_from_aggregates(self):
+        valid = _make_round_trip(pnl=100.0, hold_days=2.0)
+        invalid = _make_round_trip(pnl=float("nan"), hold_days=2.0)
+        metrics = _bucket_metrics([valid, invalid])
+        assert metrics["total_round_trips"] == 1
+        assert metrics["total_realized_pnl"] == 100.0
+        assert math.isfinite(metrics["avg_hold_days"])
+        assert math.isfinite(metrics["win_rate_pct"])
+
+    def test_all_invalid_returns_zeroed_finite_metrics(self):
+        invalid = _make_round_trip(pnl=float("nan"))
+        metrics = _bucket_metrics([invalid])
+        assert metrics["total_round_trips"] == 0
+        assert metrics["total_realized_pnl"] == 0.0
+        assert metrics["avg_hold_days"] == 0.0
+        assert metrics["win_rate_pct"] == 0.0

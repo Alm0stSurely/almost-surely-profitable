@@ -15,11 +15,16 @@ Outputs key metrics:
 """
 
 import json
-from datetime import datetime
-from pathlib import Path
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Dict, Tuple
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
+
+from utils import _is_finite_number
 
 
 @dataclass
@@ -31,6 +36,21 @@ class RoundTrip:
     pnl: float
     buy_price: float
     sell_price: float
+
+
+def _is_valid_round_trip(rt: RoundTrip) -> bool:
+    """Return True only when every numeric field is a finite scalar."""
+    return (
+        _is_finite_number(rt.pnl)
+        and _is_finite_number(rt.hold_days)
+        and _is_finite_number(rt.buy_price)
+        and _is_finite_number(rt.sell_price)
+    )
+
+
+def _filter_valid_round_trips(round_trips: List[RoundTrip]) -> List[RoundTrip]:
+    """Drop round trips whose numeric fields are not finite."""
+    return [rt for rt in round_trips if _is_valid_round_trip(rt)]
 
 
 def load_trades(data_dir: str = "data") -> List[Dict]:
@@ -76,6 +96,8 @@ def match_round_trips(trades: List[Dict]) -> List[RoundTrip]:
 
     ticker_trades = defaultdict(list)
     for t in trades:
+        if not _is_finite_number(t.get("price")):
+            continue
         ticker_trades[t["ticker"]].append(t)
 
     round_trips = []
@@ -94,31 +116,41 @@ def match_round_trips(trades: List[Dict]) -> List[RoundTrip]:
             buy_dt = _parse_trade_timestamp(buy)
             hold_days = (sell_dt - buy_dt).total_seconds() / 86400
 
+            pnl = sell.get("realized_pnl", 0)
+            if not _is_finite_number(pnl):
+                pnl = float("nan")
+
             round_trips.append(RoundTrip(
                 ticker=tk,
                 buy_date=buy_dt,
                 sell_date=sell_dt,
                 hold_days=hold_days,
-                pnl=sell.get("realized_pnl", 0),
+                pnl=pnl,
                 buy_price=buy["price"],
                 sell_price=sell["price"],
             ))
 
-    return round_trips
+    return _filter_valid_round_trips(round_trips)
 
 
 def _bucket_metrics(round_trips: List[RoundTrip]) -> Dict:
-    """Compute bucketed churn metrics from a list of round trips."""
-    winning = [rt for rt in round_trips if rt.pnl > 0]
-    short = [rt for rt in round_trips if rt.hold_days <= 3]
-    medium = [rt for rt in round_trips if 3 < rt.hold_days <= 14]
-    long = [rt for rt in round_trips if rt.hold_days > 14]
+    """Compute bucketed churn metrics from a list of round trips.
+
+    Non-finite round trips are excluded from every aggregate so that a single
+    corrupt record cannot poison totals, win rates, or holding-period averages.
+    """
+    valid_round_trips = _filter_valid_round_trips(round_trips)
+    winning = [rt for rt in valid_round_trips if rt.pnl > 0]
+    short = [rt for rt in valid_round_trips if rt.hold_days <= 3]
+    medium = [rt for rt in valid_round_trips if 3 < rt.hold_days <= 14]
+    long = [rt for rt in valid_round_trips if rt.hold_days > 14]
+    total = len(valid_round_trips)
     return {
-        "total_round_trips": len(round_trips),
+        "total_round_trips": total,
         "winning_round_trips": len(winning),
-        "win_rate_pct": (len(winning) / max(len(round_trips), 1)) * 100,
-        "total_realized_pnl": sum(rt.pnl for rt in round_trips),
-        "avg_hold_days": sum(rt.hold_days for rt in round_trips) / max(len(round_trips), 1),
+        "win_rate_pct": (len(winning) / max(total, 1)) * 100,
+        "total_realized_pnl": sum(rt.pnl for rt in valid_round_trips),
+        "avg_hold_days": sum(rt.hold_days for rt in valid_round_trips) / max(total, 1),
         "short_term_count": len(short),
         "short_term_win_rate": (len([r for r in short if r.pnl > 0]) / max(len(short), 1)) * 100,
         "short_term_pnl": sum(r.pnl for r in short),
