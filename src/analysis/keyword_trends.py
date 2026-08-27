@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from analysis.behavioral_analysis import KEYWORD_CONCEPTS, count_keyword_concepts
+from utils import _is_finite_number
 
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "results" / "analysis"
@@ -77,19 +78,30 @@ def compute_weekly_rates(weeks, keyword_concepts=None):
 
 
 def rolling_average(values, window=4):
-    """Return a list of rolling averages with partial windows at the start."""
+    """Return a list of rolling averages with partial windows at the start.
+
+    Any window that contains a non-finite value returns NaN so that a single
+    corrupt observation does not silently skew the smoothed trend line.
+    """
     out = []
     for i in range(len(values)):
         start = max(0, i - window + 1)
         window_vals = values[start : i + 1]
-        out.append(sum(window_vals) / len(window_vals))
+        if not all(_is_finite_number(v) for v in window_vals):
+            out.append(float("nan"))
+        else:
+            out.append(sum(window_vals) / len(window_vals))
     return out
 
 
 def linear_slope(values):
-    """Least-squares slope in index units (percentage points per week)."""
+    """Least-squares slope in index units (percentage points per week).
+
+    Returns 0.0 (flat) when the series is too short or contains any non-finite
+    value, preventing NaN/inf slopes from reaching the trend report.
+    """
     n = len(values)
-    if n < 2:
+    if n < 2 or not all(_is_finite_number(v) for v in values):
         return 0.0
     x_mean = (n - 1) / 2.0
     y_mean = sum(values) / n

@@ -75,6 +75,19 @@ class TestRollingAverage:
     def test_partial_window_at_start(self):
         assert rolling_average([10, 20, 30], window=4) == [10.0, 15.0, 20.0]
 
+    def test_non_finite_value_poison_window(self):
+        out = rolling_average([1.0, float("nan"), 3.0], window=2)
+        assert out[0] == 1.0
+        assert out[1] != out[1]  # NaN
+        assert out[2] != out[2]  # NaN (poisoned by previous window)
+
+    def test_infinite_value_poison_window(self):
+        # _is_finite_number treats inf as non-finite, so the window is poisoned with NaN
+        out = rolling_average([1.0, float("inf"), 3.0], window=2)
+        assert out[0] == 1.0
+        assert out[1] != out[1]  # NaN
+        assert out[2] != out[2]  # NaN
+
 
 class TestLinearSlope:
     def test_positive_slope(self):
@@ -86,6 +99,12 @@ class TestLinearSlope:
 
     def test_single_value_returns_zero(self):
         assert linear_slope([42]) == 0.0
+
+    def test_nan_series_returns_zero(self):
+        assert linear_slope([1.0, float("nan"), 3.0]) == 0.0
+
+    def test_inf_series_returns_zero(self):
+        assert linear_slope([1.0, float("inf"), 3.0]) == 0.0
 
 
 class TestFormatReport:
