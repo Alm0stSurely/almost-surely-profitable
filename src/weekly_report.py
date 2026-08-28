@@ -121,6 +121,27 @@ def _safe_benchmark_alpha(weekly_return, bench_cum):
     return alpha if _is_finite_number(alpha) else None
 
 
+def _safe_value_str(value, symbol='€', default='n/a'):
+    """Format a finite scalar as currency, falling back to *default*."""
+    if _is_finite_number(value):
+        return f"{symbol}{value:.2f}"
+    return default
+
+
+def _safe_pct_str(value, signed=True, default='n/a'):
+    """Format a finite scalar as a percentage, falling back to *default*."""
+    if _is_finite_number(value):
+        return f"{value:+.2f}%" if signed else f"{value:.2f}%"
+    return default
+
+
+def _safe_position_field(value, fmt='.2f', default='n/a'):
+    """Format a finite scalar position field, falling back to *default*."""
+    if _is_finite_number(value):
+        return f"{value:{fmt}}"
+    return default
+
+
 def generate_weekly_report():
     """Generate and save weekly performance report."""
     print("="*70)
@@ -153,12 +174,12 @@ def generate_weekly_report():
     # Portfolio summary
     summary = portfolio.get_summary()
     print(f"\n💰 Portfolio Summary:")
-    print(f"   Cash: €{summary['cash']:.2f}")
-    print(f"   Positions Value: €{summary['positions_value']:.2f}")
-    print(f"   Total Value: €{summary['total_value']:.2f}")
-    print(f"   Total Return: {summary['total_return_pct']:.2f}%")
-    print(f"   Realized P&L: €{summary['total_realized_pnl']:.2f}")
-    print(f"   Unrealized P&L: €{summary['total_unrealized_pnl']:.2f}")
+    print(f"   Cash: {_safe_value_str(summary['cash'])}")
+    print(f"   Positions Value: {_safe_value_str(summary['positions_value'])}")
+    print(f"   Total Value: {_safe_value_str(summary['total_value'])}")
+    print(f"   Total Return: {_safe_pct_str(summary['total_return_pct'])}")
+    print(f"   Realized P&L: {_safe_value_str(summary['total_realized_pnl'], symbol='€', default='n/a')}")
+    print(f"   Unrealized P&L: {_safe_value_str(summary['total_unrealized_pnl'], symbol='€', default='n/a')}")
     
     # Weekly performance
     raw_start_value = week_results[0].get('portfolio_before', {}).get('total_value', summary['total_value']) if week_results else summary['total_value']
@@ -231,8 +252,12 @@ def generate_weekly_report():
     if summary['positions']:
         print(f"\n📋 Current Positions:")
         for pos in summary['positions']:
-            print(f"   {pos['ticker']}: {pos['quantity']:.2f} shares @ €{pos['current_price']:.2f}")
-            print(f"      Value: €{pos['market_value']:.2f} | P&L: {pos['unrealized_pnl_pct']:+.2f}%")
+            qty_str = _safe_position_field(pos['quantity'])
+            price_str = _safe_value_str(pos['current_price'])
+            value_str = _safe_value_str(pos['market_value'])
+            pnl_str = _safe_pct_str(pos['unrealized_pnl_pct'])
+            print(f"   {pos['ticker']}: {qty_str} shares @ {price_str}")
+            print(f"      Value: {value_str} | P&L: {pnl_str}")
     
     # Trades this week
     all_trades = []
@@ -248,13 +273,14 @@ def generate_weekly_report():
     if all_trades:
         print(f"\n🔄 Trades This Week ({len(all_trades)}):")
         for trade in all_trades:
-            print(f"   {trade['date']}: {trade['action'].upper()} {trade['ticker']} @ €{trade['price']:.2f}")
+            price_str = _safe_value_str(trade['price'])
+            print(f"   {trade['date']}: {trade['action'].upper()} {trade['ticker']} @ {price_str}")
             
             # Calculate P&L if sell
             if trade['action'] == 'sell':
                 # Find original buy price
                 realized = trade.get('realized_pnl', 0)
-                print(f"      Realized P&L: €{realized:.2f}")
+                print(f"      Realized P&L: {_safe_value_str(realized)}")
     else:
         print(f"\n🔄 No trades this week")
     
@@ -270,12 +296,12 @@ def generate_weekly_report():
         f.write(f"## Portfolio Summary\n\n")
         f.write(f"| Metric | Value |\n")
         f.write(f"|--------|-------|\n")
-        f.write(f"| Cash | €{summary['cash']:.2f} |\n")
-        f.write(f"| Positions Value | €{summary['positions_value']:.2f} |\n")
-        f.write(f"| **Total Value** | **€{summary['total_value']:.2f}** |\n")
-        f.write(f"| Total Return | {summary['total_return_pct']:.2f}% |\n")
-        f.write(f"| Realized P&L | €{summary['total_realized_pnl']:.2f} |\n")
-        f.write(f"| Unrealized P&L | €{summary['total_unrealized_pnl']:.2f} |\n")
+        f.write(f"| Cash | {_safe_value_str(summary['cash'])} |\n")
+        f.write(f"| Positions Value | {_safe_value_str(summary['positions_value'])} |\n")
+        f.write(f"| **Total Value** | **{_safe_value_str(summary['total_value'])}** |\n")
+        f.write(f"| Total Return | {_safe_pct_str(summary['total_return_pct'])} |\n")
+        f.write(f"| Realized P&L | {_safe_value_str(summary['total_realized_pnl'])} |\n")
+        f.write(f"| Unrealized P&L | {_safe_value_str(summary['total_unrealized_pnl'])} |\n")
         f.write(f"| Number of Positions | {len(summary['positions'])} |\n")
         
         # Weekly Performance
@@ -340,8 +366,8 @@ def generate_weekly_report():
         f.write(f"| Ticker | Quantity | Price | Value | P&L % | P&L € |\n")
         f.write(f"|--------|----------|-------|-------|-------|-------|\n")
         for pos in summary['positions']:
-            f.write(f"| {pos['ticker']} | {pos['quantity']:.2f} | €{pos['current_price']:.2f} | ")
-            f.write(f"€{pos['market_value']:.2f} | {pos['unrealized_pnl_pct']:+.2f}% | €{pos['unrealized_pnl']:+.2f} |\n")
+            f.write(f"| {pos['ticker']} | {_safe_position_field(pos['quantity'])} | {_safe_value_str(pos['current_price'])} | ")
+            f.write(f"{_safe_value_str(pos['market_value'])} | {_safe_pct_str(pos['unrealized_pnl_pct'])} | {_safe_value_str(pos['unrealized_pnl'])} |\n")
         
         # Trades
         f.write(f"\n## Trades This Week\n\n")
@@ -349,8 +375,8 @@ def generate_weekly_report():
             f.write(f"| Date | Action | Ticker | Price | P&L |\n")
             f.write(f"|------|--------|--------|-------|-----|\n")
             for trade in all_trades:
-                pnl_str = f"€{trade.get('realized_pnl', 0):.2f}" if trade['action'] == 'sell' else "—"
-                f.write(f"| {trade['date']} | {trade['action'].upper()} | {trade['ticker']} | €{trade['price']:.2f} | {pnl_str} |\n")
+                pnl_str = _safe_value_str(trade.get('realized_pnl', 0)) if trade['action'] == 'sell' else "—"
+                f.write(f"| {trade['date']} | {trade['action'].upper()} | {trade['ticker']} | {_safe_value_str(trade['price'])} | {pnl_str} |\n")
         else:
             f.write(f"No trades executed this week.\n")
     
