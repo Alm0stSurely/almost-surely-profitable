@@ -112,6 +112,28 @@ def linear_slope(values):
     return numerator / denominator
 
 
+def _safe_pct_str(value, width=7, precision=1):
+    """Format *value* as a percentage string, or right-aligned ``n/a``.
+
+    Non-finite inputs (including ``NaN`` and ``inf``) render as ``n/a`` so
+    the report never emits misleading tokens such as ``nan%``.
+    """
+    if not _is_finite_number(value):
+        return f"{'n/a':>{width + 1}}"
+    return f"{value:>{width}.{precision}f}%"
+
+
+def _safe_signed_str(value, width=9, precision=2):
+    """Format a signed numeric *value*, or right-aligned ``n/a``.
+
+    Keeps the trend column aligned even when the slope computation falls
+    back to a non-finite sentinel.
+    """
+    if not _is_finite_number(value):
+        return f"{'n/a':>{width}}"
+    return f"{value:>+{width}.{precision}f}"
+
+
 def format_report(weekly_rates, highlight_concepts=None, window=4):
     """Render the keyword trend report as a string."""
     if not weekly_rates:
@@ -157,7 +179,7 @@ def format_report(weekly_rates, highlight_concepts=None, window=4):
         row_parts = [f"{week:<10}", f"{weekly_rates[week]['_n']:>3}"]
         for concept in highlight_concepts:
             rate = weekly_rates[week].get(concept, 0.0)
-            row_parts.append(f" {rate:>7.1f}%")
+            row_parts.append(f" {_safe_pct_str(rate, width=7, precision=1)}")
         lines.append("".join(row_parts))
 
     lines.append("")
@@ -171,14 +193,18 @@ def format_report(weekly_rates, highlight_concepts=None, window=4):
         latest = weekly_rates[latest_week].get(concept, 0.0)
         avg = rolling[concept][-1]
         slope = trends[concept]
-        if slope > 0.5:
+        if not _is_finite_number(slope):
+            direction = "n/a"
+        elif slope > 0.5:
             direction = "rising"
         elif slope < -0.5:
             direction = "falling"
         else:
             direction = "flat"
         lines.append(
-            f"{concept:<20} {latest:>9.1f}% {avg:>9.1f}% {slope:>+9.2f} {direction:>10}"
+            f"{concept:<20} {_safe_pct_str(latest, width=9, precision=1)}"
+            f" {_safe_pct_str(avg, width=9, precision=1)}"
+            f" {_safe_signed_str(slope, width=9, precision=2)} {direction:>10}"
         )
 
     lines.append("=" * 80)
