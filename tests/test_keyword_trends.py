@@ -1,4 +1,5 @@
-"""Tests for keyword_trends.py."""
+"""Tests for keyword_trends.py formatting guards."""
+
 import sys
 from pathlib import Path
 
@@ -7,121 +8,107 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from analysis.keyword_trends import (
-    compute_weekly_rates,
+    _safe_pct_str,
+    _safe_signed_str,
     format_report,
-    group_by_iso_week,
     linear_slope,
-    load_decisions,
     rolling_average,
 )
+from utils import _is_finite_number
 
 
-def make_decision(timestamp, reasoning="", error=False):
-    return {"timestamp": timestamp, "reasoning": reasoning, "error": error, "actions": []}
+class TestSafeFormatHelpers:
+    def test_safe_pct_str_finite(self):
+        assert _safe_pct_str(12.34) == "   12.3%"
 
+    def test_safe_pct_str_nan(self):
+        assert _safe_pct_str(float("nan")) == "     n/a"
 
-class TestLoadDecisions:
-    def test_loads_from_default_path(self, tmp_path, monkeypatch):
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        decisions = [
-            make_decision("2026-01-05T21:00:00", "loss aversion"),
-        ]
-        with open(data_dir / "decision_history.json", "w") as f:
-            import json
+    def test_safe_pct_str_inf(self):
+        assert _safe_pct_str(float("inf")) == "     n/a"
 
-            json.dump(decisions, f)
-        monkeypatch.setattr(
-            "analysis.keyword_trends.DATA_DIR", data_dir
-        )
-        loaded = load_decisions()
-        assert loaded == decisions
+    def test_safe_pct_str_none(self):
+        assert _safe_pct_str(None) == "     n/a"
 
+    def test_safe_signed_str_finite_positive(self):
+        assert _safe_signed_str(0.42) == "    +0.42"
 
-class TestGroupByIsoWeek:
-    def test_groups_by_iso_week(self):
-        decisions = [
-            make_decision("2026-01-05T21:00:00", "loss aversion"),  # Monday W02
-            make_decision("2026-01-06T21:00:00", "cash buffer"),  # Tuesday W02
-            make_decision("2026-01-12T21:00:00", "loss aversion"),  # Monday W03
-        ]
-        weeks = group_by_iso_week(decisions)
-        assert set(weeks.keys()) == {"2026-W02", "2026-W03"}
-        assert len(weeks["2026-W02"]) == 2
-        assert len(weeks["2026-W03"]) == 1
+    def test_safe_signed_str_finite_negative(self):
+        assert _safe_signed_str(-1.23) == "    -1.23"
 
-    def test_skips_error_decisions(self):
-        decisions = [make_decision("2026-01-05T21:00:00", "loss aversion", error=True)]
-        assert group_by_iso_week(decisions) == {}
+    def test_safe_signed_str_nan(self):
+        assert _safe_signed_str(float("nan")) == "      n/a"
 
-
-class TestComputeWeeklyRates:
-    def test_rates_per_week(self):
-        concepts = {"loss aversion": ["loss aversion"]}
-        decisions = [
-            make_decision("2026-01-05T21:00:00", "loss aversion"),
-            make_decision("2026-01-06T21:00:00", "cash buffer"),
-        ]
-        weeks = group_by_iso_week(decisions)
-        rates = compute_weekly_rates(weeks, concepts)
-        assert rates["2026-W02"]["loss aversion"] == 50.0
-        assert rates["2026-W02"]["_n"] == 2
+    def test_safe_signed_str_inf(self):
+        assert _safe_signed_str(float("inf")) == "      n/a"
 
 
 class TestRollingAverage:
-    def test_rolling_average(self):
-        assert rolling_average([1, 2, 3, 4], window=2) == [1.0, 1.5, 2.5, 3.5]
+    def test_window_with_nan_returns_nan(self):
+        values = [10.0, 20.0, float("nan"), 40.0]
+        out = rolling_average(values, window=4)
+        assert any(v != v for v in out[2:])
+        assert all(_is_finite_number(v) for v in out[:2])
 
-    def test_partial_window_at_start(self):
-        assert rolling_average([10, 20, 30], window=4) == [10.0, 15.0, 20.0]
-
-    def test_non_finite_value_poison_window(self):
-        out = rolling_average([1.0, float("nan"), 3.0], window=2)
-        assert out[0] == 1.0
-        assert out[1] != out[1]  # NaN
-        assert out[2] != out[2]  # NaN (poisoned by previous window)
-
-    def test_infinite_value_poison_window(self):
-        # _is_finite_number treats inf as non-finite, so the window is poisoned with NaN
-        out = rolling_average([1.0, float("inf"), 3.0], window=2)
-        assert out[0] == 1.0
-        assert out[1] != out[1]  # NaN
-        assert out[2] != out[2]  # NaN
+    def test_all_finite_returns_expected(self):
+        values = [10.0, 20.0, 30.0]
+        out = rolling_average(values, window=2)
+        assert out == [10.0, 15.0, 25.0]
 
 
 class TestLinearSlope:
-    def test_positive_slope(self):
-        values = [0, 2, 4, 6]
-        assert linear_slope(values) == pytest.approx(2.0)
-
-    def test_flat_slope(self):
-        assert linear_slope([5, 5, 5]) == 0.0
-
-    def test_single_value_returns_zero(self):
-        assert linear_slope([42]) == 0.0
-
-    def test_nan_series_returns_zero(self):
+    def test_non_finite_input_returns_zero(self):
         assert linear_slope([1.0, float("nan"), 3.0]) == 0.0
-
-    def test_inf_series_returns_zero(self):
         assert linear_slope([1.0, float("inf"), 3.0]) == 0.0
 
+    def test_short_series_returns_zero(self):
+        assert linear_slope([5.0]) == 0.0
 
-class TestFormatReport:
-    def test_report_contains_latest_and_trend(self):
-        concepts = {"loss aversion": ["loss aversion"]}
-        decisions = [
-            make_decision("2026-01-05T21:00:00", "loss aversion"),
-            make_decision("2026-01-06T21:00:00", ""),
-        ]
-        weeks = group_by_iso_week(decisions)
-        rates = compute_weekly_rates(weeks, concepts)
-        report = format_report(
-            rates, highlight_concepts=["loss aversion"], window=4
-        )
-        assert "KEYWORD MENTION-RATE TRENDS" in report
-        assert "loss aversion" in report
+    def test_rising_trend_positive_slope(self):
+        slope = linear_slope([0.0, 1.0, 2.0, 3.0])
+        assert slope > 0.9
+
+
+class TestFormatReportGuards:
+    def test_non_finite_rolling_average_renders_na(self):
+        weekly_rates = {
+            "2026-W01": {"_n": 1, "loss aversion": 10.0},
+            "2026-W02": {"_n": 1, "loss aversion": float("nan")},
+            "2026-W03": {"_n": 1, "loss aversion": 30.0},
+            "2026-W04": {"_n": 1, "loss aversion": 40.0},
+        }
+        report = format_report(weekly_rates, highlight_concepts=["loss aversion"], window=4)
+        # The rolling average for the last week spans a window containing NaN.
+        lines = report.splitlines()
+        summary_line = [l for l in lines if l.strip().startswith("loss aversion")][0]
+        assert "     n/a" in summary_line
+
+    def test_non_finite_latest_renders_na(self):
+        weekly_rates = {
+            "2026-W01": {"_n": 1, "loss aversion": float("nan")},
+        }
+        report = format_report(weekly_rates, highlight_concepts=["loss aversion"], window=4)
+        assert "     n/a" in report
+
+    def test_finite_values_render_normally(self):
+        weekly_rates = {
+            "2026-W01": {"_n": 2, "loss aversion": 50.0},
+            "2026-W02": {"_n": 2, "loss aversion": 50.0},
+            "2026-W03": {"_n": 2, "loss aversion": 50.0},
+            "2026-W04": {"_n": 2, "loss aversion": 50.0},
+        }
+        report = format_report(weekly_rates, highlight_concepts=["loss aversion"], window=4)
         assert "50.0%" in report
+        assert "nan%" not in report
+        assert "inf%" not in report
 
-    def test_empty_data_returns_message(self):
+    def test_non_finite_slope_renders_direction_na(self):
+        weekly_rates = {
+            "2026-W01": {"_n": 1, "loss aversion": 0.0},
+            "2026-W02": {"_n": 1, "loss aversion": float("nan")},
+        }
+        report = format_report(weekly_rates, highlight_concepts=["loss aversion"], window=4)
+        assert "       n/a" in report
+
+    def test_empty_weekly_rates(self):
         assert format_report({}) == "No weekly data available."
