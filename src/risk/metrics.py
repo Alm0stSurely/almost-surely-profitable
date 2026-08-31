@@ -4,10 +4,11 @@ Calculates risk metrics: CVaR, VaR, volatility, drawdowns, correlations.
 Based on Behavioral_RL concepts: prospect theory, CVaR, risk-sensitive decision making.
 """
 
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
 from scipy import stats
 
 
@@ -342,26 +343,36 @@ def calculate_portfolio_risk_metrics(
     )
 
 
+def _safe_format(value, spec: str = ".2f", fallback: str = "n/a") -> str:
+    """Format *value* with *spec* when finite; otherwise return *fallback*."""
+    try:
+        if np.isfinite(float(value)):
+            return f"{float(value):{spec}}"
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return fallback
+
+
 def get_risk_summary_for_llm(metrics: RiskMetrics) -> str:
     """
     Format risk metrics for inclusion in LLM prompt.
-    
+
     Args:
         metrics: RiskMetrics object
-    
+
     Returns:
         Formatted string for prompt
     """
     return f"""Risk Metrics (Annualized):
-- VaR 95%: {metrics.var_95:.2%} (max loss on 5% of days)
-- CVaR 95%: {metrics.cvar_95:.2%} (expected loss in tail events)
-- Volatility: {metrics.volatility:.2%}
-- Downside Volatility: {metrics.downside_volatility:.2%}
-- Max Drawdown: {metrics.max_drawdown:.2%}
-- Current Drawdown: {metrics.current_drawdown:.2%}
-- Sortino Ratio: {metrics.sortino_ratio:.2f}
-- Skewness: {metrics.skewness:.2f} (negative = left tail risk)
-- Kurtosis: {metrics.kurtosis:.2f} (high = fat tails)"""
+- VaR 95%: {_safe_format(metrics.var_95, '.2%', fallback='n/a')} (max loss on 5% of days)
+- CVaR 95%: {_safe_format(metrics.cvar_95, '.2%', fallback='n/a')} (expected loss in tail events)
+- Volatility: {_safe_format(metrics.volatility, '.2%', fallback='n/a')}
+- Downside Volatility: {_safe_format(metrics.downside_volatility, '.2%', fallback='n/a')}
+- Max Drawdown: {_safe_format(metrics.max_drawdown, '.2%', fallback='n/a')}
+- Current Drawdown: {_safe_format(metrics.current_drawdown, '.2%', fallback='n/a')}
+- Sortino Ratio: {_safe_format(metrics.sortino_ratio, '.2f', fallback='n/a')}
+- Skewness: {_safe_format(metrics.skewness, '.2f', fallback='n/a')} (negative = left tail risk)
+- Kurtosis: {_safe_format(metrics.kurtosis, '.2f', fallback='n/a')} (high = fat tails)"""
 
 
 if __name__ == "__main__":

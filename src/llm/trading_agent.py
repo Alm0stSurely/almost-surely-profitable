@@ -5,6 +5,7 @@ Integrates with LLM API to get trading decisions based on market state and portf
 
 import json
 import logging
+import math
 import os
 import random
 import time
@@ -53,10 +54,26 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# System prompt with risk management principles inspired by prospect theory
+
+def _is_finite_number(value) -> bool:
+    """Return True if *value* is a finite scalar number."""
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _safe_format(value, spec: str = ".2f", fallback: str = "n/a") -> str:
+    """Format *value* with *spec* when finite; otherwise return *fallback*."""
+    if not _is_finite_number(value):
+        return fallback
+    return f"{float(value):{spec}}"
+
+
 SYSTEM_PROMPT = """You are a sophisticated quantitative trading agent operating in a paper trading environment with 10,000 EUR initial capital.
 
-Your decisions must follow these principles inspired by Prospect Theory, Behavioral Finance, and Advances in Financial Machine Learning (Lopez de Prado):
 
 1. LOSS AVERSION: Losses are psychologically ~2.25x more painful than equivalent gains are pleasurable. Protect against downside first.
 
@@ -284,13 +301,13 @@ class TradingAgent:
         for ticker, data in assets.items():
             latest = data.get('latest', {})
             prompt_parts.append(f"\n{ticker}:")
-            prompt_parts.append(f"  Price: €{latest.get('price', 0):.2f}")
-            prompt_parts.append(f"  SMA20: €{latest.get('sma_20', 0):.2f} | SMA50: €{latest.get('sma_50', 0):.2f}")
-            prompt_parts.append(f"  RSI(14): {latest.get('rsi_14', 50):.1f}")
-            prompt_parts.append(f"  Bollinger Position: {latest.get('bb_position', 0.5):.2f}")
-            prompt_parts.append(f"  Volatility (ann): {latest.get('volatility_annual', 0)*100:.1f}%")
-            prompt_parts.append(f"  Drawdown: {latest.get('drawdown', 0)*100:.2f}%")
-            prompt_parts.append(f"  Daily Return: {latest.get('daily_return', 0)*100:.2f}%")
+            prompt_parts.append(f"  Price: €{_safe_format(latest.get('price', 0), '.2f')}")
+            prompt_parts.append(f"  SMA20: €{_safe_format(latest.get('sma_20', 0), '.2f')} | SMA50: €{_safe_format(latest.get('sma_50', 0), '.2f')}")
+            prompt_parts.append(f"  RSI(14): {_safe_format(latest.get('rsi_14', 50), '.1f')}")
+            prompt_parts.append(f"  Bollinger Position: {_safe_format(latest.get('bb_position', 0.5), '.2f')}")
+            prompt_parts.append(f"  Volatility (ann): {_safe_format(latest.get('volatility_annual', 0) * 100, '.1f')}%")
+            prompt_parts.append(f"  Drawdown: {_safe_format(latest.get('drawdown', 0) * 100, '.2f')}%")
+            prompt_parts.append(f"  Daily Return: {_safe_format(latest.get('daily_return', 0) * 100, '.2f')}%")
         
         # Correlations
         correlations = market_data.get('correlations', {})
@@ -306,7 +323,7 @@ class TradingAgent:
                 prompt_parts.append(correlations.to_string())
             elif isinstance(correlations, dict):
                 for pair, corr in correlations.items():
-                    prompt_parts.append(f"  {pair}: {corr:.3f}")
+                    prompt_parts.append(f"  {pair}: {_safe_format(corr, '.3f')}")
         
         # Market Regime Analysis
         regime = market_data.get('regime')
@@ -315,21 +332,21 @@ class TradingAgent:
         
         # Portfolio state
         prompt_parts.append("\n\n=== PORTFOLIO STATE ===")
-        prompt_parts.append(f"Cash: €{portfolio_summary.get('cash', 0):.2f}")
-        prompt_parts.append(f"Total Value: €{portfolio_summary.get('total_value', 0):.2f}")
-        prompt_parts.append(f"Total Return: {portfolio_summary.get('total_return_pct', 0):.2f}%")
-        prompt_parts.append(f"Total P&L: €{portfolio_summary.get('total_pnl', 0):+.2f}")
+        prompt_parts.append(f"Cash: €{_safe_format(portfolio_summary.get('cash', 0), '.2f')}")
+        prompt_parts.append(f"Total Value: €{_safe_format(portfolio_summary.get('total_value', 0), '.2f')}")
+        prompt_parts.append(f"Total Return: {_safe_format(portfolio_summary.get('total_return_pct', 0), '.2f')}%")
+        prompt_parts.append(f"Total P&L: €{_safe_format(portfolio_summary.get('total_pnl', 0), '+.2f')}")
         
         # Risk metrics (CVaR)
         risk_metrics = portfolio_summary.get('risk_metrics', {})
         if risk_metrics:
             prompt_parts.append("\n=== RISK METRICS (Tail Risk Analysis) ===")
-            prompt_parts.append(f"CVaR 95% (Expected Shortfall): {risk_metrics.get('cvar_95', 0)*100:.2f}%")
-            prompt_parts.append(f"VaR 95%: {risk_metrics.get('var_95', 0)*100:.2f}%")
-            prompt_parts.append(f"Max Drawdown: {risk_metrics.get('max_drawdown', 0)*100:.2f}%")
-            prompt_parts.append(f"Sortino Ratio: {risk_metrics.get('sortino_ratio', 0):.2f}")
-            prompt_parts.append(f"Return Skewness: {risk_metrics.get('skewness', 0):.2f}")
-            prompt_parts.append(f"Return Kurtosis: {risk_metrics.get('kurtosis', 0):.2f}")
+            prompt_parts.append(f"CVaR 95% (Expected Shortfall): {_safe_format(risk_metrics.get('cvar_95', 0) * 100, '.2f')}%")
+            prompt_parts.append(f"VaR 95%: {_safe_format(risk_metrics.get('var_95', 0) * 100, '.2f')}%")
+            prompt_parts.append(f"Max Drawdown: {_safe_format(risk_metrics.get('max_drawdown', 0) * 100, '.2f')}%")
+            prompt_parts.append(f"Sortino Ratio: {_safe_format(risk_metrics.get('sortino_ratio', 0), '.2f')}")
+            prompt_parts.append(f"Return Skewness: {_safe_format(risk_metrics.get('skewness', 0), '.2f')}")
+            prompt_parts.append(f"Return Kurtosis: {_safe_format(risk_metrics.get('kurtosis', 0), '.2f')}")
             prompt_parts.append("\nNote: CVaR measures expected loss in worst 5% of cases. Lower is safer.")
         
         positions = portfolio_summary.get('positions', [])
@@ -337,9 +354,9 @@ class TradingAgent:
             prompt_parts.append("\nCurrent Positions:")
             for pos in positions:
                 prompt_parts.append(
-                    f"  {pos['ticker']}: {pos['quantity']:.4f} shares, "
-                    f"avg €{pos['avg_price']:.2f}, current €{pos['current_price']:.2f}, "
-                    f"P&L {pos['unrealized_pnl_pct']:+.2f}%"
+                    f"  {pos['ticker']}: {_safe_format(pos['quantity'], '.4f')} shares, "
+                    f"avg €{_safe_format(pos['avg_price'], '.2f')}, current €{_safe_format(pos['current_price'], '.2f')}, "
+                    f"P&L {_safe_format(pos['unrealized_pnl_pct'], '+.2f')}%"
                 )
         else:
             prompt_parts.append("\nNo current positions (all cash)")
@@ -369,11 +386,11 @@ class TradingAgent:
                     dsr_metrics = dsr_calc.calculate(portfolio_returns)
                     
                     prompt_parts.append("\n\n=== DEFLATED SHARPE RATIO ANALYSIS ===")
-                    prompt_parts.append(f"Standard Sharpe: {dsr_metrics.sharpe_ratio:.3f}")
-                    prompt_parts.append(f"Deflated Sharpe: {dsr_metrics.deflated_sharpe:.3f}")
+                    prompt_parts.append(f"Standard Sharpe: {_safe_format(dsr_metrics.sharpe_ratio, '.3f')}")
+                    prompt_parts.append(f"Deflated Sharpe: {_safe_format(dsr_metrics.deflated_sharpe, '.3f')}")
                     prompt_parts.append(f"Statistical Significance: {'YES' if dsr_metrics.is_significant else 'NO'}")
-                    prompt_parts.append(f"Skewness: {dsr_metrics.skewness:.2f} (positive = good)")
-                    prompt_parts.append(f"Excess Kurtosis: {dsr_metrics.kurtosis - 3:.2f} (lower = better)")
+                    prompt_parts.append(f"Skewness: {_safe_format(dsr_metrics.skewness, '.2f')} (positive = good)")
+                    prompt_parts.append(f"Excess Kurtosis: {_safe_format(dsr_metrics.kurtosis - 3, '.2f')} (lower = better)")
                     prompt_parts.append(f"Observations: {dsr_metrics.n_observations} days")
                     prompt_parts.append("\nInterpretation:")
                     if not dsr_metrics.is_significant:
@@ -401,32 +418,50 @@ class TradingAgent:
         # Cooldown guardrails
         if cooldown_status:
             prompt_parts.append("\n\n=== COOLDOWN GUARDRAILS ===")
-            prompt_parts.append(f"Weekly trades used: {cooldown_status.get('trades_this_week', 0)}/{cooldown_status.get('weekly_cap', 2)}")
-            
+            trades_this_week = cooldown_status.get('trades_this_week', 0)
+            weekly_cap = cooldown_status.get('weekly_cap', 2)
+            prompt_parts.append(
+                f"Weekly trades used: "
+                f"{_safe_format(trades_this_week, '.0f', fallback='n/a')}/"
+                f"{_safe_format(weekly_cap, '.0f', fallback='n/a')}"
+            )
+
             active_entries = cooldown_status.get('active_entries', {})
             if active_entries:
                 prompt_parts.append("\nActive positions (holding period):")
                 for ticker, info in active_entries.items():
                     hold_days = info.get('hold_days', 0)
                     min_hold = cooldown_status.get('config', {}).get('min_hold_days', 5)
-                    status = "✓ can sell" if hold_days >= min_hold else f"✗ hold {min_hold - hold_days:.1f} more days"
-                    prompt_parts.append(f"  {ticker}: held {hold_days:.1f} days — {status}")
-            
+                    if not _is_finite_number(hold_days):
+                        status = "✗ hold n/a more days"
+                    else:
+                        status = "✓ can sell" if hold_days >= min_hold else f"✗ hold {min_hold - hold_days:.1f} more days"
+                    prompt_parts.append(
+                        f"  {ticker}: held {_safe_format(hold_days, '.1f')} days — {status}"
+                    )
+
             recent_exits = cooldown_status.get('recent_exits', {})
             if recent_exits:
                 prompt_parts.append("\nRecent exits (flip cooldown):")
                 for ticker, info in recent_exits.items():
                     days_since = info.get('days_since_exit', 0)
                     flip_days = cooldown_status.get('config', {}).get('flip_cooldown_days', 10)
-                    status = "✓ can re-buy" if days_since >= flip_days else f"✗ wait {flip_days - days_since:.1f} more days"
-                    prompt_parts.append(f"  {ticker}: exited {days_since:.1f} days ago — {status}")
-            
-            if cooldown_status.get('trades_this_week', 0) >= cooldown_status.get('weekly_cap', 2):
+                    if not _is_finite_number(days_since):
+                        status = "✗ wait n/a more days"
+                    else:
+                        status = "✓ can re-buy" if days_since >= flip_days else f"✗ wait {flip_days - days_since:.1f} more days"
+                    prompt_parts.append(
+                        f"  {ticker}: exited {_safe_format(days_since, '.1f')} days ago — {status}"
+                    )
+
+            if _is_finite_number(trades_this_week) and _is_finite_number(weekly_cap) and trades_this_week >= weekly_cap:
                 prompt_parts.append("\n⚠️ WEEKLY TRADE CAP REACHED — No new buys or sells allowed (except stop-loss overrides).")
                 prompt_parts.append("Recommend HOLD for all positions. Do not suggest any new trades.")
-            else:
-                remaining = cooldown_status.get('weekly_cap', 2) - cooldown_status.get('trades_this_week', 0)
+            elif _is_finite_number(trades_this_week) and _is_finite_number(weekly_cap):
+                remaining = int(weekly_cap - trades_this_week)
                 prompt_parts.append(f"\nYou have {remaining} trade(s) remaining this week. Use them wisely.")
+            else:
+                prompt_parts.append("\nWeekly trade status unavailable.")
         
         prompt_parts.append("\n\n=== YOUR DECISION ===")
         prompt_parts.append("Based on the above market state and portfolio, what actions should we take?")
