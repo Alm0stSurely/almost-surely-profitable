@@ -974,6 +974,126 @@ def test_call_llm_invalid_timeout_returns_none():
             print("✓ Invalid timeout test passed\n")
 
 
+def test_safe_format_renders_non_finite_as_na():
+    """_safe_format falls back to 'n/a' for non-finite or non-numeric inputs."""
+    from llm.trading_agent import _safe_format
+
+    assert _safe_format(1.2345, ".2f") == "1.23"
+    assert _safe_format(float("nan"), ".2f") == "n/a"
+    assert _safe_format(float("inf"), ".2f") == "n/a"
+    assert _safe_format(float("-inf"), ".2f") == "n/a"
+    assert _safe_format(None, ".2f") == "n/a"
+    assert _safe_format("abc", ".2f") == "n/a"
+    assert _safe_format("1.23", ".2f") == "1.23"
+
+
+def test_build_prompt_non_finite_asset_fields():
+    """Non-finite asset indicator values are rendered as n/a in the prompt."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {
+            "assets": {
+                "SPY": {
+                    "latest": {
+                        "price": float("nan"),
+                        "rsi_14": float("inf"),
+                        "bb_position": float("-inf"),
+                        "sma_20": float("nan"),
+                        "sma_50": float("nan"),
+                        "volatility_annual": float("nan"),
+                        "drawdown": float("inf"),
+                        "daily_return": float("-inf"),
+                    }
+                }
+            },
+            "correlations": pd.DataFrame(),
+            "regime": None,
+        }
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": 10000.0,
+            "total_return_pct": 0.0,
+            "total_pnl": 0.0,
+            "positions": [],
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Price: €n/a" in prompt
+        assert "RSI(14): n/a" in prompt
+        assert "Bollinger Position: n/a" in prompt
+        assert "Volatility (ann): n/a%" in prompt
+        assert "Drawdown: n/a%" in prompt
+        assert "Daily Return: n/a%" in prompt
+
+
+def test_build_prompt_non_finite_portfolio_and_positions():
+    """Non-finite portfolio totals and position fields are rendered as n/a."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": float("nan"),
+            "total_value": float("inf"),
+            "total_return_pct": float("-inf"),
+            "total_pnl": float("nan"),
+            "positions": [
+                {
+                    "ticker": "SPY",
+                    "quantity": float("nan"),
+                    "avg_price": float("inf"),
+                    "current_price": float("-inf"),
+                    "unrealized_pnl_pct": float("nan"),
+                    "market_value": 2000.0,
+                }
+            ],
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Cash: €n/a" in prompt
+        assert "Total Value: €n/a" in prompt
+        assert "Total Return: n/a%" in prompt
+        assert "Total P&L: €n/a" in prompt
+        assert "SPY: n/a shares" in prompt
+        assert "avg €n/a" in prompt
+        assert "current €n/a" in prompt
+        assert "P&L n/a%" in prompt
+
+
+def test_build_prompt_non_finite_cooldown_status():
+    """Non-finite cooldown counters and day values are rendered as n/a."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {"cash": 8000.0, "total_value": 10000.0, "positions": []}
+        cooldown_status = {
+            "trades_this_week": float("nan"),
+            "weekly_cap": float("inf"),
+            "active_entries": {
+                "SPY": {"entry_date": "2026-06-16T21:00:00", "hold_days": float("nan")}
+            },
+            "recent_exits": {
+                "GLD": {"exit_date": "2026-06-18T16:00:00", "days_since_exit": float("inf")}
+            },
+            "config": {"min_hold_days": 5, "flip_cooldown_days": 10},
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio, cooldown_status=cooldown_status)
+
+        assert "Weekly trades used: n/a/n/a" in prompt
+        assert "SPY: held n/a days" in prompt
+        assert "GLD: exited n/a days ago" in prompt
+        assert "Weekly trade status unavailable." in prompt
+        assert "WEEKLY TRADE CAP REACHED" not in prompt
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running LLM Trading Agent Tests")
@@ -1007,6 +1127,10 @@ if __name__ == "__main__":
     test_call_llm_timeout_override_argument()
     test_call_llm_env_timeout_used()
     test_call_llm_invalid_timeout_returns_none()
+    test_safe_format_renders_non_finite_as_na()
+    test_build_prompt_non_finite_asset_fields()
+    test_build_prompt_non_finite_portfolio_and_positions()
+    test_build_prompt_non_finite_cooldown_status()
     
     print("=" * 60)
     print("All tests passed! ✓")

@@ -7,8 +7,8 @@ outputs. These are pure numerical functions — correctness should not depend on
 random data or on the order of execution.
 """
 
-import sys
 import math
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -18,16 +18,16 @@ import pandas as pd
 
 from risk.metrics import (
     RiskMetrics,
-    calculate_returns,
-    calculate_var,
-    calculate_cvar,
-    calculate_drawdowns,
-    calculate_max_drawdown,
-    calculate_downside_volatility,
-    calculate_sortino_ratio,
     calculate_calmar_ratio,
     calculate_correlation_matrix,
+    calculate_cvar,
+    calculate_downside_volatility,
+    calculate_drawdowns,
+    calculate_max_drawdown,
     calculate_portfolio_risk_metrics,
+    calculate_returns,
+    calculate_sortino_ratio,
+    calculate_var,
     get_risk_summary_for_llm,
 )
 
@@ -389,6 +389,35 @@ def test_get_risk_summary_for_llm():
     assert "Skewness" in summary
 
 
+def test_get_risk_summary_for_llm_non_finite_fields():
+    """Non-finite risk metric fields are rendered as n/a rather than crashing."""
+    metrics = RiskMetrics(
+        var_95=float("nan"),
+        var_99=float("inf"),
+        cvar_95=float("-inf"),
+        cvar_99=float("nan"),
+        volatility=float("inf"),
+        downside_volatility=float("-inf"),
+        max_drawdown=float("nan"),
+        current_drawdown=float("inf"),
+        sortino_ratio=float("nan"),
+        calmar_ratio=float("inf"),
+        skewness=float("-inf"),
+        kurtosis=float("nan"),
+    )
+    summary = get_risk_summary_for_llm(metrics)
+
+    assert "VaR 95%: n/a" in summary
+    assert "CVaR 95%: n/a" in summary
+    assert "Volatility: n/a" in summary
+    assert "Downside Volatility: n/a" in summary
+    assert "Max Drawdown: n/a" in summary
+    assert "Current Drawdown: n/a" in summary
+    assert "Sortino Ratio: n/a" in summary
+    assert "Skewness: n/a" in summary
+    assert "Kurtosis: n/a" in summary
+
+
 # ---------------------------------------------------------------------------
 # Regression / bug-detection tests
 # ---------------------------------------------------------------------------
@@ -467,6 +496,7 @@ if __name__ == "__main__":
         test_calculate_portfolio_risk_metrics_empty,
         test_calculate_portfolio_risk_metrics_short_series,
         test_get_risk_summary_for_llm,
+        test_get_risk_summary_for_llm_non_finite_fields,
         test_var_cvar_monotonicity,
         test_calmar_ratio_zero_drawdown_positive_returns,
         test_calmar_ratio_zero_drawdown_zero_returns,
