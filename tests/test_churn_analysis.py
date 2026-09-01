@@ -21,6 +21,8 @@ from analysis.churn_analysis import (
     _filter_valid_round_trips,
     _is_valid_round_trip,
     _parse_trade_timestamp,
+    _safe_pct_str,
+    _safe_value_str,
     analyze_churn,
     analyze_cohort,
     load_decisions,
@@ -720,3 +722,65 @@ class TestBucketMetricsNonFiniteGuards:
         assert metrics["total_realized_pnl"] == 0.0
         assert metrics["avg_hold_days"] == 0.0
         assert metrics["win_rate_pct"] == 0.0
+
+
+class TestFormatGuards:
+    """Non-finite metrics in print_report must render as n/a, not nan/inf."""
+
+    def test_safe_value_str_finite(self):
+        assert _safe_value_str(123.456, symbol="€", fmt=".2f") == "€123.46"
+
+    def test_safe_value_str_nan(self):
+        assert _safe_value_str(float("nan")) == "n/a"
+
+    def test_safe_value_str_inf(self):
+        assert _safe_value_str(float("inf")) == "n/a"
+
+    def test_safe_value_str_none(self):
+        assert _safe_value_str(None) == "n/a"
+
+    def test_safe_pct_str_finite(self):
+        assert _safe_pct_str(50.0) == "50.0%"
+
+    def test_safe_pct_str_nan(self):
+        assert _safe_pct_str(float("nan")) == "n/a"
+
+    def test_safe_pct_str_inf(self):
+        assert _safe_pct_str(float("inf")) == "n/a"
+
+    def test_print_report_with_non_finite_metrics(self, capsys):
+        metrics = {
+            "total_round_trips": 1,
+            "winning_round_trips": 1,
+            "losing_round_trips": 0,
+            "win_rate_pct": float("nan"),
+            "total_realized_pnl": float("inf"),
+            "avg_hold_days": float("nan"),
+            "short_term_count": 0,
+            "short_term_win_rate": float("nan"),
+            "short_term_pnl": 0.0,
+            "medium_term_count": 0,
+            "medium_term_win_rate": float("nan"),
+            "medium_term_pnl": 0.0,
+            "long_term_count": 0,
+            "long_term_win_rate": float("nan"),
+            "long_term_pnl": 0.0,
+            "action_flips": 0,
+            "trades_per_week": float("nan"),
+            "annualized_turnover": float("inf"),
+        }
+        print_report(metrics)
+        out = capsys.readouterr().out
+        assert "nan" not in out.lower()
+        assert "inf" not in out.lower()
+        assert "n/a" in out
+        assert "PORTFOLIO CHURN ANALYSIS" in out
+
+    def test_print_report_preserves_finite_output(self, capsys):
+        rt = RoundTrip("AAPL", datetime(2026, 1, 1), datetime(2026, 1, 5), 4.0, 100.0, 150.0, 160.0)
+        metrics = analyze_churn([rt], [], [])
+        print_report(metrics)
+        out = capsys.readouterr().out
+        assert "100.0%" in out
+        assert "€+100.00" in out
+        assert "n/a" not in out
