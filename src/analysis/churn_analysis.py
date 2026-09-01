@@ -53,6 +53,20 @@ def _filter_valid_round_trips(round_trips: List[RoundTrip]) -> List[RoundTrip]:
     return [rt for rt in round_trips if _is_valid_round_trip(rt)]
 
 
+def _safe_value_str(value, symbol: str = "", fmt: str = ".2f", default: str = "n/a") -> str:
+    """Format a finite scalar, falling back to *default*."""
+    if _is_finite_number(value):
+        return f"{symbol}{value:{fmt}}"
+    return default
+
+
+def _safe_pct_str(value, fmt: str = ".1f", default: str = "n/a") -> str:
+    """Format a finite scalar as a percentage, falling back to *default*."""
+    if _is_finite_number(value):
+        return f"{value:{fmt}}%"
+    return default
+
+
 def load_trades(data_dir: str = "data") -> List[Dict]:
     """Load trade history from JSON."""
     path = Path(data_dir) / "trades_history.json"
@@ -221,26 +235,36 @@ def analyze_churn(round_trips: List[RoundTrip], trades: List[Dict], decisions: L
 
 
 def print_report(metrics: Dict):
-    """Print formatted churn report."""
+    """Print formatted churn report.
+
+    Every formatted numeric field is guarded so that non-finite values are
+    rendered as ``n/a`` rather than leaking ``nan``/``inf`` tokens into the
+    report output.
+    """
     print("=" * 60)
     print("PORTFOLIO CHURN ANALYSIS")
     print("=" * 60)
-    print(f"\nRound Trips:          {metrics['total_round_trips']}")
-    print(f"Winning:              {metrics['winning_round_trips']} ({metrics['win_rate_pct']:.1f}%)")
-    print(f"Losing:               {metrics['losing_round_trips']} ({100 - metrics['win_rate_pct']:.1f}%)")
-    print(f"Total Realized P&L:   €{metrics['total_realized_pnl']:+.2f}")
-    print(f"Avg Holding Period:   {metrics['avg_hold_days']:.1f} days")
+    win_rate = metrics.get("win_rate_pct")
+    lose_rate = 100 - win_rate if _is_finite_number(win_rate) else float("nan")
+    print(f"\nRound Trips:          {metrics.get('total_round_trips', 'n/a')}")
+    print(f"Winning:              {metrics.get('winning_round_trips', 'n/a')} ({_safe_pct_str(win_rate)})")
+    print(f"Losing:               {metrics.get('losing_round_trips', 'n/a')} ({_safe_pct_str(lose_rate)})")
+    print(f"Total Realized P&L:   {_safe_value_str(metrics.get('total_realized_pnl'), symbol='€', fmt='+.2f')}")
+    print(f"Avg Holding Period:   {_safe_value_str(metrics.get('avg_hold_days'), fmt='.1f', default='n/a')} days")
     print(f"\n--- Holding Period Breakdown ---")
-    print(f"Short (≤3d):          {metrics['short_term_count']} trips, "
-          f"win rate {metrics['short_term_win_rate']:.1f}%, P&L €{metrics['short_term_pnl']:+.2f}")
-    print(f"Medium (4-14d):       {metrics['medium_term_count']} trips, "
-          f"win rate {metrics['medium_term_win_rate']:.1f}%, P&L €{metrics['medium_term_pnl']:+.2f}")
-    print(f"Long (>14d):          {metrics['long_term_count']} trips, "
-          f"win rate {metrics['long_term_win_rate']:.1f}%, P&L €{metrics['long_term_pnl']:+.2f}")
+    print(f"Short (≤3d):          {metrics.get('short_term_count', 'n/a')} trips, "
+          f"win rate {_safe_pct_str(metrics.get('short_term_win_rate'))}, "
+          f"P&L {_safe_value_str(metrics.get('short_term_pnl'), symbol='€', fmt='+.2f')}")
+    print(f"Medium (4-14d):       {metrics.get('medium_term_count', 'n/a')} trips, "
+          f"win rate {_safe_pct_str(metrics.get('medium_term_win_rate'))}, "
+          f"P&L {_safe_value_str(metrics.get('medium_term_pnl'), symbol='€', fmt='+.2f')}")
+    print(f"Long (>14d):          {metrics.get('long_term_count', 'n/a')} trips, "
+          f"win rate {_safe_pct_str(metrics.get('long_term_win_rate'))}, "
+          f"P&L {_safe_value_str(metrics.get('long_term_pnl'), symbol='€', fmt='+.2f')}")
     print(f"\n--- Activity Metrics ---")
-    print(f"Action Flips:         {metrics['action_flips']}")
-    print(f"Trades/Week:          {metrics['trades_per_week']:.1f}")
-    print(f"Annualized Turnover:  {metrics['annualized_turnover']:.0f} trades/year")
+    print(f"Action Flips:         {metrics.get('action_flips', 'n/a')}")
+    print(f"Trades/Week:          {_safe_value_str(metrics.get('trades_per_week'), fmt='.1f')}")
+    print(f"Annualized Turnover:  {_safe_value_str(metrics.get('annualized_turnover'), fmt='.0f', default='n/a')} trades/year")
     print("=" * 60)
 
 
@@ -255,10 +279,14 @@ def main():
     cutoff = datetime(2026, 6, 18)
     pre, post = analyze_cohort(trades, cutoff)
     print(f"\n--- Pre/Post {cutoff.date()} Cohort ---")
-    print(f"Pre:  {pre['total_round_trips']} RT, win {pre['win_rate_pct']:.1f}%, "
-          f"avg hold {pre['avg_hold_days']:.1f}d, {pre['trades_per_year']:.0f} trades/yr")
-    print(f"Post: {post['total_round_trips']} RT, win {post['win_rate_pct']:.1f}%, "
-          f"avg hold {post['avg_hold_days']:.1f}d, {post['trades_per_year']:.0f} trades/yr")
+    print(f"Pre:  {pre.get('total_round_trips', 'n/a')} RT, "
+          f"win {_safe_pct_str(pre.get('win_rate_pct'))}, "
+          f"avg hold {_safe_value_str(pre.get('avg_hold_days'), fmt='.1f')}d, "
+          f"{_safe_value_str(pre.get('trades_per_year'), fmt='.0f')} trades/yr")
+    print(f"Post: {post.get('total_round_trips', 'n/a')} RT, "
+          f"win {_safe_pct_str(post.get('win_rate_pct'))}, "
+          f"avg hold {_safe_value_str(post.get('avg_hold_days'), fmt='.1f')}d, "
+          f"{_safe_value_str(post.get('trades_per_year'), fmt='.0f')} trades/yr")
     print("=" * 60)
 
 
