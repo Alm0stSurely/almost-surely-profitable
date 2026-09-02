@@ -8,16 +8,39 @@ Provides the LLM with context about its own decision patterns and outcomes.
 
 import json
 import sys
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
 from collections import defaultdict
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent / ".."))
 
 import numpy as np
 import pandas as pd
+
+from utils import _is_finite_number
+
+
+def _safe_value_str(value, symbol: str = "", fmt: str = ".2f", default: str = "n/a") -> str:
+    """Format a finite scalar, falling back to *default*."""
+    if _is_finite_number(value):
+        return f"{symbol}{value:{fmt}}"
+    return default
+
+
+def _safe_pct_str(
+    value,
+    fmt: str = ".1f",
+    symbol: str = "",
+    default: str = "n/a",
+    as_ratio: bool = False,
+) -> str:
+    """Format a finite scalar as a percentage, falling back to *default*."""
+    if _is_finite_number(value):
+        formatted = value * 100 if as_ratio else value
+        return f"{symbol}{formatted:{fmt}}%"
+    return default
 
 
 @dataclass
@@ -132,8 +155,11 @@ class DecisionMemory:
         for d in recent_decisions:
             action_counts[d.action] += 1
         
-        # Calculate win rate for completed trades
-        completed = [d for d in recent_decisions if d.pnl_pct is not None]
+        # Calculate win rate for completed trades with finite outcomes
+        completed = [
+            d for d in recent_decisions
+            if d.pnl_pct is not None and _is_finite_number(d.pnl_pct)
+        ]
         winners = [d for d in completed if d.pnl_pct > 0]
         
         win_rate = len(winners) / len(completed) if completed else 0
@@ -160,14 +186,18 @@ class DecisionMemory:
     def get_pattern_analysis(self) -> Dict:
         """
         Analyze patterns in decision making.
-        
+
         Identifies:
         - Which indicators correlate with success
         - Optimal holding periods
         - Behavioral biases (herding, overtrading, etc.)
         """
-        completed = [d for d in self.decisions if d.pnl_pct is not None]
-        
+        # Only analyze completed trades with finite outcomes
+        completed = [
+            d for d in self.decisions
+            if d.pnl_pct is not None and _is_finite_number(d.pnl_pct)
+        ]
+
         if len(completed) < 10:
             return {
                 "status": "insufficient_data",
@@ -182,13 +212,19 @@ class DecisionMemory:
         }
         
         # Analyze RSI correlation with success
-        rsi_data = [(d.rsi, d.pnl_pct) for d in completed if d.rsi is not None]
+        rsi_data = [
+            (d.rsi, d.pnl_pct) for d in completed
+            if d.rsi is not None and _is_finite_number(d.rsi)
+        ]
         if len(rsi_data) > 5:
             rsis, pnls = zip(*rsi_data)
             analysis["rsi_correlation"] = np.corrcoef(rsis, pnls)[0, 1] if len(rsis) > 1 else 0
         
         # Analyze Bollinger position correlation
-        bb_data = [(d.bollinger_position, d.pnl_pct) for d in completed if d.bollinger_position is not None]
+        bb_data = [
+            (d.bollinger_position, d.pnl_pct) for d in completed
+            if d.bollinger_position is not None and _is_finite_number(d.bollinger_position)
+        ]
         if len(bb_data) > 5:
             bbs, pnls = zip(*bb_data)
             analysis["bollinger_correlation"] = np.corrcoef(bbs, pnls)[0, 1] if len(bbs) > 1 else 0
@@ -235,22 +271,24 @@ class DecisionMemory:
             return ["No trading history yet. Focus on building a track record."]
         
         # Win rate lesson
-        if summary.get("win_rate"):
-            if summary["win_rate"] < 0.4:
-                lessons.append(f"⚠️ Recent win rate is {summary['win_rate']:.1%} — below random. Review entry criteria.")
-            elif summary["win_rate"] > 0.55:
-                lessons.append(f"✓ Recent win rate is {summary['win_rate']:.1%} — strategy showing edge. Maintain discipline.")
+        win_rate = summary.get("win_rate")
+        if _is_finite_number(win_rate):
+            if win_rate < 0.4:
+                lessons.append(f"⚠️ Recent win rate is {_safe_pct_str(win_rate, fmt='.1f', as_ratio=True)} — below random. Review entry criteria.")
+            elif win_rate > 0.55:
+                lessons.append(f"✓ Recent win rate is {_safe_pct_str(win_rate, fmt='.1f', as_ratio=True)} — strategy showing edge. Maintain discipline.")
         
         # Overtrading lesson
         if summary["total_decisions"] > 60:  # More than 2 trades/day average
             lessons.append("⚠️ High trade frequency detected. Consider fewer, higher-conviction trades.")
         
         # P&L lesson
-        if summary.get("avg_pnl_pct"):
-            if summary["avg_pnl_pct"] < -1:
-                lessons.append(f"⚠️ Average loss per trade: {summary['avg_pnl_pct']:.2f}%. Review position sizing and stop losses.")
-            elif summary["avg_pnl_pct"] > 1:
-                lessons.append(f"✓ Average gain per trade: {summary['avg_pnl_pct']:.2f}%. Good risk/reward balance.")
+        avg_pnl = summary.get("avg_pnl_pct")
+        if _is_finite_number(avg_pnl):
+            if avg_pnl < -1:
+                lessons.append(f"⚠️ Average loss per trade: {_safe_pct_str(avg_pnl, fmt='.2f', symbol='+')}. Review position sizing and stop losses.")
+            elif avg_pnl > 1:
+                lessons.append(f"✓ Average gain per trade: {_safe_pct_str(avg_pnl, fmt='.2f', symbol='+')}. Good risk/reward balance.")
         
         # Pattern-based lessons
         if patterns.get("status") == "ok":
@@ -300,14 +338,14 @@ class DecisionMemory:
 YOUR RECENT TRADING TRACK RECORD (Last {summary.get('period_days', 30)} days):
 - Total decisions: {summary.get('total_decisions', 0)}
 - Completed trades with outcomes: {summary.get('completed_trades', 0)}
-- Win rate: {summary.get('win_rate', 0):.1%}
-- Average P&L per trade: {summary.get('avg_pnl_pct', 0):+.2f}%
+- Win rate: {_safe_pct_str(summary.get('win_rate'), fmt='.1f', as_ratio=True)}
+- Average P&L per trade: {_safe_pct_str(summary.get('avg_pnl_pct'), fmt='.2f', symbol='+')}
 
 KEY LESSONS FROM YOUR HISTORY:
 """
         for lesson in lessons:
             context += f"\n{lesson}"
-        
+
         context += "\n\nApply these insights to today's decisions. Learn from patterns, but avoid overfitting to recent noise."
         
         return context

@@ -19,7 +19,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -27,8 +27,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from analysis.decision_memory import DecisionRecord, DecisionMemory
-
+from analysis.decision_memory import DecisionMemory, DecisionRecord
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -733,6 +732,7 @@ class TestEdgeCases:
     def test_exact_boundary_date_included(self, tmp_path):
         # A record dated exactly `days` ago should still be included in the window.
         from unittest.mock import patch
+
         from analysis import decision_memory as dm
 
         records = [
@@ -756,3 +756,116 @@ class TestEdgeCases:
         mem = DecisionMemory(memory_file=path)
         summary = mem.get_decision_summary(days=30)
         assert summary["total_decisions"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Non-finite guards
+# ---------------------------------------------------------------------------
+
+class TestNonFiniteGuards:
+    def test_summary_excludes_nan_pnl(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        records = [
+            make_record(date=today, pnl_pct=float("nan")),
+            make_record(date=today, pnl_pct=5.0),
+            make_record(date=today, pnl_pct=float("inf")),
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        summary = mem.get_decision_summary(days=30)
+        assert summary["completed_trades"] == 1
+        assert summary["win_rate"] == 1.0
+        assert summary["avg_pnl_pct"] == 5.0
+        assert summary["best_trade"] == 5.0
+        assert summary["worst_trade"] == 5.0
+
+    def test_summary_excludes_inf_pnl(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        records = [
+            make_record(date=today, pnl_pct=float("inf")),
+            make_record(date=today, pnl_pct=float("-inf")),
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        summary = mem.get_decision_summary(days=30)
+        assert summary["completed_trades"] == 0
+        assert summary["win_rate"] == 0
+        assert summary["avg_pnl_pct"] == 0
+        assert summary["best_trade"] is None
+        assert summary["worst_trade"] is None
+
+    def test_pattern_analysis_excludes_non_finite_pnl(self, tmp_path):
+        records = [make_record(pnl_pct=float("nan")) for _ in range(5)]
+        records += [make_record(pnl_pct=1.0) for _ in range(10)]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        analysis = mem.get_pattern_analysis()
+        assert analysis["status"] == "ok"
+        assert analysis["total_analyzed"] == 10
+
+    def test_pattern_analysis_excludes_non_finite_rsi(self, tmp_path):
+        records = [
+            make_record(rsi=float("nan"), pnl_pct=1.0) for _ in range(5)
+        ] + [
+            make_record(rsi=50.0 + i, pnl_pct=-5.0 + i * 2.5)
+            for i in range(10)
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        analysis = mem.get_pattern_analysis()
+        assert analysis["status"] == "ok"
+        assert "rsi_correlation" in analysis
+
+    def test_pattern_analysis_excludes_non_finite_bollinger(self, tmp_path):
+        records = [
+            make_record(bollinger_position=float("inf"), pnl_pct=1.0)
+            for _ in range(5)
+        ] + [
+            make_record(bollinger_position=-1.0 + i * 0.2, pnl_pct=-5.0 + i * 2.5)
+            for i in range(10)
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        analysis = mem.get_pattern_analysis()
+        assert analysis["status"] == "ok"
+        assert "bollinger_correlation" in analysis
+
+    def test_lessons_do_not_format_nan_win_rate(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        records = [
+            make_record(date=today, pnl_pct=float("nan")),
+            make_record(date=today, pnl_pct=float("nan")),
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        lessons = mem.generate_lessons_learned()
+        for lesson in lessons:
+            assert "nan" not in lesson.lower()
+            assert "inf" not in lesson.lower()
+
+    def test_llm_context_renders_na_for_non_finite_metrics(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        records = [
+            make_record(date=today, pnl_pct=float("nan")),
+            make_record(date=today, pnl_pct=float("inf")),
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        context = mem.get_memory_context_for_llm()
+        assert "Win rate:" in context
+        assert "Average P&L" in context
+        assert "nan" not in context.lower()
+        assert "inf" not in context.lower()
+        # With no finite completed trades the safe defaults are shown instead.
+        assert "0.0%" in context
+
+    def test_llm_context_keeps_finite_metrics(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        records = [
+            make_record(date=today, pnl_pct=5.0),
+        ]
+        path = make_memory_file(tmp_path, records)
+        mem = DecisionMemory(memory_file=path)
+        context = mem.get_memory_context_for_llm()
+        assert "100.0%" in context
+        assert "+5.00%" in context
