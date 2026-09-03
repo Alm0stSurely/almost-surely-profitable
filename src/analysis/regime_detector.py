@@ -15,6 +15,20 @@ import numpy as np
 import pandas as pd
 
 
+def _fmt_finite(value: float, spec: str) -> str:
+    """Format a numeric value if finite, else return 'n/a'.
+
+    RegimeState is a public dataclass: callers may construct it with
+    non-finite aggregates, and summary() is the last guardrail before
+    nan/inf tokens reach the console and the LLM prompt.
+    """
+    if isinstance(value, (int, float, np.floating)) and not isinstance(value, bool):
+        v = float(value)
+        if math.isfinite(v):
+            return format(v, spec)
+    return "n/a"
+
+
 @dataclass
 class RegimeState:
     """État complet du régime de marché"""
@@ -24,13 +38,13 @@ class RegimeState:
     volatility_percentile: float  # 0-100
     adx_value: float  # Average Directional Index
     avg_correlation: float  # Moyenne des corrélations inter-assets
-    
+
     def summary(self) -> str:
-        """Résumé lisible du régime"""
+        """Résumé lisible du régime, tolérant aux valeurs non finies."""
         return (
-            f"Vol: {self.volatility_regime} ({self.volatility_percentile:.0f}th pct), "
-            f"Trend: {self.trend_regime} (ADX: {self.adx_value:.1f}), "
-            f"Corr: {self.correlation_regime} ({self.avg_correlation:.2f})"
+            f"Vol: {self.volatility_regime} ({_fmt_finite(self.volatility_percentile, '.0f')}th pct), "
+            f"Trend: {self.trend_regime} (ADX: {_fmt_finite(self.adx_value, '.1f')}), "
+            f"Corr: {self.correlation_regime} ({_fmt_finite(self.avg_correlation, '.2f')})"
         )
 
 
