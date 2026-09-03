@@ -149,6 +149,68 @@ class TestRegimeState:
         assert "Corr: low_correlation (0.15)" in summary
 
 
+class TestSummaryNonFiniteGuards:
+    """summary() must be the last guardrail against non-finite aggregates.
+
+    RegimeState is a public dataclass; callers may construct it with NaN/inf
+    values, and the summary feeds both the console and the LLM prompt.
+    """
+
+    def _state(self, vol_pct=50.0, adx=20.0, corr=0.5):
+        return RegimeState(
+            volatility_regime="high",
+            trend_regime="trending_up",
+            correlation_regime="normal",
+            volatility_percentile=vol_pct,
+            adx_value=adx,
+            avg_correlation=corr,
+        )
+
+    def test_nan_volatility_percentile(self):
+        summary = self._state(vol_pct=float("nan")).summary()
+        assert "nan" not in summary
+        assert "Vol: high (n/ath pct)" in summary
+
+    def test_inf_adx_value(self):
+        summary = self._state(adx=float("inf")).summary()
+        assert "inf" not in summary
+        assert "ADX: n/a" in summary
+
+    def test_negative_inf_correlation(self):
+        summary = self._state(corr=float("-inf")).summary()
+        assert "-inf" not in summary
+        assert "Corr: normal (n/a)" in summary
+
+    def test_none_values(self):
+        summary = self._state(vol_pct=None, adx=None, corr=None).summary()
+        assert "n/a" in summary
+        assert "None" not in summary
+
+    def test_bool_values_rejected(self):
+        # bool is a subclass of int; truthy regime fields must not format as 1/0
+        summary = self._state(vol_pct=True, adx=False, corr=True).summary()
+        assert "n/a" in summary
+
+    def test_finite_values_unaffected(self):
+        summary = self._state(vol_pct=82.5, adx=30.2, corr=0.45).summary()
+        assert "Vol: high (82th pct)" in summary
+        assert "Trend: trending_up (ADX: 30.2)" in summary
+        assert "Corr: normal (0.45)" in summary
+
+    def test_llm_block_sanitized(self):
+        state = self._state(
+            vol_pct=float("nan"),
+            adx=float("inf"),
+            corr=float("-inf"),
+        )
+        det = RegimeDetector()
+        rec = det.get_strategy_recommendation(state)
+        text = format_regime_for_llm(state, rec)
+        assert "nan" not in text
+        assert "inf" not in text
+        assert "n/a" in text
+
+
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
