@@ -1,0 +1,25 @@
+============================================================
+PORTFOLIO CHURN ANALYSIS
+============================================================
+
+Round Trips:          34
+Winning:              9 (26.5%)
+Losing:               25 (73.5%)
+Total Realized P&L:   €-8.47
+Avg Holding Period:   32.1 days
+
+--- Holding Period Breakdown ---
+Short (≤3d):          4 trips, win rate 0.0%, P&L €+0.00
+Medium (4-14d):       13 trips, win rate 15.4%, P&L €+24.10
+Long (>14d):          17 trips, win rate 41.2%, P&L €-32.58
+
+--- Activity Metrics ---
+Action Flips:         14
+Trades/Week:          4.6
+Annualized Turnover:  240 trades/year
+============================================================
+
+--- Pre/Post 2026-06-18 Cohort ---
+Pre:  32 RT, win 25.0%, avg hold 33.2d, 243 trades/yr
+Post: 2 RT, win 50.0%, avg hold 14.0d, 137 trades/yr
+============================================================
