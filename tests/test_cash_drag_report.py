@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import analysis.cash_drag_report as cash_drag_report
 from analysis.cash_drag_report import analyze_cash_drag
 
 
@@ -185,3 +186,59 @@ def test_cash_drag_invalid_rows_skipped_in_diagnosis(tmp_path):
     assert "Cash-drag days (above target with cap headroom): 1" in text
     assert "Cap-binding days (above target but cap reached): 0" in text
     assert "Invalid data   : 1" in text
+
+
+def test_cash_drag_no_shared_artifact_write_for_noncanonical_dir(
+    tmp_path, monkeypatch
+):
+    """Fixture/test directories must not overwrite the shared analysis artifact.
+
+    Regression: the default output path pointed at the shared
+    results/analysis directory regardless of the input directory, so every
+    test-suite or benchmark run overwrote the real cash-drag report with
+    fixture data (observed 2026-09-01 and 2026-09-04).
+    """
+    fake_output_dir = tmp_path / "shared_analysis"
+    fake_output_dir.mkdir()
+    monkeypatch.setattr(cash_drag_report, "OUTPUT_DIR", fake_output_dir)
+
+    _write_result(tmp_path, "2026-08-10", cash=4000, total=10000, regime="normal")
+
+    text, rows = analyze_cash_drag(tmp_path)
+
+    assert rows[0]["status"] == "above"
+    assert "Days analyzed: 1" in text
+    assert list(fake_output_dir.iterdir()) == []
+
+
+def test_cash_drag_writes_shared_artifact_for_canonical_dir(
+    tmp_path, monkeypatch
+):
+    """The production CLI path (results/daily input) still writes the artifact."""
+    fake_output_dir = tmp_path / "shared_analysis"
+    fake_output_dir.mkdir()
+    monkeypatch.setattr(cash_drag_report, "OUTPUT_DIR", fake_output_dir)
+    monkeypatch.setattr(cash_drag_report, "ROOT", tmp_path)
+
+    canonical = tmp_path / "results" / "daily"
+    canonical.mkdir(parents=True)
+    _write_result(canonical, "2026-08-10", cash=4000, total=10000, regime="normal")
+    _write_result(canonical, "2026-08-11", cash=2500, total=10000, regime="normal")
+
+    analyze_cash_drag(canonical)
+
+    files = list(fake_output_dir.iterdir())
+    assert len(files) == 1
+    assert files[0].name.startswith("cash_drag_")
+    assert "Days analyzed: 2" in files[0].read_text()
+
+
+def test_cash_drag_explicit_output_path_always_written(tmp_path):
+    """An explicit output_path is honoured even for non-canonical inputs."""
+    out = tmp_path / "custom" / "report.txt"
+    _write_result(tmp_path, "2026-08-10", cash=4000, total=10000, regime="normal")
+
+    analyze_cash_drag(tmp_path, output_path=out)
+
+    assert out.exists()
+    assert "Days analyzed: 1" in out.read_text()

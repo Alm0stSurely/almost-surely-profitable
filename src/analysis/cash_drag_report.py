@@ -96,11 +96,6 @@ def analyze_cash_drag(results_dir, output_path=None):
             }
         )
 
-    if output_path is None:
-        output_path = OUTPUT_DIR / f"cash_drag_{datetime.now().strftime('%Y%m%d')}.txt"  # noqa: DTZ005
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     lines = [
         "=" * 70,
         "CASH DRAG REPORT",
@@ -176,6 +171,18 @@ def analyze_cash_drag(results_dir, output_path=None):
     )
 
     text = "\n".join(lines)
+
+    if output_path is None:
+        # Only the canonical production input (results/daily) writes to the
+        # shared analysis directory by default. Tests and benchmarks pass
+        # fixture directories; writing the dated artifact from those calls
+        # used to overwrite the real report with fixture data.
+        if Path(results_dir).resolve() != (ROOT / "results" / "daily").resolve():
+            return text, rows
+        output_path = OUTPUT_DIR / f"cash_drag_{datetime.now().strftime('%Y%m%d')}.txt"  # noqa: DTZ005
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     output_path.write_text(text)
     return text, rows
 
