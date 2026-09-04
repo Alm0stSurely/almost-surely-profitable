@@ -4,6 +4,7 @@ Tests strategy performance on historical data.
 """
 
 import json
+import math
 import sys
 import pandas as pd
 import numpy as np
@@ -22,6 +23,39 @@ from utils import dump_json_safe
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _fmt_finite(value: float, spec: str) -> str:
+    """Format a numeric value if finite, else return 'n/a'.
+
+    ``print_backtest_report`` is a public formatter: callers may hand it a
+    result dict built from market data containing NaN ticks or degenerate
+    price series, and the report is the last guardrail before nan/inf
+    tokens reach the console (and any captured CI logs).
+    """
+    if isinstance(value, bool):
+        return "n/a"
+    if isinstance(value, (int, np.integer)):
+        return format(value, spec)
+    if isinstance(value, (float, np.floating)):
+        v = float(value)
+        if math.isfinite(v):
+            return format(v, spec)
+    return "n/a"
+
+
+def _fmt_pct(value: float, spec: str) -> str:
+    """Format a fractional value as a percentage if finite, else return 'n/a'.
+
+    Validates the raw value before scaling: ``None`` or a non-numeric input
+    must not crash the report, and a non-finite fraction must not be
+    multiplied into a non-finite percentage first.
+    """
+    if isinstance(value, (int, float, np.floating)) and not isinstance(value, bool):
+        v = float(value)
+        if math.isfinite(v):
+            return format(v * 100, spec)
+    return "n/a"
 
 
 class RandomStrategy:
@@ -624,38 +658,38 @@ class BacktestEngine:
 
 
 def print_backtest_report(result: Dict, strategy_name: str):
-    """Print formatted backtest report."""
+    """Print formatted backtest report, tolerating non-finite metric values."""
     if not result:
         logger.error(f"No results for {strategy_name}")
         return
-    
+
     print(f"\n{'='*70}")
     print(f"BACKTEST RESULTS: {strategy_name.upper()}")
     print(f"{'='*70}")
     print(f"Period: {result['start_date']} to {result['end_date']}")
-    print(f"Initial Capital: €{result['initial_capital']:,.2f}")
-    print(f"Final Value: €{result['final_value']:,.2f}")
+    print(f"Initial Capital: €{_fmt_finite(result['initial_capital'], ',.2f')}")
+    print(f"Final Value: €{_fmt_finite(result['final_value'], ',.2f')}")
     print()
     print("RETURNS:")
-    print(f"  Total Return:        {result['total_return']*100:>8.2f}%")
-    print(f"  Annualized Return:   {result['annualized_return']*100:>8.2f}%")
+    print(f"  Total Return:        {_fmt_pct(result['total_return'], '>8.2f')}%")
+    print(f"  Annualized Return:   {_fmt_pct(result['annualized_return'], '>8.2f')}%")
     print()
     print("RISK METRICS:")
-    print(f"  Volatility:          {result['volatility']*100:>8.2f}%")
-    print(f"  Max Drawdown:        {result['max_drawdown']*100:>8.2f}%")
-    print(f"  Sharpe Ratio:        {result['sharpe_ratio']:>8.2f}")
-    print(f"  Sortino Ratio:       {result['sortino_ratio']:>8.2f}")
-    print(f"  Calmar Ratio:        {result['calmar_ratio']:>8.2f}")
-    print(f"  Omega Ratio:         {result['omega_ratio']:>8.2f}")
+    print(f"  Volatility:          {_fmt_pct(result['volatility'], '>8.2f')}%")
+    print(f"  Max Drawdown:        {_fmt_pct(result['max_drawdown'], '>8.2f')}%")
+    print(f"  Sharpe Ratio:        {_fmt_finite(result['sharpe_ratio'], '>8.2f')}")
+    print(f"  Sortino Ratio:       {_fmt_finite(result['sortino_ratio'], '>8.2f')}")
+    print(f"  Calmar Ratio:        {_fmt_finite(result['calmar_ratio'], '>8.2f')}")
+    print(f"  Omega Ratio:         {_fmt_finite(result['omega_ratio'], '>8.2f')}")
     print()
     print("TRADE STATISTICS:")
-    print(f"  Number of Trades:    {result['num_trades']:>8}")
-    print(f"  Win Rate:            {result['win_rate']*100:>8.2f}%")
-    print(f"  Profit Factor:       {result['profit_factor']:>8.2f}")
+    print(f"  Number of Trades:    {_fmt_finite(result['num_trades'], '>8')}")
+    print(f"  Win Rate:            {_fmt_pct(result['win_rate'], '>8.2f')}%")
+    print(f"  Profit Factor:       {_fmt_finite(result['profit_factor'], '>8.2f')}")
     print()
     print("BENCHMARK RELATIVE:")
-    print(f"  Beta (vs SPY):       {result['beta']:>8.3f}")
-    print(f"  Alpha (vs SPY):      {result['alpha']*100:>8.2f}%")
+    print(f"  Beta (vs SPY):       {_fmt_finite(result['beta'], '>8.3f')}")
+    print(f"  Alpha (vs SPY):      {_fmt_pct(result['alpha'], '>8.2f')}%")
     print(f"{'='*70}\n")
 
 

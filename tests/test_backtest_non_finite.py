@@ -11,6 +11,7 @@ import io
 import json
 import sys
 import warnings
+from contextlib import redirect_stdout
 from pathlib import Path
 from datetime import datetime
 from unittest.mock import patch
@@ -21,7 +22,13 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from backtest.backtest import BacktestEngine, run_comparison_backtest
+from backtest.backtest import (
+    BacktestEngine,
+    print_backtest_report,
+    run_comparison_backtest,
+    _fmt_finite,
+    _fmt_pct,
+)
 from portfolio.portfolio import Portfolio
 from utils import dump_json_safe, sanitize_for_json
 
@@ -235,3 +242,108 @@ class TestBacktestCLISerialization:
         raw = output_path.read_text()
         assert "NaN" not in raw
         assert "Infinity" not in raw
+
+
+class TestPrintBacktestReportNonFiniteGuards:
+    """Regression tests: the console report must render n/a, never nan/inf."""
+
+    def _make_result(self, **overrides):
+        base = {
+            "start_date": "2026-01-01",
+            "end_date": "2026-06-30",
+            "initial_capital": 10000.0,
+            "final_value": 10427.55,
+            "total_return": 0.0428,
+            "annualized_return": 0.0871,
+            "volatility": 0.1142,
+            "max_drawdown": 0.0312,
+            "sharpe_ratio": 0.76,
+            "sortino_ratio": 1.12,
+            "calmar_ratio": 2.79,
+            "omega_ratio": 1.31,
+            "num_trades": 12,
+            "win_rate": 0.5833,
+            "profit_factor": 1.42,
+            "beta": 0.88,
+            "alpha": 0.0111,
+        }
+        base.update(overrides)
+        return base
+
+    def _render(self, result):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            print_backtest_report(result, "guard_test")
+        return buf.getvalue()
+
+    def test_all_finite_renders_formatted_values(self):
+        out = self._render(self._make_result())
+        assert "10,000.00" in out
+        assert "10,427.55" in out
+        assert "4.28%" in out
+        assert "0.76" in out
+        assert "nan" not in out.lower()
+        assert "inf" not in out.lower()
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_metrics_render_na(self, bad):
+        result = self._make_result(
+            final_value=bad,
+            total_return=bad,
+            annualized_return=bad,
+            volatility=bad,
+            max_drawdown=bad,
+            sharpe_ratio=bad,
+            sortino_ratio=bad,
+            calmar_ratio=bad,
+            omega_ratio=bad,
+            win_rate=bad,
+            profit_factor=bad,
+            beta=bad,
+            alpha=bad,
+        )
+        out = self._render(result)
+        # The only permitted non-finite marker is the explicit "n/a" fallback
+        assert "nan%" not in out
+        assert "inf%" not in out
+        assert "-inf%" not in out
+        assert "€nan" not in out
+        assert "€inf" not in out
+        assert "n/a" in out
+        # num_trades stayed finite and must still render
+        assert "12" in out
+
+    def test_none_and_bool_values_render_na(self):
+        result = self._make_result(
+            final_value=None,
+            total_return=None,
+            sharpe_ratio=True,
+            num_trades=False,
+        )
+        out = self._render(result)
+        assert "n/a" in out
+        # bool inputs are rejected even though isinstance(True, int)
+        assert "True" not in out
+        assert "False" not in out
+
+    def test_missing_num_trades_does_not_crash(self):
+        result = self._make_result()
+        del result["num_trades"]
+        # KeyError on a missing field is acceptable and pre-existing behavior;
+        # non-finite num_trades is what we guard here.
+        result2 = self._make_result(num_trades=float("nan"))
+        out = self._render(result2)
+        assert "n/a" in out
+
+    def test_fmt_finite_rejects_non_numeric(self):
+        assert _fmt_finite("3.14", ".2f") == "n/a"
+        assert _fmt_finite(None, ".2f") == "n/a"
+        assert _fmt_finite([1.0], ".2f") == "n/a"
+        assert _fmt_finite(3.14159, ".2f") == "3.14"
+        assert _fmt_finite(np.float64(2.5), ".1f") == "2.5"
+
+    def test_fmt_pct_scales_only_finite_values(self):
+        assert _fmt_pct(0.0428, ".2f") == "4.28"
+        assert _fmt_pct(float("nan"), ".2f") == "n/a"
+        assert _fmt_pct(None, ".2f") == "n/a"
+        assert _fmt_pct(float("inf"), ".2f") == "n/a"

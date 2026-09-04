@@ -4,6 +4,18 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-09-04 — Side effects: library functions must not write to shared artifacts by default
+
+**Contexte** : Le rapport `cash_drag_20260904.txt` montrait à nouveau une fenêtre réduite de 2 jours (2026-08-10/11), alors que le rapport complet fait 97 jours. Troisième occurrence du "transient narrow window" (2026-09-01, puis 2026-09-04).
+
+**Erreur** : `analyze_cash_drag(results_dir, output_path=None)` écrivait par défaut dans le répertoire partagé `results/analysis/`, quel que soit le `results_dir` passé. La suite de tests et le benchmark appellent cette fonction avec des répertoires de fixtures (`tmp_path`) : chaque exécution écrasait l'artefact de production avec des données de test. Les dates 2026-08-10/11 du rapport pollué étaient exactement les fixtures de `tests/test_cash_drag_report.py`.
+
+**Fix** : La fonction n'écrit dans le répertoire partagé que si (a) `output_path` est explicite, ou (b) `results_dir` résout vers le chemin canonique `results/daily`. Sinon elle retourne le texte sans écrire. 3 tests de régression ajoutés.
+
+**Règle** : Une fonction de bibliothèque qui accepte un chemin d'entrée arbitraire ne doit jamais écrire dans un chemin de sortie global par défaut. Le comportement d'écriture par défaut doit être conditionné au chemin canonique de production, ou exigé explicitement.
+
+---
+
 ## 2026-07-08 — Run daily_run.py from the repo directory
 
 **Contexte** : Exécution du pipeline quotidien depuis le workspace parent (`clawmogorov/`) au lieu du repo (`almost-surely-profitable/`).
