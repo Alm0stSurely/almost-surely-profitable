@@ -582,12 +582,15 @@ class BacktestEngine:
         # Total return
         total_return = (values[-1] / self.initial_capital) - 1
         
-        # Annualized return
-        days = len(self.results)
-        annualized_return = (1 + total_return) ** (365 / days) - 1 if days > 0 else 0
+        # Annualized return (252 trading days per year, matching risk/performance_metrics.py).
+        # Use len(returns) — the number of return periods — not len(results).
+        # With n portfolio snapshots there are n-1 return periods; using n
+        # understates annualized return by a factor that grows for short backtests.
+        n_periods = len(returns)
+        annualized_return = (1 + total_return) ** (252 / n_periods) - 1 if n_periods > 0 else 0
         
-        # Volatility (annualized)
-        volatility = np.std(returns) * np.sqrt(252) if returns else 0
+        # Volatility (annualized) — sample std (ddof=1) for statistical consistency
+        volatility = np.std(returns, ddof=1) * np.sqrt(252) if len(returns) > 1 else 0
         
         # Sharpe ratio (assuming risk-free rate of 2%)
         risk_free_rate = 0.02
@@ -622,18 +625,18 @@ class BacktestEngine:
         gross_loss = sum([abs(r) for r in returns if r < 0])
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0.0
         
-        # Sortino ratio (downside deviation only)
+        # Sortino ratio (downside deviation only) — sample std (ddof=1)
         downside_returns = [r for r in returns if r < 0]
-        downside_std = np.std(downside_returns) * np.sqrt(252) if downside_returns else 0
+        downside_std = np.std(downside_returns, ddof=1) * np.sqrt(252) if len(downside_returns) > 1 else 0
         sortino_ratio = ((annualized_return - risk_free_rate) / downside_std 
                         if downside_std > 0 else 0)
         
-        # Beta vs benchmark (if provided)
+        # Beta vs benchmark (if provided) — sample variance (ddof=1) for consistency
         beta = 0
         alpha = 0
         if benchmark_returns and len(benchmark_returns) == len(returns):
             covariance = np.cov(returns, benchmark_returns)[0][1]
-            benchmark_variance = np.var(benchmark_returns)
+            benchmark_variance = np.var(benchmark_returns, ddof=1)
             beta = covariance / benchmark_variance if benchmark_variance > 0 else 0
             alpha = annualized_return - (risk_free_rate + beta * (np.mean(benchmark_returns) * 252 - risk_free_rate))
         

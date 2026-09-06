@@ -222,7 +222,8 @@ class TestBacktestEngine:
         engine.results = [{"total_value": 10100.0}]
         metrics = engine._calculate_metrics()
         assert metrics["total_return"] == pytest.approx(0.01)
-        assert metrics["annualized_return"] > 0
+        # Single snapshot → zero return periods → annualization is 0 by convention
+        assert metrics["annualized_return"] == 0
         assert metrics["volatility"] == 0  # no returns with single day
         assert metrics["sharpe_ratio"] == 0
         assert metrics["num_trades"] == 0
@@ -591,3 +592,110 @@ class TestBacktestEngine:
         assert engine.results[0]["date"] == "2024-01-01"
         assert engine.results[0]["total_value"] > 0
         assert engine.results[0]["num_positions"] == 1
+
+
+class TestBacktestStatisticalConsistency:
+    """Regression tests for statistical consistency in _calculate_metrics.
+
+    The backtest engine must use the same conventions as risk/performance_metrics.py:
+    - 252 trading days per year for annualization
+    - Sample standard deviation (ddof=1) for volatility, Sortino, and beta
+    """
+
+    def _make_engine(self):
+        return BacktestEngine(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            tickers=["SPY"],
+        )
+
+    def _setup_engine(self, engine, tmp_path, values, benchmark=None):
+        engine.portfolio = Portfolio(
+            state_file="bt_stat.json",
+            trades_file="bt_stat_trades.json",
+            data_dir=str(tmp_path),
+        )
+        engine.initial_capital = values[0]
+        engine.results = [{"total_value": v} for v in values]
+        return engine._calculate_metrics(benchmark_returns=benchmark)
+
+    def test_annualization_uses_252_days(self, tmp_path):
+        """Annualized return must use 252 trading days, not 365."""
+        engine = self._make_engine()
+        # 21 trading days (~1 month), 1% total return
+        days = 21
+        values = [10000.0 * (1.01) ** (i / days) for i in range(days + 1)]
+        metrics = self._setup_engine(engine, tmp_path, values)
+        expected = (1.01) ** (252 / days) - 1
+        assert metrics["annualized_return"] == pytest.approx(expected, rel=1e-10)
+        # Old (buggy) formula would give: (1.01) ** (365 / 21) - 1 ≈ 0.191
+        # which is ~44% higher than the correct value.
+        assert metrics["annualized_return"] < 0.15
+
+    def test_volatility_uses_sample_std(self, tmp_path):
+        """Volatility must use ddof=1 (sample std), matching performance_metrics.py."""
+        engine = self._make_engine()
+        # Create known returns: [0.01, 0.02, 0.03, -0.01, 0.0]
+        returns = [0.01, 0.02, 0.03, -0.01, 0.0]
+        values = [10000.0]
+        for r in returns:
+            values.append(values[-1] * (1 + r))
+        metrics = self._setup_engine(engine, tmp_path, values)
+        arr = np.array(returns)
+        expected_vol = np.std(arr, ddof=1) * np.sqrt(252)
+        assert metrics["volatility"] == pytest.approx(expected_vol, rel=1e-10)
+
+    def test_sortino_uses_sample_std(self, tmp_path):
+        """Sortino downside deviation must use ddof=1."""
+        engine = self._make_engine()
+        # Returns with known downside: [-0.01, -0.02, 0.03, 0.01, -0.005]
+        returns = [-0.01, -0.02, 0.03, 0.01, -0.005]
+        values = [10000.0]
+        for r in returns:
+            values.append(values[-1] * (1 + r))
+        metrics = self._setup_engine(engine, tmp_path, values)
+        arr = np.array(returns)
+        downside = arr[arr < 0]
+        expected_dd = np.std(downside, ddof=1) * np.sqrt(252)
+        if expected_dd > 0:
+            assert metrics["sortino_ratio"] != 0
+            # Verify by recomputing with the same conventions as the engine
+            n_periods = len(returns)
+            total_return = values[-1] / values[0] - 1
+            ann_ret = (1 + total_return) ** (252 / n_periods) - 1
+            expected_sortino = (ann_ret - 0.02) / expected_dd if expected_dd > 0 else 0
+            assert metrics["sortino_ratio"] == pytest.approx(expected_sortino, rel=1e-10)
+
+    def test_beta_uses_sample_variance(self, tmp_path):
+        """Beta denominator must use ddof=1 (sample variance)."""
+        engine = self._make_engine()
+        # 40 days of returns for a valid beta calculation
+        np.random.seed(42)
+        n = 40
+        portfolio_rets = np.random.normal(0.001, 0.01, n).tolist()
+        benchmark_rets = np.random.normal(0.0005, 0.008, n).tolist()
+        values = [10000.0]
+        for r in portfolio_rets:
+            values.append(values[-1] * (1 + r))
+        metrics = self._setup_engine(engine, tmp_path, values, benchmark=benchmark_rets)
+        arr_p = np.array(portfolio_rets)
+        arr_b = np.array(benchmark_rets)
+        cov = np.cov(arr_p, arr_b)[0, 1]
+        var_b = np.var(arr_b, ddof=1)
+        expected_beta = cov / var_b
+        assert metrics["beta"] == pytest.approx(expected_beta, rel=1e-10)
+
+    def test_single_return_volatility_is_zero(self, tmp_path):
+        """With only one return, sample std is undefined → volatility should be 0."""
+        engine = self._make_engine()
+        values = [10000.0, 10100.0]
+        metrics = self._setup_engine(engine, tmp_path, values)
+        assert metrics["volatility"] == 0
+
+    def test_single_downside_return_sortino_is_zero(self, tmp_path):
+        """With a single downside return, sample std is undefined → Sortino should be 0."""
+        engine = self._make_engine()
+        # Two days, one negative return
+        values = [10000.0, 9900.0]
+        metrics = self._setup_engine(engine, tmp_path, values)
+        assert metrics["sortino_ratio"] == 0
