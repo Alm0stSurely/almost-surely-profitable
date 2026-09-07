@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent / ".."))
 from data.fetch_market_data import fetch_historical_data
 from data.indicators import analyze_market_data
 from portfolio.portfolio import Portfolio
-from llm.trading_agent import TradingAgent
+from llm.trading_agent import TradingAgent, _safe_format
+from utils import dump_json_safe
 
 
 @dataclass
@@ -317,7 +318,7 @@ Respond in JSON format:
             })
             
             if verbose and i % 10 == 0:
-                print(f"  {date_str}: Portfolio = ${portfolio.total_value:.2f}")
+                print(f"  {date_str}: Portfolio = ${_safe_format(portfolio.total_value, ',.2f')}")
         
         # Calculate final metrics
         final_value = portfolio.total_value
@@ -384,7 +385,7 @@ Respond in JSON format:
             print(f"="*70)
             print(f"PROMPT OPTIMIZATION RUN")
             print(f"Period: {self.start_date.date()} to {self.end_date.date()}")
-            print(f"Capital: ${self.initial_capital:,.2f}")
+            print(f"Capital: ${_safe_format(self.initial_capital, ',.2f')}")
             print(f"Testing {len(variants)} prompt variants")
             print(f"="*70)
         
@@ -407,9 +408,9 @@ Respond in JSON format:
                 
                 if verbose:
                     print(f"\n  Results:")
-                    print(f"    Return: {result.total_return_pct:+.2f}%")
-                    print(f"    Sharpe: {result.sharpe_ratio:.2f}")
-                    print(f"    Max DD: {result.max_drawdown_pct:.2f}%")
+                    print(f"    Return: {_safe_format(result.total_return_pct, '+.2f')}%")
+                    print(f"    Sharpe: {_safe_format(result.sharpe_ratio)}")
+                    print(f"    Max DD: {_safe_format(result.max_drawdown_pct)}%")
                     
             except Exception as e:
                 print(f"Error backtesting {variant.name}: {e}")
@@ -440,10 +441,10 @@ RANKING BY CALMAR RATIO (Return / Max Drawdown)
         for i, result in enumerate(self.results, 1):
             report += f"""
 {i}. {result.variant_name.upper()}
-   Return: {result.total_return_pct:+.2f}% | Sharpe: {result.sharpe_ratio:.2f} | 
-   Max DD: {result.max_drawdown_pct:.2f}% | Calmar: {result.calmar_ratio:.2f}
+   Return: {_safe_format(result.total_return_pct, '+.2f')}% | Sharpe: {_safe_format(result.sharpe_ratio)} | 
+   Max DD: {_safe_format(result.max_drawdown_pct)}% | Calmar: {_safe_format(result.calmar_ratio)}
    Trades: {result.total_trades} ({result.buy_trades} buys, {result.sell_trades} sells)
-   Volatility: {result.volatility:.2f}% | Final Value: ${result.final_portfolio_value:,.2f}
+   Volatility: {_safe_format(result.volatility)}% | Final Value: ${_safe_format(result.final_portfolio_value, ',.2f')}
 """
         
         # Find best by different metrics
@@ -456,10 +457,10 @@ RANKING BY CALMAR RATIO (Return / Max Drawdown)
 {'-'*80}
 BEST BY METRIC
 {'-'*80}
-Highest Return:    {best_return.variant_name} ({best_return.total_return_pct:+.2f}%)
-Best Sharpe:       {best_sharpe.variant_name} ({best_sharpe.sharpe_ratio:.2f})
-Best Calmar:       {best_calmar.variant_name} ({best_calmar.calmar_ratio:.2f})
-Lowest Drawdown:   {lowest_dd.variant_name} ({lowest_dd.max_drawdown_pct:.2f}%)
+Highest Return:    {best_return.variant_name} ({_safe_format(best_return.total_return_pct, '+.2f')}%)
+Best Sharpe:       {best_sharpe.variant_name} ({_safe_format(best_sharpe.sharpe_ratio)})
+Best Calmar:       {best_calmar.variant_name} ({_safe_format(best_calmar.calmar_ratio)})
+Lowest Drawdown:   {lowest_dd.variant_name} ({_safe_format(lowest_dd.max_drawdown_pct)}%)
 {'='*80}
 """
         
@@ -475,7 +476,7 @@ Lowest Drawdown:   {lowest_dd.variant_name} ({lowest_dd.max_drawdown_pct:.2f}%)
         # Save results as JSON
         results_file = output_path / f"optimization_results_{timestamp}.json"
         with open(results_file, 'w') as f:
-            json.dump([r.to_dict() for r in self.results], f, indent=2)
+            dump_json_safe([r.to_dict() for r in self.results], f, indent=2)
         
         # Save report as text
         report_file = output_path / f"optimization_report_{timestamp}.txt"
