@@ -220,8 +220,10 @@ def generate_comprehensive_report():
             if all_dates:
                 bench_return = _get_benchmark_return(min(all_dates), max(all_dates))
                 if bench_return is not None and math.isfinite(bench_return) and total_return is not None and math.isfinite(total_return):
-                    alpha = total_return - bench_return * 100
-                    print(f"vs Buy & Hold (SPY) since {min(all_dates)}: {'+' if alpha >= 0 else ''}{alpha:.2f}%")
+                    bench_pct = bench_return * 100
+                    alpha = total_return - bench_pct
+                    print(f"Alpha (vs Buy & Hold SPY) since {min(all_dates)}: {alpha:+.2f} pp")
+                    print(f"  Strategy {total_return:+.2f}% | SPY {bench_pct:+.2f}%")
     
     print("\n✓ Evaluation complete.")
     print("="*70)
