@@ -659,6 +659,87 @@ class TestBenchmarkSummaryConsistency:
         captured = capsys.readouterr()
 
         assert "Total Return: -5.00%" in captured.out
-        assert "vs Buy & Hold (SPY) since 2026-02-17: -15.00%" in captured.out
+        assert "Alpha (vs Buy & Hold SPY) since 2026-02-17: -15.00 pp" in captured.out
+        assert "Strategy -5.00% | SPY +10.00%" in captured.out
         # Make sure we do NOT compare against the 30-day window start
         assert "since 2026-07-01" not in captured.out
+
+
+class TestBenchmarkAlphaLabel:
+    """Regression tests for the unambiguous benchmark-alpha label.
+
+    The summary line must name the quantity (Alpha), state the unit
+    (percentage points), and print both components so the arithmetic
+    strategy - SPY can be verified by the reader. The previous label
+    "vs Buy & Hold (SPY): -15.00%" was ambiguous between excess return
+    and raw benchmark return.
+    """
+
+    def _run_report(self, monkeypatch, capsys, total_value, spy_start, spy_end):
+        """Run generate_comprehensive_report with a controlled SPY benchmark."""
+        monkeypatch.setattr(
+            "evaluation.load_portfolio_data",
+            lambda: {
+                "total_value": total_value,
+                "cash": total_value * 0.25,
+                "total_realized_pnl": 0.0,
+                "positions": {},
+            },
+        )
+        monkeypatch.setattr(
+            "evaluation.load_valid_daily_results_limited",
+            lambda *a, **k: [{"date": "2026-08-01"}],
+        )
+        monkeypatch.setattr(
+            "evaluation.load_valid_daily_results",
+            lambda *a, **k: [{"date": "2026-02-17"}, {"date": "2026-08-01"}],
+        )
+
+        def fake_fetch(tickers, start, end):
+            return {"SPY": pd.DataFrame({"Close": [spy_start, spy_end]})}
+
+        monkeypatch.setattr("evaluation.fetch_historical_data", fake_fetch)
+        monkeypatch.setattr(
+            "data.fetch_market_data.fetch_current_prices",
+            lambda *a, **k: {"SPY": float(spy_end)},
+        )
+        mock_analyzer = MagicMock()
+        mock_analyzer.load_decisions.return_value = []
+        mock_analyzer.analyze_outcomes.return_value = {}
+        monkeypatch.setattr("evaluation.DecisionAnalyzer", lambda: mock_analyzer)
+
+        generate_comprehensive_report()
+        return capsys.readouterr().out
+
+    def test_alpha_label_names_quantity_and_unit(self, monkeypatch, capsys):
+        """Line must read 'Alpha (vs Buy & Hold SPY) ...: +/-X.XX pp'."""
+        out = self._run_report(monkeypatch, capsys, total_value=10500.0, spy_start=100.0, spy_end=112.0)
+        assert "Alpha (vs Buy & Hold SPY) since 2026-02-17: -7.00 pp" in out
+        assert "Strategy +5.00% | SPY +12.00%" in out
+
+    def test_alpha_label_positive_when_strategy_beats_spy(self, monkeypatch, capsys):
+        out = self._run_report(monkeypatch, capsys, total_value=11200.0, spy_start=100.0, spy_end=105.0)
+        assert "Alpha (vs Buy & Hold SPY) since 2026-02-17: +7.00 pp" in out
+        assert "Strategy +12.00% | SPY +5.00%" in out
+
+    def test_alpha_label_negative_benchmark_shows_signed_spy_return(self, monkeypatch, capsys):
+        """A falling SPY must render with an explicit sign so the line cannot
+        be misread as 'the market fell by the alpha amount'."""
+        out = self._run_report(monkeypatch, capsys, total_value=9900.0, spy_start=100.0, spy_end=90.0)
+        # strategy -1.00%, SPY -10.00% -> alpha +9.00 pp
+        assert "Alpha (vs Buy & Hold SPY) since 2026-02-17: +9.00 pp" in out
+        assert "Strategy -1.00% | SPY -10.00%" in out
+
+    def test_alpha_arithmetic_is_exactly_strategy_minus_spy(self, monkeypatch, capsys):
+        """The printed alpha must equal strategy% - SPY% to full precision."""
+        out = self._run_report(monkeypatch, capsys, total_value=10731.0, spy_start=100.0, spy_end=111.0)
+        strategy = (10731.0 - 10000) / 10000 * 100  # +7.31%
+        spy = 11.0
+        expected = f"{strategy - spy:+.2f} pp"
+        assert f"Alpha (vs Buy & Hold SPY) since 2026-02-17: {expected}" in out
+
+    def test_old_ambiguous_label_is_gone(self, monkeypatch, capsys):
+        """The bare 'vs Buy & Hold (SPY)' label must not appear anywhere."""
+        out = self._run_report(monkeypatch, capsys, total_value=9500.0, spy_start=100.0, spy_end=110.0)
+        assert "vs Buy & Hold (SPY)" not in out
+        assert "pp" in out
