@@ -543,6 +543,68 @@ class TestNonFiniteGuards:
         assert "Highest Value:" not in captured.out
 
 
+class TestVolatilityDdofConsistency:
+    """Regression: annualized volatility must use sample std (ddof=1).
+
+    The codebase-wide convention (risk/performance_metrics.py, risk/cvar.py,
+    backtest/backtest.py) is ddof=1 for financial statistics. The console
+    print path in evaluation.py previously used numpy's default ddof=0,
+    understating volatility by a factor sqrt((n-1)/n) — e.g. -10.6% for
+    n=10 daily returns.
+    """
+
+    def _run_report_with_returns(self, monkeypatch, capsys, daily_returns):
+        """Run generate_comprehensive_report with controlled daily returns."""
+        monkeypatch.setattr("evaluation.load_portfolio_data", lambda: None)
+        monkeypatch.setattr(
+            "evaluation.load_recent_results",
+            lambda *a, **k: [{"date": "2026-08-01"}],
+        )
+        trends = {
+            "portfolio_values": [10000.0] * (len(daily_returns) + 1),
+            "daily_returns": list(daily_returns),
+        }
+        monkeypatch.setattr(
+            "evaluation.calculate_performance_trends",
+            lambda *a, **k: trends,
+        )
+        monkeypatch.setattr(
+            "evaluation.load_valid_daily_results_limited",
+            lambda *a, **k: [],
+        )
+        monkeypatch.setattr(
+            "evaluation.load_valid_daily_results",
+            lambda *a, **k: [],
+        )
+        mock_analyzer = MagicMock()
+        mock_analyzer.load_decisions.return_value = []
+        mock_analyzer.analyze_outcomes.return_value = {}
+        monkeypatch.setattr("evaluation.DecisionAnalyzer", lambda: mock_analyzer)
+        monkeypatch.setattr(
+            "data.fetch_market_data.fetch_current_prices",
+            lambda *a, **k: {"SPY": 100.0},
+        )
+
+        generate_comprehensive_report()
+        return capsys.readouterr().out
+
+    def test_volatility_uses_sample_std_ddof1(self, monkeypatch, capsys):
+        """Printed annualized volatility must equal np.std(r, ddof=1)*sqrt(252)*100."""
+        daily_returns = [0.01, -0.02, 0.015, -0.005, 0.008, -0.012, 0.004, 0.006, -0.001, 0.002]
+        out = self._run_report_with_returns(monkeypatch, capsys, daily_returns)
+
+        arr = np.array(daily_returns)
+        expected = np.std(arr, ddof=1) * np.sqrt(252) * 100
+        expected_line = f"Volatility (ann): {expected:.1f}%"
+        assert expected_line in out
+
+        # Sanity: pop-std volatility would be smaller by sqrt((n-1)/n)
+        pop_vol = np.std(arr, ddof=0) * np.sqrt(252) * 100
+        assert expected > pop_vol
+        pop_line = f"Volatility (ann): {pop_vol:.1f}%"
+        assert pop_line not in out
+
+
 class TestEvaluationConsistency:
     def test_trade_counts_use_analyzed_outcomes(self, capsys):
         """Ensure trade counts match the analyzable trades from DecisionAnalyzer."""

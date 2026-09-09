@@ -126,7 +126,7 @@ def generate_comprehensive_report():
         if trends.get("daily_returns"):
             returns = np.array(trends["daily_returns"])
             if len(returns) >= 2 and not _has_non_finite(returns):
-                print(f"Volatility (ann): {np.std(returns) * np.sqrt(252) * 100:.1f}%")
+                print(f"Volatility (ann): {np.std(returns, ddof=1) * np.sqrt(252) * 100:.1f}%")
     
     # 3. LLM Decision Quality
     print("\n🤖 LLM DECISION QUALITY")
