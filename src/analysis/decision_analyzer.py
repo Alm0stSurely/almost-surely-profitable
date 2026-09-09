@@ -279,8 +279,8 @@ class DecisionAnalyzer:
                     ret = -ret
                 returns.append(ret)
             
-            if len(returns) > 1 and np.std(returns) > 0:
-                metrics["sharpe_of_decisions"] = np.mean(returns) / np.std(returns)
+            if len(returns) > 1 and np.std(returns, ddof=1) > 0:
+                metrics["sharpe_of_decisions"] = np.mean(returns) / np.std(returns, ddof=1)
             else:
                 metrics["sharpe_of_decisions"] = 0.0
         

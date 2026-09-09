@@ -492,6 +492,34 @@ def test_calculate_metrics_all_nan_returns_default_to_zero(analyzer):
     assert metrics["sharpe_of_decisions"] == 0.0
 
 
+def test_calculate_metrics_sharpe_uses_sample_std(analyzer):
+    """sharpe_of_decisions must use ddof=1 (sample std), not population std.
+
+    With returns [0.05, -0.01, 0.03]:
+      mean = 0.023333...
+      sample std (ddof=1) = sqrt(((0.05-m)^2 + (-0.01-m)^2 + (0.03-m)^2) / 2)
+                          = sqrt((0.000711... + 0.001111... + 0.000044...) / 2)
+                          = sqrt(0.000933...) = 0.03055...
+      population std (ddof=0) = sqrt(0.000933... / 3 * 2) = 0.02494...
+    The ratio mean/sample_std = 0.7638... vs mean/pop_std = 0.9354...
+    """
+    outcomes = {
+        "buys": [
+            {"forward_return": 0.05, "success": True},
+            {"forward_return": -0.01, "success": False},
+            {"forward_return": 0.03, "success": True},
+        ],
+        "sells": [],
+    }
+    metrics = analyzer._calculate_metrics(outcomes)
+    returns = np.array([0.05, -0.01, 0.03])
+    expected = np.mean(returns) / np.std(returns, ddof=1)
+    assert metrics["sharpe_of_decisions"] == pytest.approx(expected, rel=1e-10)
+    # Sanity: sample-std Sharpe is smaller than pop-std Sharpe for n=3
+    pop_sharpe = np.mean(returns) / np.std(returns, ddof=0)
+    assert metrics["sharpe_of_decisions"] < pop_sharpe
+
+
 # ---------------------------------------------------------------------------
 # analyze_behavioral_patterns
 # ---------------------------------------------------------------------------
