@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backtest.backtest import BacktestEngine, print_backtest_report
+from backtest.formatting import _fmt_finite, _fmt_pct
 from utils import dump_json_safe
 
 try:
@@ -258,10 +259,10 @@ Examples:
         for strategy, result in results.items():
             if result:
                 print(f"{strategy:<15} "
-                      f"{result['total_return']*100:>9.2f}% "
-                      f"{result['sharpe_ratio']:>8.2f} "
-                      f"{result['max_drawdown']*100:>7.2f}% "
-                      f"€{result['final_value']:>10,.2f}")
+                      f"{_fmt_pct(result['total_return'], '>9.2f')}% "
+                      f"{_fmt_finite(result['sharpe_ratio'], '>8.2f')} "
+                      f"{_fmt_pct(result['max_drawdown'], '>7.2f')}% "
+                      f"€{_fmt_finite(result['final_value'], '>10,.2f')}")
     else:
         # Run single strategy
         if args.strategy == "llm":

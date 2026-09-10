@@ -18,6 +18,9 @@ except ImportError:
     plt = None
     mdates = None
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from backtest.formatting import _fmt_finite, _fmt_pct
+
 
 def check_matplotlib():
     """Check if matplotlib is available."""
@@ -127,7 +130,15 @@ def plot_metrics_comparison(results: Dict, output_path: str = "results/backtest_
 
 
 def print_summary_table(results: Dict):
-    """Print a formatted summary table."""
+    """Print a formatted summary table, tolerating non-finite metric values.
+
+    Rows may come from ``load_backtest_results`` (the repo's sanitizer maps
+    non-finite floats to ``null``, and ``json.load`` accepts non-standard
+    ``NaN``/``Infinity`` tokens) or from a direct in-memory call with live
+    engine output. ``None * 100`` would raise TypeError and ``nan``/``inf``
+    would leak into the table, so every numeric field goes through the
+    shared finite-safe helpers.
+    """
     print("\n" + "="*100)
     print(f"{'Strategy':<20} {'Return':>10} {'Ann. Return':>12} {'Sharpe':>8} {'Max DD':>10} {'Trades':>8} {'Win Rate':>10}")
     print("="*100)
@@ -137,12 +148,12 @@ def print_summary_table(results: Dict):
             continue
         
         print(f"{strategy_name.replace('_', ' ').title():<20} "
-              f"{result['total_return']*100:>9.2f}% "
-              f"{result['annualized_return']*100:>11.2f}% "
-              f"{result['sharpe_ratio']:>7.2f} "
-              f"{result['max_drawdown']*100:>9.2f}% "
-              f"{result['num_trades']:>7} "
-              f"{result['win_rate']*100:>9.1f}%")
+              f"{_fmt_pct(result['total_return'], '>9.2f')}% "
+              f"{_fmt_pct(result['annualized_return'], '>11.2f')}% "
+              f"{_fmt_finite(result['sharpe_ratio'], '>7.2f')} "
+              f"{_fmt_pct(result['max_drawdown'], '>9.2f')}% "
+              f"{_fmt_finite(result['num_trades'], '>7')} "
+              f"{_fmt_pct(result['win_rate'], '>9.1f')}%")
     
     print("="*100 + "\n")
 
