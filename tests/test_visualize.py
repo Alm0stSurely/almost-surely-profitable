@@ -350,3 +350,95 @@ class TestPlottingFunctionsMocked:
         from backtest.visualize import plot_backtest_results
         with pytest.raises(ImportError, match="matplotlib required"):
             plot_backtest_results({}, str(tmp_path / "backtest.png"))
+
+
+class TestPrintSummaryTableNonFiniteGuards:
+    """Regression tests: summary table must tolerate non-finite / non-numeric metrics.
+
+    ``dump_json_safe`` sanitizes non-finite floats to ``None`` before
+    serialization, and Python's ``json.load`` accepts non-standard ``NaN`` /
+    ``Infinity`` tokens. Both forms reach ``print_summary_table`` through
+    ``load_backtest_results`` (or a direct in-memory call) and must not
+    crash (``None * 100`` -> TypeError) nor leak ``nan``/``inf`` tokens.
+    """
+
+    @staticmethod
+    def _row(**overrides):
+        base = {
+            "total_return": 0.15,
+            "annualized_return": 0.18,
+            "sharpe_ratio": 1.2,
+            "max_drawdown": -0.10,
+            "num_trades": 12,
+            "win_rate": 0.6,
+        }
+        base.update(overrides)
+        return {"degenerate": base}
+
+    def test_none_metrics_do_not_crash(self, capsys):
+        """null metrics from the sanitized-JSON path must render as n/a, not TypeError."""
+        results = self._row(
+            total_return=None,
+            annualized_return=None,
+            sharpe_ratio=None,
+            max_drawdown=None,
+            num_trades=None,
+            win_rate=None,
+        )
+        print_summary_table(results)  # must not raise
+        captured = capsys.readouterr()
+        assert "nan" not in captured.out.lower()
+        assert "inf" not in captured.out.lower()
+        assert captured.out.count("n/a") >= 6
+
+    def test_nan_metrics_rendered_as_na(self, capsys):
+        results = self._row(
+            total_return=float("nan"),
+            annualized_return=float("nan"),
+            sharpe_ratio=float("nan"),
+            max_drawdown=float("nan"),
+            win_rate=float("nan"),
+        )
+        print_summary_table(results)
+        captured = capsys.readouterr()
+        assert "nan" not in captured.out.lower()
+        assert "n/a" in captured.out
+
+    def test_inf_metrics_rendered_as_na(self, capsys):
+        results = self._row(
+            total_return=float("inf"),
+            annualized_return=float("-inf"),
+            sharpe_ratio=float("inf"),
+        )
+        print_summary_table(results)
+        captured = capsys.readouterr()
+        assert "inf" not in captured.out.lower()
+        assert "n/a" in captured.out
+
+    def test_non_numeric_metrics_rendered_as_na(self, capsys):
+        results = self._row(total_return="n/a", sharpe_ratio=[1.0], win_rate="x")
+        print_summary_table(results)
+        captured = capsys.readouterr()
+        assert "n/a" in captured.out
+
+    def test_bool_metrics_rendered_as_na(self, capsys):
+        results = self._row(total_return=True, win_rate=False)
+        print_summary_table(results)
+        captured = capsys.readouterr()
+        assert "n/a" in captured.out
+
+    def test_mixed_row_keeps_finite_values(self, capsys):
+        results = self._row(total_return=0.25, sharpe_ratio=float("nan"))
+        print_summary_table(results)
+        captured = capsys.readouterr()
+        assert "25.00%" in captured.out
+        assert "n/a" in captured.out
+        assert "nan" not in captured.out.lower()
+
+    def test_int_num_trades_preserved(self, capsys):
+        """Guard must not normalize ints through float (12 -> 12.0 regression class)."""
+        results = self._row(num_trades=12)
+        print_summary_table(results)
+        captured = capsys.readouterr()
+        assert "12.0" not in captured.out
+        assert "12" in captured.out

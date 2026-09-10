@@ -4,7 +4,6 @@ Tests strategy performance on historical data.
 """
 
 import json
-import math
 import sys
 import pandas as pd
 import numpy as np
@@ -19,43 +18,11 @@ from data.indicators import calculate_all_indicators, get_latest_indicators
 from portfolio.portfolio import Portfolio
 from llm.trading_agent import TradingAgent
 from backtest.backtest_cooldown import BacktestCooldownManager, CooldownConfig
+from backtest.formatting import _fmt_finite, _fmt_pct  # noqa: F401  (re-exported)
 from utils import dump_json_safe
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _fmt_finite(value: float, spec: str) -> str:
-    """Format a numeric value if finite, else return 'n/a'.
-
-    ``print_backtest_report`` is a public formatter: callers may hand it a
-    result dict built from market data containing NaN ticks or degenerate
-    price series, and the report is the last guardrail before nan/inf
-    tokens reach the console (and any captured CI logs).
-    """
-    if isinstance(value, bool):
-        return "n/a"
-    if isinstance(value, (int, np.integer)):
-        return format(value, spec)
-    if isinstance(value, (float, np.floating)):
-        v = float(value)
-        if math.isfinite(v):
-            return format(v, spec)
-    return "n/a"
-
-
-def _fmt_pct(value: float, spec: str) -> str:
-    """Format a fractional value as a percentage if finite, else return 'n/a'.
-
-    Validates the raw value before scaling: ``None`` or a non-numeric input
-    must not crash the report, and a non-finite fraction must not be
-    multiplied into a non-finite percentage first.
-    """
-    if isinstance(value, (int, float, np.floating)) and not isinstance(value, bool):
-        v = float(value)
-        if math.isfinite(v):
-            return format(v * 100, spec)
-    return "n/a"
 
 
 class RandomStrategy:
