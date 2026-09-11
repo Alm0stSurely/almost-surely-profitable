@@ -14,19 +14,7 @@ from typing import Any, Dict, Literal, Tuple
 import numpy as np
 import pandas as pd
 
-
-def _fmt_finite(value: float, spec: str) -> str:
-    """Format a numeric value if finite, else return 'n/a'.
-
-    RegimeState is a public dataclass: callers may construct it with
-    non-finite aggregates, and summary() is the last guardrail before
-    nan/inf tokens reach the console and the LLM prompt.
-    """
-    if isinstance(value, (int, float, np.floating)) and not isinstance(value, bool):
-        v = float(value)
-        if math.isfinite(v):
-            return format(v, spec)
-    return "n/a"
+from utils.formatting import _fmt_finite
 
 
 @dataclass

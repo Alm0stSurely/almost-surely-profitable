@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from utils import is_valid_daily_result, load_valid_daily_results, load_valid_daily_results_limited, sanitize_for_json, dump_json_safe
+from utils.formatting import _fmt_finite, _fmt_pct
 
 
 @pytest.fixture
@@ -200,3 +201,58 @@ class TestDumpJsonSafe:
 
         loaded = json.loads(path.read_text())
         assert loaded["date"].startswith("<object object at")
+
+
+class TestSharedFormattingHelpers:
+    """Tests for utils.formatting — the canonical finite-safe formatter pair.
+
+    Both helpers were extracted from backtest.formatting so that every
+    console/LLM formatter validates before scaling instead of growing
+    per-module copies of the same convention.
+    """
+
+    def test_fmt_finite_formats_finite_float(self):
+        assert _fmt_finite(3.14159, ".2f") == "3.14"
+        assert _fmt_finite(-0.5, ">6.2f") == " -0.50"
+
+    def test_fmt_finite_formats_int_and_np_integer(self):
+        assert _fmt_finite(42, ">3") == " 42"
+        numpy = pytest.importorskip("numpy")
+        assert _fmt_finite(numpy.int64(7), ">3") == "  7"
+
+    def test_fmt_finite_rejects_non_finite(self):
+        assert _fmt_finite(float("nan"), ".2f") == "n/a"
+        assert _fmt_finite(float("inf"), ".2f") == "n/a"
+        assert _fmt_finite(float("-inf"), ".2f") == "n/a"
+
+    def test_fmt_finite_rejects_non_numeric(self):
+        assert _fmt_finite(None, ".2f") == "n/a"
+        assert _fmt_finite("3.14", ".2f") == "n/a"
+        assert _fmt_finite([1.0], ".2f") == "n/a"
+
+    def test_fmt_finite_rejects_bool(self):
+        # bool subclasses int; truthy flags must not render as 1/0
+        assert _fmt_finite(True, ">3") == "n/a"
+        assert _fmt_finite(False, ">3") == "n/a"
+
+    def test_fmt_pct_scales_finite_fraction(self):
+        assert _fmt_pct(0.0521, ">6.2f") == "  5.21"
+
+    def test_fmt_pct_validates_before_scaling(self):
+        # None must not crash on * 100; non-finite must not be multiplied first
+        assert _fmt_pct(None, ">6.2f") == "n/a"
+        assert _fmt_pct(float("nan"), ">6.2f") == "n/a"
+        assert _fmt_pct(float("inf"), ">6.2f") == "n/a"
+
+    def test_fmt_pct_rejects_bool(self):
+        assert _fmt_pct(True, ">6.2f") == "n/a"
+
+    def test_backtest_modules_reexport_shared_helpers(self):
+        # PR #45/#50 regression tests and benchmark imports must keep working
+        import backtest.backtest as bt
+        import backtest.formatting as btf
+
+        assert btf._fmt_finite is _fmt_finite
+        assert btf._fmt_pct is _fmt_pct
+        assert bt._fmt_finite is _fmt_finite
+        assert bt._fmt_pct is _fmt_pct
