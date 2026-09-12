@@ -4,9 +4,12 @@ Generates equity curves, drawdown charts, and performance comparisons.
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Dict
+
+import numpy as np
 
 try:
     import matplotlib.pyplot as plt
@@ -20,6 +23,28 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backtest.formatting import _fmt_finite, _fmt_pct
+
+
+def _finite_or_nan(value) -> float:
+    """Coerce a chart-bound value to a finite float, else NaN.
+
+    Charts consume the same two input distributions as the console
+    tables: ``dump_json_safe`` sanitizes non-finite floats to ``null``
+    (``None``) and plain ``json.load`` accepts non-standard ``NaN`` /
+    ``Infinity`` tokens. Scaling ``None`` raises TypeError, while a
+    non-finite bar silently vanishes or wrecks the y-autoscale. Matplotlib
+    already renders NaN as a gap (masked bar / broken line) — the chart
+    analog of the console ``n/a`` convention — so every non-finite or
+    non-numeric input collapses to NaN, and finite values pass through
+    validated, before any scaling or comparison.
+    """
+    if isinstance(value, bool):
+        return float("nan")
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        v = float(value)
+        if math.isfinite(v):
+            return v
+    return float("nan")
 
 
 def check_matplotlib():
@@ -65,7 +90,7 @@ def plot_equity_curves(results: Dict, output_path: str = "results/backtest_equit
             continue
         
         dates = [datetime.strptime(r['date'], '%Y-%m-%d') for r in result['daily_results']]
-        drawdowns = [d * 100 for d in result['drawdown_curve']]  # Convert to percentage
+        drawdowns = [_finite_or_nan(d) * 100 for d in result['drawdown_curve']]  # Convert to percentage, validate before scaling
         
         color = colors.get(strategy_name, '#757575')
         ax2.fill_between(dates, drawdowns, 0, alpha=0.3, color=color, label=strategy_name)
@@ -89,10 +114,11 @@ def plot_metrics_comparison(results: Dict, output_path: str = "results/backtest_
     check_matplotlib()
     strategies = list(results.keys())
     
-    # Extract metrics
-    total_returns = [results[s]['total_return'] * 100 if results[s] else 0 for s in strategies]
-    sharpe_ratios = [results[s]['sharpe_ratio'] if results[s] else 0 for s in strategies]
-    max_drawdowns = [results[s]['max_drawdown'] * 100 if results[s] else 0 for s in strategies]
+    # Extract metrics; validate before scaling so None (sanitized JSON path)
+    # and NaN/Infinity tokens (plain json.load path) render as gaps, not crashes.
+    total_returns = [_finite_or_nan(results[s]['total_return']) * 100 if results[s] else 0 for s in strategies]
+    sharpe_ratios = [_finite_or_nan(results[s]['sharpe_ratio']) if results[s] else 0 for s in strategies]
+    max_drawdowns = [_finite_or_nan(results[s]['max_drawdown']) * 100 if results[s] else 0 for s in strategies]
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
@@ -169,14 +195,15 @@ def plot_backtest_results(result: Dict, output_path: str):
     
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 1]})
     
-    # Extract dates and values
+    # Extract dates and values; coerce to validated floats so the drawdown
+    # comparison below cannot crash on None (sanitized JSON path).
     daily_results = result.get('daily_results', [])
     if not daily_results:
         print("No daily results to plot")
         return
-    
+
     dates = [datetime.strptime(d['date'], '%Y-%m-%d') for d in daily_results]
-    values = [d['total_value'] for d in daily_results]
+    values = [_finite_or_nan(d['total_value']) for d in daily_results]
     
     # Calculate drawdowns
     peak = values[0]

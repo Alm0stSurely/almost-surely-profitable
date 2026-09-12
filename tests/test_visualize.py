@@ -8,10 +8,13 @@ Plotting functions are mocked to avoid image comparison dependencies.
 
 import sys
 import json
+import math
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from io import StringIO
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -442,3 +445,231 @@ class TestPrintSummaryTableNonFiniteGuards:
         captured = capsys.readouterr()
         assert "12.0" not in captured.out
         assert "12" in captured.out
+
+
+class TestChartNonFiniteGuards:
+    """Regression tests: chart functions must tolerate non-finite / non-numeric values.
+
+    Charts consume the same two input distributions as the console tables:
+    ``dump_json_safe`` sanitizes non-finite floats to ``None`` and plain
+    ``json.load`` accepts ``NaN``/``Infinity`` tokens. Scaling ``None``
+    raised TypeError (``plot_metrics_comparison`` metrics, equity
+    ``drawdown_curve``) and ``plot_backtest_results`` compared raw values
+    against the running peak (``None > peak`` -> TypeError). The fix
+    collapses every non-finite or non-numeric input to NaN — matplotlib's
+    native gap semantics — before any scaling or comparison.
+    """
+
+    @staticmethod
+    def _metrics_row(**overrides):
+        base = {
+            "total_return": 0.15,
+            "annualized_return": 0.18,
+            "sharpe_ratio": 1.2,
+            "max_drawdown": -0.10,
+            "num_trades": 1,
+            "win_rate": 1.0,
+            "daily_results": [
+                {"date": "2026-01-01", "total_value": 10000.0},
+                {"date": "2026-01-02", "total_value": 10100.0},
+            ],
+            "drawdown_curve": [0.0, -0.01],
+        }
+        base.update(overrides)
+        return base
+
+    @staticmethod
+    def _heights(mock_ax, call_index=0):
+        return mock_ax.bar.call_args_list[call_index][0][1]
+
+    # --- _finite_or_nan direct semantics ---
+
+    def test_finite_or_nan_passthrough(self):
+        from backtest.visualize import _finite_or_nan
+        assert _finite_or_nan(0.15) == 0.15
+        assert _finite_or_nan(7) == 7.0
+        assert _finite_or_nan(np.float64(1.5)) == 1.5
+        assert _finite_or_nan(np.int64(3)) == 3.0
+
+    def test_finite_or_nan_collapses_bad_inputs(self):
+        from backtest.visualize import _finite_or_nan
+        for bad in (None, float("nan"), float("inf"), float("-inf"), "n/a", True, False, [1.0]):
+            assert math.isnan(_finite_or_nan(bad)), f"expected NaN for {bad!r}"
+
+    # --- plot_metrics_comparison ---
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_metrics_none_do_not_crash(self, mock_plt, tmp_path):
+        """null metrics from the sanitized-JSON path must render as gaps, not TypeError."""
+        from backtest.visualize import plot_metrics_comparison
+        results = {
+            "degenerate": self._metrics_row(
+                total_return=None, sharpe_ratio=None, max_drawdown=None
+            )
+        }
+        mock_axes = [MagicMock(), MagicMock(), MagicMock()]
+        mock_plt.subplots.return_value = (MagicMock(), mock_axes)
+        plot_metrics_comparison(results, str(tmp_path / "metrics.png"))  # must not raise
+        assert all(math.isnan(h) for h in self._heights(mock_axes[0]))
+        assert all(math.isnan(h) for h in self._heights(mock_axes[1]))
+        assert all(math.isnan(h) for h in self._heights(mock_axes[2]))
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_metrics_nan_inf_render_as_gaps(self, mock_plt, tmp_path):
+        from backtest.visualize import plot_metrics_comparison
+        results = {
+            "nan_case": self._metrics_row(total_return=float("nan"), sharpe_ratio=float("inf")),
+            "inf_case": self._metrics_row(max_drawdown=float("-inf")),
+        }
+        mock_axes = [MagicMock(), MagicMock(), MagicMock()]
+        mock_plt.subplots.return_value = (MagicMock(), mock_axes)
+        plot_metrics_comparison(results, str(tmp_path / "metrics.png"))
+        assert math.isnan(self._heights(mock_axes[0])[0])  # nan return -> gap
+        assert math.isnan(self._heights(mock_axes[1])[0])  # inf sharpe -> gap
+        assert math.isnan(self._heights(mock_axes[2])[1])  # -inf drawdown -> gap
+        assert self._heights(mock_axes[0])[1] == 15.0  # finite sibling preserved
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_metrics_non_numeric_and_bool_render_as_gaps(self, mock_plt, tmp_path):
+        from backtest.visualize import plot_metrics_comparison
+        results = {
+            "weird": self._metrics_row(total_return="n/a", sharpe_ratio=True, max_drawdown=False)
+        }
+        mock_axes = [MagicMock(), MagicMock(), MagicMock()]
+        mock_plt.subplots.return_value = (MagicMock(), mock_axes)
+        plot_metrics_comparison(results, str(tmp_path / "metrics.png"))
+        assert all(math.isnan(h) for h in self._heights(mock_axes[0]))
+        assert all(math.isnan(h) for h in self._heights(mock_axes[1]))
+        assert all(math.isnan(h) for h in self._heights(mock_axes[2]))
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_metrics_finite_values_unchanged(self, mock_plt, tmp_path):
+        from backtest.visualize import plot_metrics_comparison
+        results = {
+            "ok": self._metrics_row(),
+            "empty": None,
+        }
+        mock_axes = [MagicMock(), MagicMock(), MagicMock()]
+        mock_plt.subplots.return_value = (MagicMock(), mock_axes)
+        plot_metrics_comparison(results, str(tmp_path / "metrics.png"))
+        assert list(self._heights(mock_axes[0])) == [15.0, 0]  # falsy strategy keeps 0 sentinel
+        assert list(self._heights(mock_axes[1])) == [1.2, 0]
+        assert list(self._heights(mock_axes[2])) == [-10.0, 0]
+
+    # --- plot_equity_curves ---
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_equity_none_drawdowns_do_not_crash(self, mock_plt, tmp_path):
+        """None inside drawdown_curve must not crash the *100 scaling."""
+        from backtest.visualize import plot_equity_curves
+        results = {
+            "degenerate": dict(
+                daily_results=[
+                    {"date": "2026-01-01", "total_value": 10000.0},
+                    {"date": "2026-01-02", "total_value": 10100.0},
+                    {"date": "2026-01-03", "total_value": 10050.0},
+                ],
+                drawdown_curve=[0.0, None, -0.015],
+            )
+        }
+        mock_ax1, mock_ax2 = MagicMock(), MagicMock()
+        mock_plt.subplots.return_value = (MagicMock(), (mock_ax1, mock_ax2))
+        plot_equity_curves(results, str(tmp_path / "equity.png"))  # must not raise
+        drawdowns = mock_ax2.fill_between.call_args[0][1]
+        assert list(drawdowns)[:1] == [0.0]
+        assert math.isnan(drawdowns[1])
+        assert drawdowns[2] == -1.5
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_equity_nan_inf_drawdowns_render_as_gaps(self, mock_plt, tmp_path):
+        from backtest.visualize import plot_equity_curves
+        results = {
+            "degenerate": dict(
+                daily_results=[
+                    {"date": "2026-01-01", "total_value": 10000.0},
+                    {"date": "2026-01-02", "total_value": 10100.0},
+                ],
+                drawdown_curve=[float("nan"), float("inf")],
+            )
+        }
+        mock_ax1, mock_ax2 = MagicMock(), MagicMock()
+        mock_plt.subplots.return_value = (MagicMock(), (mock_ax1, mock_ax2))
+        plot_equity_curves(results, str(tmp_path / "equity.png"))
+        drawdowns = mock_ax2.fill_between.call_args[0][1]
+        assert all(math.isnan(d) for d in drawdowns)
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_equity_finite_drawdowns_preserved(self, mock_plt, tmp_path):
+        from backtest.visualize import plot_equity_curves
+        results = {
+            "ok": dict(
+                daily_results=[
+                    {"date": "2026-01-01", "total_value": 10000.0},
+                    {"date": "2026-01-02", "total_value": 9900.0},
+                ],
+                drawdown_curve=[0.0, -0.01],
+            )
+        }
+        mock_ax1, mock_ax2 = MagicMock(), MagicMock()
+        mock_plt.subplots.return_value = (MagicMock(), (mock_ax1, mock_ax2))
+        plot_equity_curves(results, str(tmp_path / "equity.png"))
+        assert list(mock_ax2.fill_between.call_args[0][1]) == [0.0, -1.0]
+
+    # --- plot_backtest_results ---
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_backtest_results_none_values_do_not_crash(self, mock_plt, tmp_path):
+        """None total_value must not crash the running-peak drawdown comparison."""
+        from backtest.visualize import plot_backtest_results
+        result = {
+            "strategy": "llm",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-03",
+            "initial_capital": 10000,
+            "daily_results": [
+                {"date": "2026-01-01", "total_value": 10000.0},
+                {"date": "2026-01-02", "total_value": None},
+                {"date": "2026-01-03", "total_value": 10050.0},
+            ],
+        }
+        mock_ax1, mock_ax2 = MagicMock(), MagicMock()
+        mock_plt.subplots.return_value = (MagicMock(), (mock_ax1, mock_ax2))
+        plot_backtest_results(result, str(tmp_path / "backtest.png"))  # must not raise
+        plotted = mock_ax1.plot.call_args[0][1]
+        assert plotted[0] == 10000.0
+        assert math.isnan(plotted[1])
+        assert plotted[2] == 10050.0
+        drawdowns = mock_ax2.fill_between.call_args[0][1]
+        assert drawdowns[0] == 0.0
+        assert math.isnan(drawdowns[1])
+        assert drawdowns[2] == 0.0  # 10050 new peak -> zero drawdown
+
+    @patch("backtest.visualize.plt")
+    @patch("backtest.visualize.HAS_MATPLOTLIB", True)
+    def test_backtest_results_nan_inf_values_render_as_gaps(self, mock_plt, tmp_path):
+        from backtest.visualize import plot_backtest_results
+        result = {
+            "strategy": "llm",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-03",
+            "initial_capital": 10000,
+            "daily_results": [
+                {"date": "2026-01-01", "total_value": 10000.0},
+                {"date": "2026-01-02", "total_value": float("nan")},
+                {"date": "2026-01-03", "total_value": float("inf")},
+            ],
+        }
+        mock_ax1, mock_ax2 = MagicMock(), MagicMock()
+        mock_plt.subplots.return_value = (MagicMock(), (mock_ax1, mock_ax2))
+        plot_backtest_results(result, str(tmp_path / "backtest.png"))
+        plotted = mock_ax1.plot.call_args[0][1]
+        assert math.isnan(plotted[1])
+        assert math.isnan(plotted[2])
