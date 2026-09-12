@@ -1,34 +1,66 @@
 # Weekly Report — Week 2026-W37
 
-**Period:** 2026-09-07 to 2026-09-07
+**Period:** 2026-09-07 to 2026-09-11
 
 ## Portfolio Summary
 
 | Metric | Value |
 |--------|-------|
-| Cash | €2690.46 |
-| Positions Value | €7268.95 |
-| **Total Value** | **€9959.41** |
-| Total Return | -0.41% |
-| Realized P&L | €-363.13 |
-| Unrealized P&L | €161.32 |
+| Cash | €2945.15 |
+| Positions Value | €6951.80 |
+| **Total Value** | **€9896.95** |
+| Total Return | -1.03% |
+| Realized P&L | €-334.93 |
+| Unrealized P&L | €70.66 |
 | Number of Positions | 8 |
 
 ## Weekly Performance
 
+| Metric | Value |
+|--------|-------|
+| Start of Week | €9960.06 |
+| End of Week | €9896.95 |
+| Weekly Return | -0.63% |
+| Trading Days | 5 |
+
+## Performance Metrics
+
+| Metric | Value | Interpretation |
+|--------|-------|----------------|
+| Sharpe Ratio | -5.12 | Poor |
+| Sortino Ratio | -9.23 | Poor |
+| Max Drawdown | -1.10% | Low |
+| Volatility | 8.16% | Low |
+
+## Risk Metrics
+
+| Metric | Value |
+|--------|-------|
+| CVaR 95% | 0.57% |
+| VaR 95% | 0.57% |
+| Skewness | 1.00 |
+| Kurtosis | -0.50 |
+
+## Benchmark Cumulative Returns
+
+| Benchmark | Weekly Return | Alpha vs Portfolio |
+|-----------|---------------|---------------------|
+| SPY | -0.22% | -0.42% (Underperform) |
+| CAC.PA | -1.44% | +0.81% (Outperform) |
+| FEZ | -1.08% | +0.45% (Outperform) |
 
 ## Positions
 
 | Ticker | Quantity | Price | Value | P&L % | P&L € |
 |--------|----------|-------|-------|-------|-------|
-| SAN.PA | 2.45 | €75.77 | €185.98 | +3.68% | €6.61 |
-| SPY | 2.65 | €770.24 | €2042.92 | +3.16% | €62.61 |
-| IJR | 6.04 | €145.36 | €878.29 | -0.99% | €-8.76 |
-| FEZ | 18.74 | €70.65 | €1323.73 | +3.09% | €39.68 |
-| TLT | 6.49 | €82.22 | €533.41 | -2.08% | €-11.35 |
-| REET | 16.59 | €27.41 | €454.75 | -1.79% | €-8.30 |
-| PDBC | 25.40 | €19.01 | €482.95 | +6.62% | €29.98 |
-| OR.PA | 3.56 | €384.30 | €1366.92 | +3.86% | €50.86 |
+| SAN.PA | 2.45 | €73.25 | €179.80 | +0.23% | €0.42 |
+| SPY | 2.65 | €764.18 | €2026.85 | +2.35% | €46.53 |
+| IJR | 6.04 | €142.18 | €859.07 | -3.15% | €-27.98 |
+| FEZ | 18.74 | €69.70 | €1305.84 | +1.70% | €21.78 |
+| TLT | 6.49 | €80.86 | €524.62 | -3.70% | €-20.14 |
+| REET | 16.59 | €26.96 | €447.28 | -3.40% | €-15.76 |
+| PDBC | 12.70 | €19.79 | €251.38 | +10.99% | €24.90 |
+| OR.PA | 3.56 | €381.50 | €1356.96 | +3.11% | €40.90 |
 
 ## Trades This Week
 
