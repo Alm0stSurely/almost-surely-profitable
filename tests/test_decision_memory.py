@@ -869,3 +869,41 @@ class TestNonFiniteGuards:
         context = mem.get_memory_context_for_llm()
         assert "100.0%" in context
         assert "+5.00%" in context
+
+
+# ---------------------------------------------------------------------------
+# strict JSON persistence boundary (allow_nan=False)
+# ---------------------------------------------------------------------------
+
+class TestStrictJsonPersistenceBoundary:
+    def test_save_memory_rejects_non_finite_record(self, tmp_path):
+        """A non-finite record field must fail loudly at the save boundary
+        instead of being persisted as a non-standard NaN token."""
+        path = tmp_path / "mem.json"
+        mem = DecisionMemory(memory_file=str(path))
+        mem.add_decision(make_record(pnl_pct=float("nan")))
+
+        with pytest.raises(ValueError):
+            mem.save_memory()
+
+    def test_save_memory_rejects_infinite_exit_price(self, tmp_path):
+        path = tmp_path / "mem.json"
+        mem = DecisionMemory(memory_file=str(path))
+        mem.add_decision(make_record(exit_price=float("inf")))
+
+        with pytest.raises(ValueError):
+            mem.save_memory()
+
+    def test_save_memory_finite_round_trip_unchanged(self, tmp_path):
+        """Finite decisions must keep saving and reloading identically."""
+        path = tmp_path / "mem.json"
+        mem = DecisionMemory(memory_file=str(path))
+        mem.add_decision(make_record(pnl_pct=5.0))
+        mem.save_memory()
+
+        raw = Path(path).read_text()
+        assert "NaN" not in raw and "Infinity" not in raw
+
+        mem2 = DecisionMemory(memory_file=str(path))
+        assert len(mem2.decisions) == 1
+        assert mem2.decisions[0].pnl_pct == 5.0

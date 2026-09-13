@@ -145,8 +145,8 @@ class Portfolio:
         }
         
         with open(self.state_file, 'w') as f:
-            json.dump(state, f, indent=2)
-    
+            json.dump(state, f, indent=2, allow_nan=False)
+
     def save_trade(self, trade: Trade) -> None:
         """Append trade to history file and in-memory list."""
         self.trades.append(trade)
@@ -162,8 +162,8 @@ class Portfolio:
         trades.append(asdict(trade))
         
         with open(self.trades_file, 'w') as f:
-            json.dump(trades, f, indent=2)
-    
+            json.dump(trades, f, indent=2, allow_nan=False)
+
     @property
     def total_value(self) -> float:
         """Total portfolio value (cash + positions)."""

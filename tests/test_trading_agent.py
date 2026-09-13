@@ -12,10 +12,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
+import pytest
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import llm.trading_agent as trading_agent_module
 from llm.trading_agent import SYSTEM_PROMPT, TradingAgent
 
 
@@ -1131,7 +1133,48 @@ if __name__ == "__main__":
     test_build_prompt_non_finite_asset_fields()
     test_build_prompt_non_finite_portfolio_and_positions()
     test_build_prompt_non_finite_cooldown_status()
+    test_save_decision_fallback_branch_rejects_non_finite()
     
     print("=" * 60)
     print("All tests passed! ✓")
     print("=" * 60)
+
+
+def test_save_decision_fallback_branch_rejects_non_finite():
+    """When the safe serializer is unavailable, the raw-json fallback must
+    still refuse to persist NaN/Infinity tokens (allow_nan=False)."""
+    print("Test: Save Decision Fallback Branch Rejects Non-Finite")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        decision = {
+            "timestamp": datetime.now().isoformat(),
+            "actions": [{"ticker": "SPY", "action": "buy", "pct": 10.0}],
+            "reasoning": "finite decision",
+        }
+
+        original = trading_agent_module.JSON_SAFE_AVAILABLE
+        try:
+            trading_agent_module.JSON_SAFE_AVAILABLE = False
+
+            # Finite decision still saves through the fallback path.
+            agent.save_decision(decision)
+            loaded = json.loads(history_file.read_text())
+            assert loaded[0]["actions"][0]["pct"] == 10.0
+
+            # Non-finite decision must raise instead of writing NaN tokens.
+            bad_decision = {
+                "timestamp": datetime.now().isoformat(),
+                "actions": [{"ticker": "SPY", "action": "buy", "pct": float("nan")}],
+                "reasoning": "degenerate",
+            }
+            with pytest.raises(ValueError):
+                agent.save_decision(bad_decision)
+        finally:
+            trading_agent_module.JSON_SAFE_AVAILABLE = original
+
+        print("  Fallback path: finite saves, non-finite raises ValueError")
+        print("✓ Fallback strict-JSON contract test passed\n")

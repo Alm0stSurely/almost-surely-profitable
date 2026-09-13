@@ -91,7 +91,7 @@ class PositionCooldownManager:
             "last_updated": datetime.now().isoformat(),
         }
         with open(self.state_file, "w") as f:
-            json.dump(state, f, indent=2)
+            json.dump(state, f, indent=2, allow_nan=False)
 
     def record_entry(self, ticker: str) -> None:
         """Record that we entered a position in ticker."""

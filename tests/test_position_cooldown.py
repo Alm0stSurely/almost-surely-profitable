@@ -162,3 +162,46 @@ class TestPositionCooldownManager:
     def test_persistence_creates_file(self):
         self.mgr.save_state()
         assert (Path("/tmp/test_cooldown_manager") / "position_cooldowns.json").exists()
+
+
+class TestStrictJsonPersistenceBoundary:
+    """The cooldown state file is float-free (ISO date strings only); the
+    strict serializer flag is a static contract that it stays that way."""
+
+    def setup_method(self):
+        self.mgr = PositionCooldownManager(
+            data_dir="/tmp/test_cooldown_manager",
+            config=CooldownConfig(min_hold_days=5),
+        )
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree("/tmp/test_cooldown_manager", ignore_errors=True)
+
+    def _parse_strict(self, text):
+        import json
+
+        def _reject(token):
+            raise ValueError(f"Non-standard JSON token: {token}")
+
+        return json.loads(text, parse_constant=_reject)
+
+    def test_state_file_uses_strict_json_tokens(self):
+        self.mgr.record_entry("SPY")
+        self.mgr.record_exit("QQQ")
+        self.mgr.save_state()
+
+        raw = (Path("/tmp/test_cooldown_manager") / "position_cooldowns.json").read_text()
+        state = self._parse_strict(raw)
+        assert "SPY" in state["entries"]
+        assert "QQQ" in state["exits"]
+
+    def test_round_trip_unchanged_with_strict_flag(self):
+        self.mgr.record_entry("MC.PA")
+        self.mgr.save_state()
+
+        mgr2 = PositionCooldownManager(
+            data_dir="/tmp/test_cooldown_manager",
+            config=CooldownConfig(min_hold_days=5),
+        )
+        assert "MC.PA" in mgr2.entries

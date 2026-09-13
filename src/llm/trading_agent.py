@@ -271,7 +271,7 @@ class TradingAgent:
             if JSON_SAFE_AVAILABLE:
                 dump_json_safe(decisions, f, indent=2)
             else:
-                json.dump(decisions, f, indent=2)
+                json.dump(decisions, f, indent=2, allow_nan=False)
     
     def build_prompt(
         self,
