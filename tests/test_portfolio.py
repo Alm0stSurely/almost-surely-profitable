@@ -8,9 +8,11 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from portfolio.portfolio import Portfolio, Position
+from portfolio.portfolio import Portfolio, Position, Trade
 
 
 def test_position_creation():
@@ -363,7 +365,71 @@ if __name__ == "__main__":
     test_sell_rejects_non_finite_inputs()
     test_update_prices_ignores_non_finite_values()
     test_position_unrealized_pnl_pct_non_finite_cost_basis()
+    test_save_state_rejects_non_finite_values()
+    test_save_trade_rejects_non_finite_values()
+    test_save_state_finite_round_trip_unchanged()
     
     print("=" * 60)
     print("All tests passed! ✓")
     print("=" * 60)
+
+
+def test_save_state_rejects_non_finite_values():
+    """save_state must raise on non-finite aggregates instead of persisting
+    non-standard NaN/Infinity tokens that strict JSON parsers reject."""
+    print("Test: Save State Rejects Non-Finite Values")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        portfolio.buy("SPY", 40.0, 400.0)
+        portfolio.cash = float("nan")
+
+        with pytest.raises(ValueError):
+            portfolio.save_state()
+
+        print("  NaN cash -> ValueError raised at save boundary")
+        print("✓ Save state strict-JSON contract test passed\n")
+
+
+def test_save_trade_rejects_non_finite_values():
+    """save_trade must raise on non-finite trade fields instead of writing
+    NaN/Infinity tokens into the trades history."""
+    print("Test: Save Trade Rejects Non-Finite Values")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        trade = Trade(
+            timestamp=datetime.now().isoformat(),
+            ticker="SPY",
+            action="buy",
+            quantity=10.0,
+            price=float("inf"),
+            total_value=float("inf"),
+        )
+
+        with pytest.raises(ValueError):
+            portfolio.save_trade(trade)
+
+        print("  inf price -> ValueError raised at save boundary")
+        print("✓ Save trade strict-JSON contract test passed\n")
+
+
+def test_save_state_finite_round_trip_unchanged():
+    """The strict flag must not alter behavior for finite state (regression)."""
+    print("Test: Save State Finite Round Trip Unchanged")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio1 = Portfolio(data_dir=tmpdir)
+        portfolio1.buy("SPY", 40.0, 400.0)
+        portfolio1.save_state()
+
+        raw = Path(tmpdir, "portfolio_state.json").read_text()
+        assert "NaN" not in raw and "Infinity" not in raw
+        portfolio2 = Portfolio(data_dir=tmpdir)
+        assert "SPY" in portfolio2.positions
+
+        print("  Finite state saves and reloads identically")
+        print("✓ Finite round-trip regression test passed\n")
