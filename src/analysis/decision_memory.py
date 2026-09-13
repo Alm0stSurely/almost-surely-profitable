@@ -109,7 +109,8 @@ class DecisionMemory:
         """Save decision memory to disk."""
         self.memory_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.memory_file, 'w') as f:
-            json.dump([d.to_dict() for d in self.decisions], f, indent=2, default=str)
+            json.dump([d.to_dict() for d in self.decisions], f, indent=2,
+                      default=str, allow_nan=False)
         print(f"Saved {len(self.decisions)} decisions to memory")
     
     def add_decision(self, decision: DecisionRecord):
