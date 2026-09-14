@@ -26,6 +26,7 @@ from analysis.churn_analysis import (
     analyze_churn,
     analyze_cohort,
     load_decisions,
+    load_ledger_realized_pnl,
     load_trades,
     match_round_trips,
     print_report,
@@ -79,6 +80,28 @@ class TestLoadTrades:
         path.write_text("[]")
         result = load_trades(str(tmp_path))
         assert result == []
+
+
+class TestLoadLedgerRealizedPnl:
+    def test_missing_file_returns_nan(self, tmp_path):
+        result = load_ledger_realized_pnl(str(tmp_path))
+        assert math.isnan(result)
+
+    def test_loads_valid_value(self, tmp_path):
+        path = tmp_path / "portfolio_state.json"
+        path.write_text(json.dumps({"total_realized_pnl": -334.93}))
+        result = load_ledger_realized_pnl(str(tmp_path))
+        assert result == pytest.approx(-334.93)
+
+    def test_missing_key_returns_nan(self, tmp_path):
+        path = tmp_path / "portfolio_state.json"
+        path.write_text(json.dumps({"cash": 1000.0}))
+        assert math.isnan(load_ledger_realized_pnl(str(tmp_path)))
+
+    def test_non_finite_value_returns_nan(self, tmp_path):
+        path = tmp_path / "portfolio_state.json"
+        path.write_text(json.dumps({"total_realized_pnl": float("inf")}))
+        assert math.isnan(load_ledger_realized_pnl(str(tmp_path)))
 
 
 class TestLoadDecisions:

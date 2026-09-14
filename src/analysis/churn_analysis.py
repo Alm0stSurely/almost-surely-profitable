@@ -85,6 +85,21 @@ def load_decisions(data_dir: str = "data") -> List[Dict]:
         return json.load(f)
 
 
+def load_ledger_realized_pnl(data_dir: str = "data") -> float:
+    """Load the portfolio ledger's cumulative realized P&L.
+
+    Returns NaN when the ledger file or the value is missing/non-finite so
+    callers can render ``n/a`` via the standard safe-formatting helpers.
+    """
+    path = Path(data_dir) / "portfolio_state.json"
+    if not path.exists():
+        return float("nan")
+    with open(path) as f:
+        state = json.load(f)
+    value = state.get("total_realized_pnl")
+    return float(value) if _is_finite_number(value) else float("nan")
+
+
 def _parse_trade_timestamp(t: Dict) -> datetime:
     """Parse trade timestamp, falling back to the ISO date string prefix."""
     raw_ts = t.get("timestamp", "")
@@ -287,6 +302,21 @@ def main():
           f"win {_safe_pct_str(post.get('win_rate_pct'))}, "
           f"avg hold {_safe_value_str(post.get('avg_hold_days'), fmt='.1f')}d, "
           f"{_safe_value_str(post.get('trades_per_year'), fmt='.0f')} trades/yr")
+
+    # Ledger reconciliation: the round-trip sum only covers sells with a
+    # recorded preceding buy, so it diverges from the portfolio ledger when
+    # accounting resets or orphan sells exist in trades_history.
+    ledger_realized = load_ledger_realized_pnl()
+    rt_pnl = metrics.get("total_realized_pnl")
+    print(f"\n--- Ledger Reconciliation ---")
+    print(f"Round-trip P&L (trade ledger):  {_safe_value_str(rt_pnl, symbol='€', fmt='+.2f')}")
+    print(f"Portfolio ledger realized P&L:  {_safe_value_str(ledger_realized, symbol='€', fmt='+.2f')}")
+    if _is_finite_number(ledger_realized) and _is_finite_number(rt_pnl):
+        gap = ledger_realized - rt_pnl
+        if abs(gap) > 50:
+            print(f"⚠ Gap {_safe_value_str(gap, symbol='€', fmt='+.2f')}: trade ledger and portfolio ledger disagree.")
+            print("  Likely causes: accounting reset without compensating sell records,")
+            print("  orphan sells (matched buys pre-reset), or stale realized_pnl fields.")
     print("=" * 60)
 
 
