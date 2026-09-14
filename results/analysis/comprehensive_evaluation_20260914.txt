@@ -1,0 +1,55 @@
+======================================================================
+COMPREHENSIVE TRADING SYSTEM EVALUATION
+Generated: 2026-09-14 22:31:54
+======================================================================
+
+📊 PORTFOLIO STATUS
+----------------------------------------
+Total Value: €9,874.84
+Cash: €2,945.15 (29.8%)
+Realized P&L: €-334.93
+Positions: 8
+
+📈 PERFORMANCE TRENDS (30 days)
+----------------------------------------
+Period Return: +0.88%
+Highest Value: €10,010.04
+Lowest Value: €9,788.68
+Volatility (ann): 5.6%
+
+🤖 LLM DECISION QUALITY
+----------------------------------------
+Loading 30 daily result files...
+Loaded 4 decision records with trades
+Decisions Analyzed: 4 days
+
+Analyzing outcomes with 5-day forward window...
+  Buy decisions: 4
+  Sell decisions: 2
+Total Trades: 6
+Avg Trades/Day: 1.5
+
+Win Rate: 50.0%
+Buy Accuracy: 50.0%
+Sell Accuracy: 50.0%
+
+⚠️  RISK ASSESSMENT
+----------------------------------------
+VaR (95%): -0.46%
+CVaR (95%): -0.55%
+Max Drawdown (est): -0.57%
+
+🔧 SYSTEM HEALTH
+----------------------------------------
+✓ Data feed: Operational
+✓ Core files: Present
+
+======================================================================
+SUMMARY
+======================================================================
+Total Return: -1.25%
+Alpha (vs Buy & Hold SPY) since 2026-02-17: -13.77 pp
+  Strategy -1.25% | SPY +12.52%
+
+✓ Evaluation complete.
+======================================================================
