@@ -422,7 +422,31 @@ class TestCalculatePurgedCVScore:
         scores = calculate_purged_cv_score(results, mae)
         assert len(scores["scores"]) == 1
         assert scores["mean"] == scores["scores"][0]
-        assert scores["std"] == 0.0
+        # Sample std (ddof=1) is undefined for a single fold (n - 1 = 0);
+        # NaN matches the empty-folds sentinel convention.
+        assert np.isnan(scores["std"])
+
+    def test_std_uses_sample_std_ddof1(self):
+        """Fold-score dispersion must use the sample std (ddof=1), consistent
+        with the repo-wide estimator convention (performance_metrics, cvar,
+        backtest). With ddof=0 the scores [1, 2, 3] would give sqrt(2/3)
+        instead of exactly 1.0."""
+        results = pd.DataFrame(
+            {
+                "actual": [1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+                "predicted": [1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+                "fold": [0, 0, 1, 1, 2, 2],
+                "combination_id": [0, 0, 1, 1, 2, 2],
+            }
+        )
+
+        def first_actual(y_true, y_pred):
+            return float(y_true.iloc[0])
+
+        scores = calculate_purged_cv_score(results, first_actual)
+        assert scores["scores"] == [1.0, 2.0, 3.0]
+        assert scores["std"] == 1.0  # ddof=1: deviations -1, 0, 1 -> sqrt(2/2)
+        assert scores["std"] != pytest.approx(np.sqrt(2.0 / 3.0))  # ddof=0 would give this
 
     def test_empty_folds_returns_nan(self):
         """When all folds are skipped, statistics should be NaN, not raise."""

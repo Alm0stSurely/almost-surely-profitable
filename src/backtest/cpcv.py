@@ -255,7 +255,10 @@ def calculate_purged_cv_score(
     
     return {
         'mean': np.mean(fold_scores) if fold_scores else float('nan'),
-        'std': np.std(fold_scores) if fold_scores else float('nan'),
+        # Sample std (ddof=1) for consistency with the repo-wide estimator
+        # convention (performance_metrics, cvar, backtest). Undefined for a
+        # single fold (n - 1 = 0) -> NaN, matching the empty-folds sentinel.
+        'std': np.std(fold_scores, ddof=1) if len(fold_scores) > 1 else float('nan'),
         'min': np.min(fold_scores) if fold_scores else float('nan'),
         'max': np.max(fold_scores) if fold_scores else float('nan'),
         'scores': fold_scores
