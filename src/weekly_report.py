@@ -72,8 +72,13 @@ def fetch_benchmark_returns(start_date, end_date, benchmarks=None):
         for benchmark in benchmarks:
             if benchmark in data and 'Close' in data[benchmark].columns and len(data[benchmark]) >= 2:
                 df = data[benchmark]
+                # Normalize tz-aware index to naive UTC, matching the canonical
+                # convention in data/fetch_market_data.py (tz_convert before
+                # tz_localize). tz_localize(None) alone would keep the
+                # exchange-local wall clock (e.g. 00:00 Europe/Paris =
+                # 22:00 UTC the previous day), mislabeling daily bars.
                 if hasattr(df.index, 'tz') and df.index.tz is not None:
-                    df.index = df.index.tz_localize(None)
+                    df.index = df.index.tz_convert("UTC").tz_localize(None)
                 closes = df['Close'].dropna().values
                 closes = closes[np.isfinite(closes)]
                 if len(closes) < 2:

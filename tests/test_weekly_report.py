@@ -593,3 +593,36 @@ class TestGenerateWeeklyReportFormatting:
         assert "| **Total Value** | **n/a** |" in markdown
         assert "| Total Return | n/a |" in markdown
         assert "| SPY | n/a | n/a | n/a | n/a | n/a |" in markdown
+
+
+class TestFetchBenchmarkReturnsTzNormalization:
+    """tz-aware benchmark indices must be converted to naive UTC, matching the
+    canonical convention in data/fetch_market_data.py (tz_convert before
+    tz_localize). tz_localize(None) alone keeps the exchange-local wall clock,
+    mislabeling daily bars (Paris midnight = 22:00 UTC the previous day)."""
+
+    @patch("weekly_report.fetch_historical_data")
+    def test_tz_aware_index_converted_to_utc(self, mock_fetch):
+        tz_index = pd.date_range("2026-09-10", periods=4, freq="D", tz="Europe/Paris")
+        df = pd.DataFrame({"Close": [7000.0, 7100.0, 7050.0, 7200.0]}, index=tz_index)
+        mock_fetch.return_value = {"CAC.PA": df}
+
+        result = fetch_benchmark_returns("2026-09-10", "2026-09-13", benchmarks=["CAC.PA"])
+
+        assert result is not None
+        # Mutation is observable on the mocked frame: naive UTC labels.
+        assert df.index.tz is None
+        assert df.index[0] == pd.Timestamp("2026-09-09 22:00:00")
+        assert result["CAC.PA"]["cumulative_return"] == pytest.approx(7200.0 / 7000.0 - 1, abs=1e-9)
+
+    @patch("weekly_report.fetch_historical_data")
+    def test_naive_index_untouched(self, mock_fetch):
+        """Naive indices (the normal path via fetch_historical_data, which
+        already normalizes) must pass through unchanged."""
+        df = pd.DataFrame({"Close": [400.0, 405.0]})
+        mock_fetch.return_value = {"SPY": df}
+
+        result = fetch_benchmark_returns("2026-09-10", "2026-09-11", benchmarks=["SPY"])
+
+        assert result is not None
+        assert result["SPY"]["cumulative_return"] == pytest.approx(405.0 / 400.0 - 1, abs=1e-9)
