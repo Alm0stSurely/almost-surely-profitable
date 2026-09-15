@@ -175,14 +175,16 @@ class DecisionAnalyzer:
             if not isinstance(df.index, pd.DatetimeIndex):
                 df.index = pd.to_datetime(df.index)
             
-            # Parse entry date - make it timezone-naive for comparison
+            # Parse entry date - normalize tz-aware values to naive UTC,
+            # matching the canonical convention in data/fetch_market_data.py
+            # (tz_convert before tz_localize keeps absolute instants intact)
             entry_date = pd.to_datetime(date)
             if entry_date.tzinfo is not None:
-                entry_date = entry_date.tz_localize(None)
-            
-            # Make index timezone-naive for comparison
+                entry_date = entry_date.tz_convert("UTC").tz_localize(None)
+
+            # Make index timezone-naive for comparison (UTC, same convention)
             if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
+                df.index = df.index.tz_convert("UTC").tz_localize(None)
             
             # Find the entry date or next available trading day
             mask = df.index >= entry_date

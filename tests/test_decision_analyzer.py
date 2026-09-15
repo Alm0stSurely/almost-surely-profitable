@@ -762,3 +762,47 @@ def test_analyze_outcomes_date_before_data(mock_fetch, analyzer):
     # NaN records are excluded, so no decisions are scored.
     assert metrics2["total_decisions"] == 0
     assert metrics2["win_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Timezone normalization convention (tz_convert("UTC") before tz_localize(None))
+# ---------------------------------------------------------------------------
+
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_forward_return_tz_aware_index_normalized_to_utc(mock_fetch, analyzer):
+    """Exchange-local tz-aware daily bars must be converted to UTC, not just
+    stripped: a Paris-midnight bar (00:00+02:00 = 22:00 UTC the previous day)
+    would otherwise be mislabeled and shift the entry-day selection."""
+    tz_index = pd.date_range("2026-09-10", periods=5, freq="D", tz="Europe/Paris")
+    df = pd.DataFrame({
+        "Close": [100.0, 110.0, 120.0, 130.0, 140.0],
+    }, index=tz_index)
+    mock_fetch.return_value = {"AI.PA": df}
+
+    result = analyzer._get_forward_return("AI.PA", "2026-09-11", 100.0, days=2)
+
+    # The analyzer copies the frame internally, so assert on behavior: with the
+    # UTC convention, 2026-09-11 00:00+02:00 -> 2026-09-10 22:00 UTC and the
+    # entry 2026-09-11 00:00 UTC first observes the 09-11 22:00 UTC bar (close
+    # 120); 2 days forward -> 140. The old tz_localize(None) convention keeps
+    # the Paris wall clock and would pick close 110 -> 130 instead.
+    assert result == pytest.approx(140.0 / 120.0 - 1, abs=1e-9)
+
+
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_forward_return_tz_aware_entry_date_normalized_to_utc(mock_fetch, analyzer):
+    """A tz-aware entry timestamp must be converted to the same naive-UTC
+    frame as the index before comparison; stripping the tz keeps local wall
+    clock and can select a different bar near the day boundary."""
+    index = pd.to_datetime([
+        "2026-09-10 21:00:00",
+        "2026-09-11 21:00:00",
+    ])
+    df = pd.DataFrame({"Close": [100.0, 110.0]}, index=index)
+    mock_fetch.return_value = {"AI.PA": df}
+
+    # 2026-09-10 22:30+02:00 = 20:30 UTC -> matches the first bar (21:00 UTC).
+    # tz_localize(None) alone would keep 22:30 local and match the second bar.
+    result = analyzer._get_forward_return("AI.PA", "2026-09-10T22:30:00+02:00", 100.0, days=1)
+
+    assert result == pytest.approx(110.0 / 100.0 - 1, abs=1e-9)
