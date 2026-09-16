@@ -213,7 +213,15 @@ class Portfolio:
             print(f"Order too small: {quantity} shares")
             return False
         
+        # Snap the IEEE-754 round-trip: quantity * current_price can exceed
+        # cash_to_use by 1 ulp (division followed by multiplication is not
+        # guaranteed to round back down), which would reject a legitimate
+        # full-cash order with an "Insufficient cash" false negative.
+        # One ULP step toward zero is always sufficient to flip the overshoot.
         total_cost = quantity * current_price
+        if total_cost > cash_to_use:
+            quantity = math.nextafter(quantity, 0.0)
+            total_cost = quantity * current_price
         
         if total_cost > self.cash:
             print(f"Insufficient cash: €{self.cash:.2f} < €{total_cost:.2f}")

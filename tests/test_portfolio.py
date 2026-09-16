@@ -433,3 +433,47 @@ def test_save_state_finite_round_trip_unchanged():
 
         print("  Finite state saves and reloads identically")
         print("✓ Finite round-trip regression test passed\n")
+
+
+def test_full_cash_buy_round_trip_affordability():
+    """A 100%-of-cash buy must never be rejected by the affordability guard.
+
+    quantity = cash / price followed by total_cost = quantity * price is an
+    IEEE-754 round-trip that can land 1 ulp ABOVE the exact budget, producing
+    a false "Insufficient cash" rejection. The pair below is a verified
+    round-up site (cash=12345.678, price=757.42).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        portfolio = Portfolio(data_dir=tmpdir)
+        portfolio.cash = 12345.678
+
+        # Pre-fix this raises "Insufficient cash: €12345.68 < €12345.68"
+        result = portfolio.buy("SPY", 100.0, 757.42)
+
+        assert result is True, "Full-cash buy must not be rejected by ULP overshoot"
+        assert "SPY" in portfolio.positions
+        assert portfolio.cash >= 0.0
+        # Position quantity is the snapped (1-ULP-lower) value; cost consistency
+        # quantity * price == recorded total_value is preserved by construction.
+        pos = portfolio.positions["SPY"]
+        assert pos.quantity * 757.42 <= 12345.678 + 1e-9
+
+
+def test_full_cash_buy_never_negative_cash():
+    """Property sweep: 100% buys across many (cash, price) pairs must always
+    execute and never drive cash below zero."""
+    cases = [
+        (10000.0, 68.64), (10000.0, 20.09), (10000.0, 757.42),
+        (2945.15, 80.71), (2369.19, 140.07), (999.99, 123.456),
+        (12345.678, 757.42), (777.77, 3.0), (555.55, 0.07),
+        (3210.987, 7.77), (8888.88, 999.99), (1000.0, 0.1),
+    ]
+    for i, (cash, price) in enumerate(cases):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            portfolio = Portfolio(data_dir=tmpdir)
+            portfolio.cash = cash
+            result = portfolio.buy("XYZ", 100.0, price)
+            assert result is True, f"Full-cash buy rejected: cash={cash} price={price}"
+            assert portfolio.cash >= 0.0, (
+                f"Negative cash after full-cash buy: cash={cash} price={price} -> {portfolio.cash!r}"
+            )
