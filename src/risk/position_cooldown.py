@@ -105,6 +105,30 @@ class PositionCooldownManager:
             del self.entries[ticker]
         self._record_trade()
 
+    def reconcile_entries(self, held_tickers) -> List[str]:
+        """Drop entry records for tickers that are no longer held.
+
+        An entry without a matching position means the exit happened outside
+        the recorded path (e.g. an intraday stop-loss session executing
+        portfolio.sell() directly). Stale entries otherwise linger forever in
+        the report banner and the LLM prompt as phantom "active positions".
+
+        Exits are deliberately NOT synthesized for pruned tickers: writing an
+        exit timestamp would arm the flip cooldown and block legitimate
+        re-entry for flip_cooldown_days.
+
+        Args:
+            held_tickers: iterable of tickers with an open position.
+
+        Returns:
+            Sorted list of pruned ticker names.
+        """
+        held = set(held_tickers)
+        stale = sorted(t for t in self.entries if t not in held)
+        for ticker in stale:
+            del self.entries[ticker]
+        return stale
+
     def _week_start(self, dt: datetime) -> datetime:
         """Return the start of the ISO calendar week for dt (Monday 00:00)."""
         return (dt - timedelta(days=dt.weekday())).replace(
