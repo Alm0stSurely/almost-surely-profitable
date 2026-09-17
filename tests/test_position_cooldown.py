@@ -164,6 +164,89 @@ class TestPositionCooldownManager:
         assert (Path("/tmp/test_cooldown_manager") / "position_cooldowns.json").exists()
 
 
+class TestReconcileEntries:
+    """reconcile_entries() drops entry records for no-longer-held tickers."""
+
+    def setup_method(self):
+        self.mgr = PositionCooldownManager(
+            data_dir="/tmp/test_cooldown_reconcile",
+            config=CooldownConfig(min_hold_days=5, flip_cooldown_days=10),
+        )
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree("/tmp/test_cooldown_reconcile", ignore_errors=True)
+
+    def test_prunes_stale_entry_and_keeps_held(self):
+        self.mgr.entries["SPY"] = datetime.now() - timedelta(days=20)
+        self.mgr.entries["QQQ"] = datetime.now() - timedelta(days=90)
+        self.mgr.entries["TTE.PA"] = datetime.now() - timedelta(days=79)
+
+        pruned = self.mgr.reconcile_entries(["SPY", "GLD"])
+
+        assert pruned == ["QQQ", "TTE.PA"]
+        assert "SPY" in self.mgr.entries
+        assert "QQQ" not in self.mgr.entries
+        assert "TTE.PA" not in self.mgr.entries
+
+    def test_reconcile_does_not_arm_flip_cooldown(self):
+        """Pruning must not synthesize exits — re-entry must stay allowed.
+
+        Writing an exit timestamp for a pruned ticker would arm the flip
+        cooldown and block legitimate re-entry for flip_cooldown_days.
+        """
+        self.mgr.entries["QQQ"] = datetime.now() - timedelta(days=90)
+
+        self.mgr.reconcile_entries([])
+
+        assert "QQQ" not in self.mgr.exits
+        can_buy, reason = self.mgr.can_buy("QQQ")
+        assert can_buy is True
+        assert "Flip cooldown" not in reason
+
+    def test_reconcile_empty_held_prunes_everything(self):
+        self.mgr.entries["SPY"] = datetime.now()
+        self.mgr.entries["TLT"] = datetime.now()
+
+        pruned = self.mgr.reconcile_entries([])
+
+        assert sorted(pruned) == ["SPY", "TLT"]
+        assert self.mgr.entries == {}
+
+    def test_reconcile_is_idempotent(self):
+        self.mgr.entries["SPY"] = datetime.now()
+
+        first = self.mgr.reconcile_entries(["SPY"])
+        second = self.mgr.reconcile_entries(["SPY"])
+
+        assert first == []
+        assert second == []
+        assert "SPY" in self.mgr.entries
+
+    def test_reconcile_returns_sorted_list(self):
+        self.mgr.entries["ZZZ"] = datetime.now()
+        self.mgr.entries["AAA"] = datetime.now()
+        self.mgr.entries["MMM"] = datetime.now()
+
+        pruned = self.mgr.reconcile_entries([])
+
+        assert pruned == ["AAA", "MMM", "ZZZ"]
+
+    def test_reconcile_pruned_state_persists(self):
+        """After save_state, a fresh manager must not resurrect pruned entries."""
+        self.mgr.entries["SPY"] = datetime.now()
+        self.mgr.entries["QQQ"] = datetime.now()
+        self.mgr.reconcile_entries(["SPY"])
+        self.mgr.save_state()
+
+        mgr2 = PositionCooldownManager(
+            data_dir="/tmp/test_cooldown_reconcile",
+            config=CooldownConfig(min_hold_days=5),
+        )
+        assert "SPY" in mgr2.entries
+        assert "QQQ" not in mgr2.entries
+
+
 class TestStrictJsonPersistenceBoundary:
     """The cooldown state file is float-free (ISO date strings only); the
     strict serializer flag is a static contract that it stays that way."""

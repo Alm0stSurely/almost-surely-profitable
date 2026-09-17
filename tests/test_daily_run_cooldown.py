@@ -200,6 +200,100 @@ class TestBackpopulateCooldownEntries:
         assert 'SPY' not in mgr.entries
 
 
+class TestStaleEntryReconciliation:
+    """Integration: backpopulate + reconcile_entries mirrors the daily_run flow.
+
+    Production incident (2026-09-14): QQQ and TTE.PA had stale cooldown
+    entries ~3 months after being exited, because the exits happened outside
+    daily_run.py's recorded sell path. backpopulate_cooldown_entries alone
+    never removes entries for non-held tickers, so the phantoms persisted in
+    the report banner and the LLM prompt.
+    """
+
+    def setup_method(self):
+        self.test_dir = Path("/tmp/test_stale_reconcile")
+        if self.test_dir.exists():
+            shutil.rmtree(self.test_dir)
+        self.test_dir.mkdir()
+
+    def teardown_method(self):
+        if self.test_dir.exists():
+            shutil.rmtree(self.test_dir)
+
+    def test_reconcile_after_backpopulate_drops_phantom_entries(self):
+        """Held entry backpopulated from history; stale entry pruned."""
+        buy_time = datetime(2026, 5, 7, 10, 0, 0)
+        trades = [
+            {
+                'timestamp': buy_time.isoformat(),
+                'ticker': 'SPY',
+                'action': 'buy',
+                'price': 400.0,
+                'quantity': 1.0,
+                'total_value': 400.0
+            },
+        ]
+        portfolio = Mock()
+        portfolio.positions = {
+            'SPY': Mock(avg_price=100.0, quantity=1.0, current_price=100.0)
+        }
+        trades_file = self.test_dir / "trades_history.json"
+        with open(trades_file, 'w') as f:
+            json.dump(trades, f)
+        portfolio.trades_file = trades_file
+
+        # Simulate the persisted cooldown state loaded at startup
+        state = {
+            "entries": {
+                "SPY": "2026-06-01T21:00:00",
+                "QQQ": "2026-06-16T21:06:37",
+                "TTE.PA": "2026-06-30T21:08:07",
+            },
+            "exits": {},
+            "weekly_trades": [],
+            "last_updated": "2026-09-16T21:06:17",
+        }
+        with open(self.test_dir / "position_cooldowns.json", 'w') as f:
+            json.dump(state, f)
+
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        # Exact daily_run.py sequence
+        backpopulate_cooldown_entries(mgr, portfolio)
+        pruned = mgr.reconcile_entries(portfolio.positions.keys())
+
+        assert pruned == ["QQQ", "TTE.PA"]
+        assert set(mgr.entries.keys()) == {"SPY"}
+        # Held entry reflects the most recent buy from trade history
+        assert mgr.entries["SPY"] == buy_time
+        # Pruned state survives save/reload
+        mgr.save_state()
+        mgr2 = PositionCooldownManager(data_dir=str(self.test_dir))
+        assert set(mgr2.entries.keys()) == {"SPY"}
+        # No phantom exits were synthesized: flip cooldown stays disarmed
+        assert "QQQ" not in mgr2.exits
+        assert "TTE.PA" not in mgr2.exits
+
+    def test_reconcile_does_not_prune_held_entries(self):
+        """All held tickers keep their entries through the daily flow."""
+        portfolio = Mock()
+        portfolio.positions = {
+            'SPY': Mock(avg_price=100.0, quantity=1.0, current_price=100.0),
+            'GLD': Mock(avg_price=50.0, quantity=2.0, current_price=50.0),
+        }
+        portfolio.trades_file = self.test_dir / "nonexistent.json"
+
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+        mgr.entries["SPY"] = datetime.now() - timedelta(days=10)
+        mgr.entries["GLD"] = datetime.now() - timedelta(days=3)
+
+        backpopulate_cooldown_entries(mgr, portfolio)
+        pruned = mgr.reconcile_entries(portfolio.positions.keys())
+
+        assert pruned == []
+        assert set(mgr.entries.keys()) == {"SPY", "GLD"}
+
+
 class TestCooldownExecutionLoop:
     """
     Test suite for the cooldown enforcement in the execution loop.

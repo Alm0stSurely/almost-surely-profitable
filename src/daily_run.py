@@ -203,6 +203,12 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     cooldown_config = CooldownConfig(current_vol_regime=vol_regime)
     cooldown_mgr = PositionCooldownManager(data_dir=str(DATA_DIR), config=cooldown_config)
     backpopulate_cooldown_entries(cooldown_mgr, portfolio)
+    # Drop entry records for tickers no longer held (exits executed outside
+    # the recorded path, e.g. intraday stop-loss sessions). Without this the
+    # phantom entries persist in the report banner and the LLM prompt.
+    pruned = cooldown_mgr.reconcile_entries(portfolio.positions.keys())
+    if pruned:
+        print(f"  Pruned stale cooldown entries (exited outside recorded path): {', '.join(pruned)}")
     cooldown_status = cooldown_mgr.get_status()
     print(f"  ✓ Cooldown manager active — trades this week: {cooldown_status['trades_this_week']}/{cooldown_status['weekly_cap']}")
     print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {_safe_pct_str(cooldown_status['adaptive_stop_loss'], '.1f')}")
