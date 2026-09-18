@@ -227,7 +227,15 @@ def calculate_calmar_ratio(
     if max_drawdown is None:
         cumulative = np.cumprod(1 + returns)
         rolling_max = np.maximum.accumulate(cumulative)
-        drawdowns = (cumulative - rolling_max) / rolling_max
+        # Guard against 0/0 when cumulative wealth hits exactly zero.
+        # When rolling_max == 0, the drawdown is definitionally -100%
+        # (wealth went to zero and never recovered).
+        drawdowns = np.divide(
+            cumulative - rolling_max,
+            rolling_max,
+            out=np.full_like(cumulative, -1.0),
+            where=rolling_max > 0
+        )
         max_drawdown = np.min(drawdowns)
     
     if abs(max_drawdown) < 1e-15 or np.isnan(max_drawdown):
@@ -358,7 +366,15 @@ def calculate_all_metrics(
     # Max drawdown
     cumulative = np.cumprod(1 + returns)
     rolling_max = np.maximum.accumulate(cumulative)
-    drawdowns = (cumulative - rolling_max) / rolling_max
+    # Guard against 0/0 when cumulative wealth hits exactly zero.
+    # When rolling_max == 0, the drawdown is definitionally -100%
+    # (wealth went to zero and never recovered).
+    drawdowns = np.divide(
+        cumulative - rolling_max,
+        rolling_max,
+        out=np.full_like(cumulative, -1.0),
+        where=rolling_max > 0
+    )
     max_drawdown = np.min(drawdowns)
     
     # Calmar
