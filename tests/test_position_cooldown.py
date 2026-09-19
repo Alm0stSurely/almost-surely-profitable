@@ -34,9 +34,30 @@ class TestPositionCooldownManager:
         assert "No cooldown" in reason
 
     def test_can_sell_without_entry_record(self):
+        # Fail-open on exit: a bookkeeping gap must not block the exit door.
+        ok, reason = self.mgr.can_sell("SPY", 400.0, 400.0)
+        assert ok is True
+        assert "No entry record" in reason
+        assert "exit allowed" in reason
+
+    def test_missing_entry_record_does_not_block_stop_loss_exit(self):
+        # A position bleeding past the stop-loss threshold with lost
+        # bookkeeping must remain exitable through the guarded path.
+        ok, reason = self.mgr.can_sell("SPY", 340.0, 400.0)
+        assert ok is True
+        assert "No entry record" in reason
+
+    def test_missing_entry_record_still_respects_weekly_cap(self):
+        # The weekly trade cap is verifiable bookkeeping and restrains
+        # frequency, not risk exits of unrecorded positions — but it is
+        # evaluated before the entry-record check and still applies.
+        self.mgr.record_entry("A")
+        self.mgr.record_exit("A")
+        self.mgr.record_entry("B")
+        self.mgr.record_exit("B")
         ok, reason = self.mgr.can_sell("SPY", 400.0, 400.0)
         assert ok is False
-        assert "No entry record" in reason
+        assert "Weekly trade cap" in reason
 
     def test_min_hold_period_blocks_sell(self):
         self.mgr.record_entry("SPY")

@@ -187,7 +187,17 @@ class PositionCooldownManager:
         # Check minimum holding period
         entry_time = self.entries.get(ticker)
         if entry_time is None:
-            return (False, f"No entry record for {ticker}")
+            # Fail-open on exit: a missing entry record is a bookkeeping gap,
+            # not evidence about the true holding period. Blocking the sell
+            # would freeze the position (including its stop-loss exit door)
+            # whenever state is lost (e.g. _load_state's corruption fallback
+            # resetting all entries). The min-hold restraint requires a
+            # verifiable entry time; without one it cannot be evaluated, and
+            # an exit must never be blocked by missing bookkeeping.
+            return (
+                True,
+                f"No entry record for {ticker}; exit allowed (missing bookkeeping must not block an exit)"
+            )
 
         hold_days = (datetime.now() - entry_time).total_seconds() / 86400
         if hold_days < self.config.min_hold_days:

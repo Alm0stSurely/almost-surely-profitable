@@ -130,8 +130,16 @@ class BacktestCooldownManager:
         # Check minimum holding period
         entry_time = self.entries.get(ticker)
         if entry_time is None:
-            self.blocked_sells += 1
-            return (False, f"No entry record for {ticker}")
+            # Fail-open on exit, mirroring the live PositionCooldownManager:
+            # a missing entry record is a bookkeeping gap, not evidence about
+            # the true holding period. Blocking the sell would freeze the
+            # simulated position (including its stop-loss exit door) whenever
+            # state is lost. Not counted in blocked_sells: this is an allowed
+            # path, not a restraint firing.
+            return (
+                True,
+                f"No entry record for {ticker}; exit allowed (missing bookkeeping must not block an exit)"
+            )
 
         hold_days = (current_date - entry_time).total_seconds() / 86400
         if hold_days < self.config.min_hold_days:
