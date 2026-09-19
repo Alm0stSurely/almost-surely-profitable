@@ -26,11 +26,27 @@ class TestBacktestCooldownManager:
         assert "No cooldown" in reason
 
     def test_can_sell_without_entry_record(self):
-        """Selling without an entry record should be blocked."""
+        """Missing entry record must not block the exit door (fail-open)."""
         mgr = BacktestCooldownManager()
         allowed, reason = mgr.can_sell("AAPL", datetime(2024, 1, 15), 100.0, 90.0)
-        assert allowed is False
+        assert allowed is True
         assert "No entry record" in reason
+        assert "exit allowed" in reason
+        # Allowed path is not a restraint firing: blocked_sells untouched.
+        assert mgr.blocked_sells == 0
+
+    def test_missing_entry_record_still_respects_weekly_cap(self):
+        """Weekly cap is verifiable bookkeeping and still blocks exits."""
+        mgr = BacktestCooldownManager()
+        # All four trades land in the same ISO week as the can_sell call
+        # (Mon 2024-01-15): the cap filter keys on the caller's current_date.
+        mgr.record_entry("A", datetime(2024, 1, 15, 9))
+        mgr.record_exit("A", datetime(2024, 1, 15, 10))
+        mgr.record_entry("B", datetime(2024, 1, 15, 11))
+        mgr.record_exit("B", datetime(2024, 1, 15, 12))
+        allowed, reason = mgr.can_sell("AAPL", datetime(2024, 1, 15, 15), 100.0, 90.0)
+        assert allowed is False
+        assert "Weekly trade cap" in reason
 
     def test_min_hold_period_blocks_sell(self):
         """Selling before min_hold_days should be blocked."""
