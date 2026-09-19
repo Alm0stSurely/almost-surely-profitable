@@ -387,3 +387,35 @@ def test_format_metrics_report_smoke():
     report = format_metrics_report(metrics, benchmark_name="SPY")
     assert "PORTFOLIO PERFORMANCE METRICS" in report
     assert "SPY" in report
+
+
+# ---------------------------------------------------------------------------
+# Max drawdown: zero-wealth edge case
+# ---------------------------------------------------------------------------
+
+def test_calculate_all_metrics_first_return_total_loss():
+    """A first return of exactly -100% must report max_drawdown = -1.0, not 0.0.
+
+    When the very first return is -1.0, cumulative wealth is 0 from day one.
+    The naive (cumulative - rolling_max) / rolling_max computes 0/0 = NaN,
+    and the downstream finite guard silently maps that NaN to 0.0.  The
+    financially correct value is -1.0 (a 100% drawdown).
+    """
+    returns = np.array([-1.0, 0.01, 0.02])
+    metrics = calculate_all_metrics(returns)
+    assert metrics.max_drawdown == -1.0
+
+
+def test_calculate_calmar_ratio_first_return_total_loss():
+    """Calmar ratio with a first-return total loss uses max_drawdown = -1.0."""
+    returns = np.array([-1.0, 0.01, 0.02])
+    calmar = calculate_calmar_ratio(returns)
+    # annualized_return = -1.0, max_drawdown = -1.0  =>  calmar = -1.0 / 1.0 = -1.0
+    assert calmar == pytest.approx(-1.0)
+
+
+def test_calculate_all_metrics_zero_wealth_mid_series():
+    """Total loss mid-series still yields max_drawdown = -1.0."""
+    returns = np.array([0.5, -1.0, 0.01])
+    metrics = calculate_all_metrics(returns)
+    assert metrics.max_drawdown == -1.0
