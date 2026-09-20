@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+from utils import load_json_list_or_quarantine
+
 
 @dataclass
 class Position:
@@ -148,17 +150,16 @@ class Portfolio:
             json.dump(state, f, indent=2, allow_nan=False)
 
     def save_trade(self, trade: Trade) -> None:
-        """Append trade to history file and in-memory list."""
+        """Append trade to history file and in-memory list.
+
+        The backing file is the append-only trade ledger: if it is corrupt,
+        it is quarantined (renamed, not truncated) and the new trade starts a
+        fresh ledger — the previous records stay on disk for recovery.
+        """
         self.trades.append(trade)
-        
-        trades = []
-        if self.trades_file.exists():
-            try:
-                with open(self.trades_file, 'r') as f:
-                    trades = json.load(f)
-            except:
-                trades = []
-        
+
+        trades = load_json_list_or_quarantine(self.trades_file, context="trade ledger")
+
         trades.append(asdict(trade))
         
         with open(self.trades_file, 'w') as f:

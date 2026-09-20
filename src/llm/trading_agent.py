@@ -31,7 +31,7 @@ except ImportError:
 
 # Import shared JSON-safe serialization helpers
 try:
-    from utils import dump_json_safe, sanitize_for_json
+    from utils import dump_json_safe, load_json_list_or_quarantine, sanitize_for_json
     JSON_SAFE_AVAILABLE = True
 except ImportError:
     JSON_SAFE_AVAILABLE = False
@@ -253,14 +253,25 @@ class TradingAgent:
             return []
     
     def save_decision(self, decision: Dict) -> None:
-        """Save decision to history file."""
-        decisions = []
-        if self.history_file.exists():
-            try:
-                with open(self.history_file, 'r') as f:
-                    decisions = json.load(f)
-            except:
-                decisions = []
+        """Save decision to history file.
+
+        Append-then-overwrite on a corrupt history file must not silently
+        truncate it: quarantine the file (rename, preserve records) and start
+        a fresh history with the new decision.
+        """
+        if JSON_SAFE_AVAILABLE:
+            decisions = load_json_list_or_quarantine(self.history_file, context="decision history")
+        else:
+            # Standalone fallback without the shared utils module: keep the
+            # previous read logic but log instead of swallowing.
+            decisions = []
+            if self.history_file.exists():
+                try:
+                    with open(self.history_file, 'r') as f:
+                        decisions = json.load(f)
+                except Exception as e:
+                    logger.error(f"Error loading decision history: {e}")
+                    decisions = []
         
         decisions.append(decision)
 

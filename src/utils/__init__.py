@@ -1,8 +1,12 @@
 """Utilities for loading and validating daily trading results."""
 import json
+import logging
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 MIN_ASSETS_FOR_VALID_RUN = 5
@@ -119,3 +123,57 @@ def dump_json_safe(
         json.dump(cleaned, f, indent=indent, default=default, allow_nan=False, **kwargs)
     except ValueError as exc:
         raise ValueError(f"JSON serialization failed for {type(obj).__name__}: {exc}") from exc
+
+
+def load_json_list_or_quarantine(path, *, context: str = "ledger") -> List[Any]:
+    """Load a JSON list file for an append-then-overwrite flow.
+
+    Append-then-overwrite flows (trade ledger, decision history) read the whole
+    backing file, append the new record, and rewrite it. If the read silently
+    falls back to ``[]`` on corruption, the rewrite *truncates the ledger to a
+    single record* — the inconsistency destroys the evidence. A corrupt ledger
+    is data to preserve, not an empty list.
+
+    On any read/parse/shape failure the file is renamed to
+    ``<name>.corrupt-<timestamp>`` (preserved for manual recovery) and an empty
+    list is returned so the caller can persist the new record without
+    destroying history. The quarantine makes the failure loud: an error is
+    logged and the stray ``.corrupt-*`` file is visible to the nightly
+    reconcile / a human.
+
+    If the quarantine rename itself fails (e.g. filesystem errors), the error
+    is logged and an empty list is still returned; the caller's subsequent
+    write will then surface any real filesystem problem at the write site.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+
+    data: Any = None
+    reason = "unparseable"
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        reason = f"wrong shape (expected list, got {type(data).__name__})"
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        reason = f"unreadable ({type(exc).__name__}: {exc})"
+
+    if not isinstance(data, list):
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S-%f")
+        quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+        try:
+            path.rename(quarantine)
+            logger.error(
+                "Corrupt %s %s (%s) quarantined to %s; starting fresh ledger "
+                "(previous records preserved for recovery).",
+                context, path, reason, quarantine,
+            )
+        except OSError as exc:
+            logger.error(
+                "Corrupt %s %s (%s) could not be quarantined (%s); proceeding "
+                "with fresh ledger.",
+                context, path, reason, exc,
+            )
+        return []
+
+    return data
