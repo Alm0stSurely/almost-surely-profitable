@@ -1,13 +1,13 @@
 ======================================================================
 COMPREHENSIVE TRADING SYSTEM EVALUATION
-Generated: 2026-09-21 22:31:06
+Generated: 2026-09-21 22:43:11
 ======================================================================
 
 📊 PORTFOLIO STATUS
 ----------------------------------------
 Total Value: €9,895.86
 Cash: €2,725.69 (27.5%)
-Realized P&L: €-408.11
+Realized P&L: €47.64
 Positions: 7
 
 📈 PERFORMANCE TRENDS (30 days)
