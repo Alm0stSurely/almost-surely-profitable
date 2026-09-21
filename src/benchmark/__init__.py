@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from utils import _is_finite_number, dump_json_safe
+from utils import _is_finite_number, dump_json_safe, load_json_dict_or_quarantine
 
 
 class LiveEqualWeightBenchmark:
@@ -49,11 +49,11 @@ class LiveEqualWeightBenchmark:
     def _load_state(self) -> None:
         if not self.state_file.exists():
             return
-        try:
-            with open(self.state_file, "r") as f:
-                state = json.load(f)
-        except Exception:
-            state = {}
+
+        # Data-loss class (PR #60): a silent read-fallback here flows into
+        # save_state() overwriting this very file at the next rebalance,
+        # destroying the corrupt state without a trace. Quarantine instead.
+        state = load_json_dict_or_quarantine(self.state_file, context="benchmark state")
 
         # Sanitize any non-finite values that may have been written by a buggy
         # previous version or a corrupted file; reset to safe defaults instead of

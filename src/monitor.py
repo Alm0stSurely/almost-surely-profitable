@@ -12,6 +12,7 @@ Alert Deduplication Logic:
 """
 
 import json
+import logging
 import math
 import sys
 from datetime import datetime, timedelta
@@ -22,6 +23,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from data.fetch_market_data import fetch_current_prices
 from portfolio.portfolio import Portfolio
+from utils import load_json_dict_or_quarantine
+
+logger = logging.getLogger(__name__)
 
 
 # Resolve paths relative to the repository root so the script is safe to run
@@ -90,17 +94,32 @@ def load_universe() -> dict:
 
 
 def load_alert_history() -> Dict:
-    """Load alert history for deduplication."""
-    if ALERT_HISTORY_PATH.exists():
-        try:
-            with open(ALERT_HISTORY_PATH, 'r') as f:
-                return json.load(f)
-        except:
-            pass
-    return {
-        'alerts': [],
-        'last_reset': datetime.now().isoformat()
-    }
+    """Load alert history for deduplication.
+
+    The loaded dict flows into ``save_alert_history`` within the same monitor
+    run (load -> record -> save). A corrupt file must therefore be quarantined,
+    not silently replaced by a fresh fallback: the save would otherwise
+    overwrite the corrupt file and destroy the evidence — the same data-loss
+    class as the trade ledger (PR #60).
+
+    Returns a fresh ``{'alerts': [], 'last_reset': <now>}`` when the file is
+    missing, corrupt, or not a dict. A dict without an ``'alerts'`` list has
+    no alert records to preserve; it starts fresh too, but the failure is
+    logged so the subsequent overwrite is loud, not silent.
+    """
+    history = load_json_dict_or_quarantine(ALERT_HISTORY_PATH, context="alert history")
+    if not isinstance(history.get('alerts'), list):
+        if ALERT_HISTORY_PATH.exists():
+            logger.error(
+                "Alert history %s has no 'alerts' list (%r); starting fresh "
+                "history.",
+                ALERT_HISTORY_PATH, history.get('alerts'),
+            )
+        return {
+            'alerts': [],
+            'last_reset': datetime.now().isoformat()
+        }
+    return history
 
 
 def save_alert_history(history: Dict):
@@ -208,24 +227,30 @@ def _is_significant_breakout(current_price: float, band: float, min_pct: float) 
 
 
 def load_previous_close(portfolio: Portfolio) -> Dict[str, float]:
-    """Load previous closing prices from portfolio state or market data."""
-    if MARKET_STATE_PATH.exists():
-        try:
-            with open(MARKET_STATE_PATH, 'r') as f:
-                state = json.load(f)
-            previous_close = state.get('previous_close', {})
-            # Only return finite prices; non-finite references break movement math.
-            return {
-                ticker: price for ticker, price in previous_close.items()
-                if _is_finite_number(price)
-            }
-        except:
-            pass
+    """Load previous closing prices from the persisted market state.
 
-    # If no saved state, use average price of positions as reference
+    ``run_monitor`` unconditionally re-saves the market state after the checks,
+    so a corrupt state file must be quarantined rather than silently bypassed:
+    the save would otherwise overwrite the corrupt file and destroy the
+    evidence — the same data-loss class as the trade ledger (PR #60).
+
+    On corruption the reference map is empty; ``check_movements`` already
+    falls back to ``position.avg_price`` per ticker, so movement semantics are
+    unchanged. (The ``portfolio`` parameter is kept for API compatibility.)
+    """
+    state = load_json_dict_or_quarantine(MARKET_STATE_PATH, context="market state")
+    previous_close = state.get('previous_close', {})
+    if not isinstance(previous_close, dict):
+        logger.error(
+            "Market state %s has a non-dict 'previous_close' (%r); ignoring "
+            "saved references for this run.",
+            MARKET_STATE_PATH, previous_close,
+        )
+        return {}
+    # Only return finite prices; non-finite references break movement math.
     return {
-        ticker: pos.avg_price for ticker, pos in portfolio.positions.items()
-        if _is_finite_number(pos.avg_price) and pos.avg_price > 0
+        ticker: price for ticker, price in previous_close.items()
+        if _is_finite_number(price)
     }
 
 

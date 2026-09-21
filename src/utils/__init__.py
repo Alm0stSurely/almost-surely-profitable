@@ -4,7 +4,7 @@ import logging
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,24 @@ def dump_json_safe(
         raise ValueError(f"JSON serialization failed for {type(obj).__name__}: {exc}") from exc
 
 
+def _quarantine_file(path: Path) -> Tuple[Optional[Path], Optional[OSError]]:
+    """Rename *path* aside as ``<name>.corrupt-<timestamp>``.
+
+    Returns ``(quarantine_path, None)`` on success, or ``(None, error)`` when
+    the rename itself failed (e.g. filesystem errors). The caller owns the
+    logging and the fresh-start decision; either way the corrupt file no
+    longer sits at its original location to be silently overwritten by the
+    next save.
+    """
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S-%f")
+    quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        path.rename(quarantine)
+        return quarantine, None
+    except OSError as exc:
+        return None, exc
+
+
 def load_json_list_or_quarantine(path, *, context: str = "ledger") -> List[Any]:
     """Load a JSON list file for an append-then-overwrite flow.
 
@@ -159,21 +177,65 @@ def load_json_list_or_quarantine(path, *, context: str = "ledger") -> List[Any]:
         reason = f"unreadable ({type(exc).__name__}: {exc})"
 
     if not isinstance(data, list):
-        stamp = datetime.now().strftime("%Y%m%dT%H%M%S-%f")
-        quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
-        try:
-            path.rename(quarantine)
+        quarantine, quarantine_err = _quarantine_file(path)
+        if quarantine is not None:
             logger.error(
                 "Corrupt %s %s (%s) quarantined to %s; starting fresh ledger "
                 "(previous records preserved for recovery).",
                 context, path, reason, quarantine,
             )
-        except OSError as exc:
+        else:
             logger.error(
                 "Corrupt %s %s (%s) could not be quarantined (%s); proceeding "
                 "with fresh ledger.",
-                context, path, reason, exc,
+                context, path, reason, quarantine_err,
             )
         return []
+
+    return data
+
+
+def load_json_dict_or_quarantine(path, *, context: str = "state") -> Dict[str, Any]:
+    """Load a JSON dict file for a read-modify-write state cache.
+
+    Same data-loss class as :func:`load_json_list_or_quarantine`, for dict-
+    shaped state (alert history, market state): the caller loads the dict,
+    mutates or derives from it, and rewrites the same path within the run. A
+    silent read-fallback lets that rewrite destroy the corrupt file — the
+    evidence of the inconsistency — without a trace.
+
+    On any read/parse failure, or when the file holds valid JSON that is not
+    a dict (including ``null``, a list, or a scalar), the file is quarantined
+    and an empty dict is returned. The failure is loud (error log + stray
+    ``.corrupt-*`` file) and recoverable (original bytes preserved).
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+
+    data: Any = None
+    reason = "unparseable"
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        reason = f"wrong shape (expected dict, got {type(data).__name__})"
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        reason = f"unreadable ({type(exc).__name__}: {exc})"
+
+    if not isinstance(data, dict):
+        quarantine, quarantine_err = _quarantine_file(path)
+        if quarantine is not None:
+            logger.error(
+                "Corrupt %s %s (%s) quarantined to %s; starting fresh state "
+                "(previous contents preserved for recovery).",
+                context, path, reason, quarantine,
+            )
+        else:
+            logger.error(
+                "Corrupt %s %s (%s) could not be quarantined (%s); proceeding "
+                "with fresh state.",
+                context, path, reason, quarantine_err,
+            )
+        return {}
 
     return data
