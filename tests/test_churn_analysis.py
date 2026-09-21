@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from analysis.churn_analysis import (
+    RESET_BOUNDARY,
     RoundTrip,
     _bucket_metrics,
     _filter_valid_round_trips,
@@ -30,6 +31,7 @@ from analysis.churn_analysis import (
     load_trades,
     match_round_trips,
     print_report,
+    reconcile_ledger_since_reset,
 )
 
 # ---------------------------------------------------------------------------
@@ -807,3 +809,86 @@ class TestFormatGuards:
         assert "100.0%" in out
         assert "€+100.00" in out
         assert "n/a" not in out
+
+
+class TestReconcileLedgerSinceReset:
+    """Tests for the post-reset ledger reconciliation (research 2026-09-21)."""
+
+    def _sell(self, pnl, ts, **extra):
+        trade = make_trade("AAPL", "sell", 150.0, realized_pnl=pnl, timestamp=ts)
+        trade.update(extra)
+        return trade
+
+    def test_consistent_ledger_no_warning(self):
+        trades = [
+            self._sell(10.0, "2026-07-10T09:00:00"),
+            self._sell(-4.0, "2026-08-01T09:00:00"),
+        ]
+        recon = reconcile_ledger_since_reset(trades, 6.0)
+        assert recon["booked_since_reset"] == pytest.approx(6.0)
+        assert recon["booked_sells"] == 2
+        assert recon["gap"] == pytest.approx(0.0)
+        assert recon["gap_is_warning"] is False
+
+    def test_pre_reset_flagged_sells_excluded_from_booked_sum(self):
+        trades = [
+            self._sell(-100.0, "2026-06-01T09:00:00", pre_reset=True),
+            self._sell(7.0, "2026-07-10T09:00:00"),
+        ]
+        recon = reconcile_ledger_since_reset(trades, 7.0)
+        assert recon["booked_since_reset"] == pytest.approx(7.0)
+        assert recon["pre_reset_flagged_sells"] == 1
+        assert recon["pre_reset_flagged_trades"] == 1
+        assert recon["gap_is_warning"] is False
+
+    def test_corrupt_ledger_triggers_warning(self):
+        trades = [self._sell(5.0, "2026-07-10T09:00:00")]
+        recon = reconcile_ledger_since_reset(trades, -450.0)
+        assert recon["gap_is_warning"] is True
+        assert recon["gap"] == pytest.approx(-455.0)
+
+    def test_gap_within_tolerance_no_warning(self):
+        trades = [self._sell(5.0, "2026-07-10T09:00:00")]
+        recon = reconcile_ledger_since_reset(trades, 5.5)  # 0.50 < 1.00 tolerance
+        assert recon["gap_is_warning"] is False
+
+    def test_non_finite_pnl_skipped(self):
+        trades = [
+            self._sell(float("nan"), "2026-07-10T09:00:00"),
+            self._sell(3.0, "2026-07-11T09:00:00"),
+        ]
+        recon = reconcile_ledger_since_reset(trades, 3.0)
+        assert recon["booked_since_reset"] == pytest.approx(3.0)
+        assert recon["booked_sells"] == 1
+        assert recon["gap_is_warning"] is False
+
+    def test_non_finite_ledger_yields_nan_gap_no_warning(self):
+        trades = [self._sell(3.0, "2026-07-10T09:00:00")]
+        recon = reconcile_ledger_since_reset(trades, float("nan"))
+        assert math.isnan(recon["gap"])
+        assert recon["gap_is_warning"] is False
+
+    def test_buys_ignored(self):
+        trades = [
+            make_trade("AAPL", "buy", 100.0, realized_pnl=0.0, timestamp="2026-07-12T09:00:00"),
+            self._sell(2.0, "2026-07-13T09:00:00"),
+        ]
+        recon = reconcile_ledger_since_reset(trades, 2.0)
+        assert recon["booked_sells"] == 1
+        assert recon["gap"] == pytest.approx(0.0)
+
+    def test_reset_boundary_is_post_reset_date(self):
+        # Midnight 2026-07-07: the 2026-07-06 intra-day sell predates the
+        # evening reset and must NOT enter the post-reset baseline.
+        assert RESET_BOUNDARY == datetime(2026, 7, 7)
+        trades = [self._sell(7.45, "2026-07-06T16:44:38")]
+        recon = reconcile_ledger_since_reset(trades, 0.0)
+        assert recon["booked_since_reset"] == pytest.approx(0.0)
+        assert recon["booked_sells"] == 0
+
+    def test_empty_trades_zero_booked(self):
+        recon = reconcile_ledger_since_reset([], 0.0)
+        assert recon["booked_since_reset"] == pytest.approx(0.0)
+        assert recon["booked_sells"] == 0
+        assert recon["gap_is_warning"] is False
+        assert recon["pre_reset_flagged_trades"] == 0

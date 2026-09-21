@@ -35,5 +35,6 @@ Thumbs.db
 
 # Runtime state
 data/*.json
+data/*.bak-*
 portfolio_state.json
 decision_history.json

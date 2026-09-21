@@ -27,6 +27,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 from utils import _is_finite_number
 
 
+# Accounting-reset boundary. On 2026-07-06 a test run reset the account to
+# EUR 10,000 / 0 positions / 0 realized P&L. Trades before this date belong
+# to the pre-reset accounting universe and are flagged ``pre_reset`` in
+# trades_history.json (see scripts/repair_pre_reset_accounting.py). Sells on
+# or after this datetime form the post-reset ledger baseline.
+RESET_BOUNDARY = datetime(2026, 7, 7)
+_LEDGER_RECONCILE_TOLERANCE = 1.00  # euros
+
+
 @dataclass
 class RoundTrip:
     ticker: str
@@ -283,6 +292,46 @@ def print_report(metrics: Dict):
     print("=" * 60)
 
 
+def reconcile_ledger_since_reset(trades: List[Dict], ledger_realized: float) -> Dict:
+    """Reconcile the portfolio ledger against the post-reset sell replay.
+
+    The ledger books realized P&L per sell (``portfolio.py:sell()``), so the
+    post-reset ledger total must equal the sum of recorded ``realized_pnl``
+    over sells at or after :data:`RESET_BOUNDARY`. The pre-reset universe is
+    a known historical artifact (flagged trades, reset without compensating
+    records) and is reported separately, never reconciled.
+
+    Returns a dict with the booked sum, the gap, and the pre-reset flag
+    counts; ``gap_is_warning`` is True when the post-reset disagreement
+    exceeds ``_LEDGER_RECONCILE_TOLERANCE``.
+    """
+    booked = 0.0
+    booked_count = 0
+    pre_reset_sells = 0
+    for t in trades:
+        if t.get("action") != "sell":
+            continue
+        pnl = t.get("realized_pnl")
+        if not _is_finite_number(pnl):
+            continue
+        if _parse_trade_timestamp(t) >= RESET_BOUNDARY:
+            booked += pnl
+            booked_count += 1
+        elif t.get("pre_reset", False):
+            pre_reset_sells += 1
+
+    gap = ledger_realized - booked if _is_finite_number(ledger_realized) else float("nan")
+    return {
+        "booked_since_reset": booked,
+        "booked_sells": booked_count,
+        "ledger_realized": ledger_realized,
+        "gap": gap,
+        "gap_is_warning": _is_finite_number(gap) and abs(gap) > _LEDGER_RECONCILE_TOLERANCE,
+        "pre_reset_flagged_sells": pre_reset_sells,
+        "pre_reset_flagged_trades": sum(1 for t in trades if t.get("pre_reset", False)),
+    }
+
+
 def main():
     trades = load_trades()
     decisions = load_decisions()
@@ -303,20 +352,41 @@ def main():
           f"avg hold {_safe_value_str(post.get('avg_hold_days'), fmt='.1f')}d, "
           f"{_safe_value_str(post.get('trades_per_year'), fmt='.0f')} trades/yr")
 
-    # Ledger reconciliation: the round-trip sum only covers sells with a
-    # recorded preceding buy, so it diverges from the portfolio ledger when
-    # accounting resets or orphan sells exist in trades_history.
+    # Accounting-reset cohort: round trips attributed by ENTRY date relative
+    # to the 2026-07-06/07 reset. The post-reset cohort is the clean,
+    # authoritative universe; the pre-reset cohort is a historical artifact
+    # whose P&L fields mix two accounting universes (indicative only).
+    reset_pre, reset_post = analyze_cohort(trades, RESET_BOUNDARY)
+    print(f"\n--- Accounting Reset {RESET_BOUNDARY.date()} Cohort ---")
+    print(f"Pre-reset (artifact): {reset_pre.get('total_round_trips', 'n/a')} RT, "
+          f"win {_safe_pct_str(reset_pre.get('win_rate_pct'))}, "
+          f"P&L {_safe_value_str(reset_pre.get('total_realized_pnl'), symbol='€', fmt='+.2f')} "
+          f"(indicative only)")
+    print(f"Post-reset (clean):   {reset_post.get('total_round_trips', 'n/a')} RT, "
+          f"win {_safe_pct_str(reset_post.get('win_rate_pct'))}, "
+          f"avg hold {_safe_value_str(reset_post.get('avg_hold_days'), fmt='.1f')}d, "
+          f"P&L {_safe_value_str(reset_post.get('total_realized_pnl'), symbol='€', fmt='+.2f')}")
+
+    # Ledger reconciliation on the post-reset booking basis: the ledger must
+    # equal the sum of recorded realized_pnl over sells since the boundary.
+    # Pre-reset records are flagged and reported, never reconciled.
     ledger_realized = load_ledger_realized_pnl()
-    rt_pnl = metrics.get("total_realized_pnl")
-    print(f"\n--- Ledger Reconciliation ---")
-    print(f"Round-trip P&L (trade ledger):  {_safe_value_str(rt_pnl, symbol='€', fmt='+.2f')}")
-    print(f"Portfolio ledger realized P&L:  {_safe_value_str(ledger_realized, symbol='€', fmt='+.2f')}")
-    if _is_finite_number(ledger_realized) and _is_finite_number(rt_pnl):
-        gap = ledger_realized - rt_pnl
-        if abs(gap) > 50:
-            print(f"⚠ Gap {_safe_value_str(gap, symbol='€', fmt='+.2f')}: trade ledger and portfolio ledger disagree.")
-            print("  Likely causes: accounting reset without compensating sell records,")
-            print("  orphan sells (matched buys pre-reset), or stale realized_pnl fields.")
+    recon = reconcile_ledger_since_reset(trades, ledger_realized)
+    print(f"\n--- Ledger Reconciliation (since {RESET_BOUNDARY.date()}) ---")
+    print(f"Booked by sells since reset ({recon['booked_sells']} sells): "
+          f"{_safe_value_str(recon['booked_since_reset'], symbol='€', fmt='+.2f')}")
+    print(f"Portfolio ledger realized P&L:                "
+          f"{_safe_value_str(recon['ledger_realized'], symbol='€', fmt='+.2f')}")
+    if recon["gap_is_warning"]:
+        print(f"⚠ Gap {_safe_value_str(recon['gap'], symbol='€', fmt='+.2f')}: "
+              f"post-reset sell replay and ledger disagree — investigate state corruption.")
+    else:
+        print(f"✓ Ledger consistent with sell-by-sell replay "
+              f"(gap {_safe_value_str(recon['gap'], symbol='€', fmt='+.2f')}).")
+    if recon["pre_reset_flagged_trades"]:
+        print(f"Pre-reset flagged trades: {recon['pre_reset_flagged_trades']} "
+              f"({recon['pre_reset_flagged_sells']} sells) — excluded from reconciliation "
+              f"(2026-07-06 reset artifact).")
     print("=" * 60)
 
 
