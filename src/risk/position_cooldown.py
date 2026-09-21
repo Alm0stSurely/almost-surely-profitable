@@ -12,10 +12,15 @@ Reducing trade frequency should improve signal-to-noise ratio.
 """
 
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
+
+from utils import load_json_dict_or_quarantine
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,9 +68,13 @@ class PositionCooldownManager:
     def _load_state(self) -> None:
         if not self.state_file.exists():
             return
+
+        # Data-loss class (PR #60): a silent read-fallback here flows into
+        # save_state() overwriting this very file on the next entry/exit,
+        # destroying the corrupt state without a trace. Quarantine instead.
+        # An empty reset keeps exits fail-open, consistent with PR #59.
+        state = load_json_dict_or_quarantine(self.state_file, context="cooldown state")
         try:
-            with open(self.state_file, "r") as f:
-                state = json.load(f)
             self.entries = {
                 k: datetime.fromisoformat(v)
                 for k, v in state.get("entries", {}).items()
@@ -78,7 +87,14 @@ class PositionCooldownManager:
                 datetime.fromisoformat(v)
                 for v in state.get("weekly_trades", [])
             ]
-        except Exception:
+        except (ValueError, TypeError, AttributeError) as exc:
+            # Inner wrong shape (e.g. unparseable timestamps): no records are
+            # trustworthy. Reset loudly; exits stay fail-open per PR #59.
+            logger.error(
+                "Cooldown state %s has unparseable contents (%s); resetting "
+                "entries/exits/weekly_trades to empty (exits fail-open).",
+                self.state_file, exc,
+            )
             self.entries = {}
             self.exits = {}
             self.weekly_trades = []
