@@ -7,6 +7,7 @@ the daily trading pipeline.
 
 import sys
 import json
+import logging
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -198,6 +199,158 @@ class TestBackpopulateCooldownEntries:
         # Should not raise
         backpopulate_cooldown_entries(mgr, portfolio)
         assert 'SPY' not in mgr.entries
+
+    def test_backpopulate_corrupt_file_preserves_state_entries(self, caplog):
+        """Corrupt ledger: existing state entry kept, error logged, ledger untouched."""
+        trades_file = self.test_dir / "trades_history.json"
+        trades_file.write_text("not valid json")
+
+        state_time = datetime(2026, 5, 7, 10, 0, 0)
+        state = {
+            "entries": {"SPY": state_time.isoformat()},
+            "exits": {},
+            "weekly_trades": [],
+            "last_updated": "2026-09-22T10:00:00",
+        }
+        with open(self.test_dir / "position_cooldowns.json", 'w') as f:
+            json.dump(state, f)
+
+        portfolio = self.create_mock_portfolio(['SPY'])
+        portfolio.trades_file = trades_file
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        with caplog.at_level(logging.ERROR):
+            backpopulate_cooldown_entries(mgr, portfolio)
+
+        # State entry is the best available evidence — preserved, not fabricated over
+        assert mgr.entries['SPY'] == state_time
+        # Read path must not quarantine or rewrite the ledger (write path owns it)
+        assert trades_file.exists()
+        assert not list(self.test_dir.glob("*.corrupt-*"))
+        assert any("unreadable" in r.message for r in caplog.records)
+
+    def test_backpopulate_wrong_shape_ledger_loud_no_crash(self, caplog):
+        """Valid JSON that is not a list must not crash the backpopulation step."""
+        trades_file = self.test_dir / "trades_history.json"
+        trades_file.write_text('{"not": "a list"}')
+
+        portfolio = self.create_mock_portfolio(['SPY'])
+        portfolio.trades_file = trades_file
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        with caplog.at_level(logging.ERROR):
+            backpopulate_cooldown_entries(mgr, portfolio)  # must not raise
+
+        assert 'SPY' not in mgr.entries
+        assert trades_file.exists()  # wrong-shape ledger left in place, loud
+        assert any("wrong shape" in r.message for r in caplog.records)
+
+    def test_backpopulate_unparseable_latest_falls_back_to_older_buy(self, caplog):
+        """Damaged latest buy: walk back to the older parseable buy."""
+        old_time = datetime(2026, 5, 1, 10, 0, 0)
+        trades = [
+            {
+                'timestamp': old_time.isoformat(),
+                'ticker': 'SPY',
+                'action': 'buy',
+                'price': 400.0,
+                'quantity': 1.0,
+                'total_value': 400.0
+            },
+            {
+                'timestamp': 'not-a-timestamp',
+                'ticker': 'SPY',
+                'action': 'buy',
+                'price': 410.0,
+                'quantity': 1.0,
+                'total_value': 410.0
+            },
+        ]
+        portfolio = self.create_mock_portfolio(['SPY'], trades)
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        with caplog.at_level(logging.ERROR):
+            backpopulate_cooldown_entries(mgr, portfolio)
+
+        assert mgr.entries['SPY'] == old_time
+        assert any("unparseable buy timestamp" in r.message for r in caplog.records)
+
+    def test_backpopulate_all_timestamps_unparseable_falls_back_to_now(self, caplog):
+        """No parseable evidence and no state entry: conservative now() fallback, loud."""
+        trades = [
+            {'timestamp': 'garbage-1', 'ticker': 'SPY', 'action': 'buy'},
+            {'timestamp': 'garbage-2', 'ticker': 'SPY', 'action': 'buy'},
+        ]
+        portfolio = self.create_mock_portfolio(['SPY'], trades)
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        before = datetime.now()
+        with caplog.at_level(logging.ERROR):
+            backpopulate_cooldown_entries(mgr, portfolio)
+        after = datetime.now()
+
+        # Min-hold restarts today rather than silently arming the fail-open exit
+        assert before <= mgr.entries['SPY'] <= after
+        assert any("falling back to" in r.message for r in caplog.records)
+
+    def test_backpopulate_all_unparseable_preserves_existing_state_entry(self, caplog):
+        """Newer evidence corrupt, older state entry valid: keep the state entry."""
+        state_time = datetime(2026, 5, 7, 10, 0, 0)
+        state = {
+            "entries": {"SPY": state_time.isoformat()},
+            "exits": {},
+            "weekly_trades": [],
+            "last_updated": "2026-09-22T10:00:00",
+        }
+        with open(self.test_dir / "position_cooldowns.json", 'w') as f:
+            json.dump(state, f)
+
+        trades = [{'timestamp': 'garbage', 'ticker': 'SPY', 'action': 'buy'}]
+        portfolio = self.create_mock_portfolio(['SPY'], trades)
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        with caplog.at_level(logging.ERROR):
+            backpopulate_cooldown_entries(mgr, portfolio)
+
+        assert mgr.entries['SPY'] == state_time
+        assert any("unparseable buy timestamp" in r.message for r in caplog.records)
+
+    def test_backpopulate_missing_timestamp_key_walks_back(self):
+        """A buy record without a timestamp key must not silently drop the ticker."""
+        older = datetime(2026, 5, 1, 9, 0, 0)
+        trades = [
+            {
+                'timestamp': older.isoformat(),
+                'ticker': 'SPY',
+                'action': 'buy',
+                'price': 400.0,
+                'quantity': 1.0,
+                'total_value': 400.0
+            },
+            {'ticker': 'SPY', 'action': 'buy'},  # missing timestamp key
+        ]
+        portfolio = self.create_mock_portfolio(['SPY'], trades)
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        backpopulate_cooldown_entries(mgr, portfolio)
+
+        assert mgr.entries['SPY'] == older
+
+    def test_backpopulate_non_dict_elements_do_not_crash(self, caplog):
+        """A valid-JSON list of non-dict garbage must not crash on .get()."""
+        trades_file = self.test_dir / "trades_history.json"
+        with open(trades_file, 'w') as f:
+            json.dump(["garbage-string", 42, None], f)
+
+        portfolio = self.create_mock_portfolio(['SPY'])
+        portfolio.trades_file = trades_file
+        mgr = PositionCooldownManager(data_dir=str(self.test_dir))
+
+        with caplog.at_level(logging.ERROR):
+            backpopulate_cooldown_entries(mgr, portfolio)  # must not raise
+
+        # No buys parse → same direction as the no-history fallback branch
+        assert 'SPY' in mgr.entries
 
 
 class TestStaleEntryReconciliation:

@@ -5,6 +5,7 @@ Orchestrates data fetching, indicator calculation, LLM decision, and order execu
 """
 
 import json
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -70,35 +73,84 @@ def setup_directories():
 def backpopulate_cooldown_entries(cooldown_mgr: PositionCooldownManager, portfolio) -> None:
     """
     Back-populate cooldown entry records from trade history for existing positions.
-    
+
     When the cooldown manager is first introduced, existing positions won't have
     entry records. We scan trades_history.json to find the most recent buy for
     each held ticker and record it.
+
+    Failure direction (PR #59/#60/#61 family): this is a read-only helper over
+    the trades ledger — the swallowed-failure class here never overwrites its
+    source file, so quarantine is the write path's job (save_trade). A corrupt
+    or wrong-shape ledger is loud-logged and the existing cooldown state
+    entries remain the source of truth; tickers left without any entry fall to
+    can_sell's deliberate fail-open-on-exit direction. Per-record timestamp
+    failures walk back to older buys (the ledger is ground truth); only when no
+    parseable evidence exists anywhere does a held ticker fall back to
+    datetime.now(), matching the no-history branch — never a silent absence.
     """
     trades_file = portfolio.trades_file
     if not trades_file.exists():
         return
-    
+
     try:
         with open(trades_file, 'r') as f:
             trades = json.load(f)
-    except Exception:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        logger.error(
+            "Cooldown backpopulation: trades ledger %s unreadable (%s: %s); "
+            "keeping existing cooldown state entries. Held tickers without an "
+            "entry keep the fail-open exit direction (missing bookkeeping must "
+            "not block an exit). The corrupt ledger is preserved for the write "
+            "path's quarantine on the next recorded trade.",
+            trades_file, type(exc).__name__, exc,
+        )
         return
-    
+
+    if not isinstance(trades, list):
+        logger.error(
+            "Cooldown backpopulation: trades ledger %s has wrong shape "
+            "(expected list, got %s); treating as unreadable, same consequences "
+            "as a corrupt file.",
+            trades_file, type(trades).__name__,
+        )
+        return
+
     for ticker in portfolio.positions.keys():
-        # Find most recent buy for this ticker
+        # Find most recent buy for this ticker (skip non-dict garbage elements
+        # instead of crashing on .get()).
         ticker_buys = [
             t for t in trades
-            if t.get('ticker') == ticker and t.get('action') == 'buy'
+            if isinstance(t, dict) and t.get('ticker') == ticker and t.get('action') == 'buy'
         ]
         if ticker_buys:
-            # Use the most recent buy timestamp
-            last_buy = ticker_buys[-1]
-            try:
-                entry_time = datetime.fromisoformat(last_buy['timestamp'])
+            # Use the most recent buy with a parseable timestamp; older buys
+            # are still evidence when the latest record is damaged.
+            entry_time = None
+            for trade in reversed(ticker_buys):
+                try:
+                    entry_time = datetime.fromisoformat(trade['timestamp'])
+                    break
+                except (KeyError, TypeError, ValueError) as exc:
+                    logger.error(
+                        "Cooldown backpopulation: unparseable buy timestamp for "
+                        "%s in %s (%r: %s); trying older buys.",
+                        ticker, trades_file, trade.get('timestamp'), exc,
+                    )
+            if entry_time is not None:
                 cooldown_mgr.entries[ticker] = entry_time
-            except Exception:
-                pass
+            elif ticker not in cooldown_mgr.entries:
+                # No parseable evidence anywhere and no existing state entry:
+                # same fallback as the no-history branch (conservative — the
+                # min-hold clock restarts today), never a silent absence.
+                logger.error(
+                    "Cooldown backpopulation: no parseable buy timestamp for "
+                    "%s in %s and no existing cooldown entry; falling back to "
+                    "now() (min-hold restarts today).",
+                    ticker, trades_file,
+                )
+                cooldown_mgr.entries[ticker] = datetime.now()
+            # else: an existing state entry is better evidence than nothing —
+            # keep it (the per-record errors above are already loud).
         else:
             # No trade history — use portfolio load time as fallback
             cooldown_mgr.entries[ticker] = datetime.now()
