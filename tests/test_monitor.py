@@ -25,6 +25,20 @@ from monitor import (
 )
 
 
+def _isolate_alert_history(tmp_path, monkeypatch):
+    """Redirect ``monitor.ALERT_HISTORY_PATH`` to a tmp file for the test.
+
+    ``check_movements`` / ``check_bollinger_breakouts`` persist the alert
+    history they load, so a test that calls them with the production path
+    rewrites the real (and gitignored) ``data/alert_history.json`` — a leak
+    git cannot see and the suite-wide guard in ``conftest.py`` fails.
+    """
+    path = tmp_path / "data" / "alert_history.json"
+    path.parent.mkdir(exist_ok=True)
+    monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", path)
+    return path
+
+
 def test_load_monitor_config_default():
     """Test loading default monitor configuration."""
     print("Test 1: Load Default Monitor Config")
@@ -67,11 +81,13 @@ def test_load_monitor_config_custom():
     Path(temp_path).unlink()
 
 
-def test_check_position_movements_normal():
+def test_check_position_movements_normal(tmp_path, monkeypatch):
     """Test position movement check with normal changes."""
     print("Test 3: Check Position Movements - Normal")
     print("-" * 40)
-    
+
+    _isolate_alert_history(tmp_path, monkeypatch)
+
     positions = {
         "SPY": {"quantity": 10, "avg_price": 400, "current_price": 402},  # +0.5%
         "TLT": {"quantity": 5, "avg_price": 100, "current_price": 99}     # -1%
@@ -88,11 +104,13 @@ def test_check_position_movements_normal():
     print("✓ Normal movements test passed\n")
 
 
-def test_check_position_movements_alert():
+def test_check_position_movements_alert(tmp_path, monkeypatch):
     """Test position movement check with significant changes."""
     print("Test 4: Check Position Movements - Alert Triggered")
     print("-" * 40)
-    
+
+    _isolate_alert_history(tmp_path, monkeypatch)
+
     positions = {
         "RMS.PA": {"quantity": 1, "avg_price": 1669.50, "current_price": 1669.50},
     }
@@ -113,15 +131,17 @@ def test_check_position_movements_alert():
     print("✓ Alert triggered test passed\n")
 
 
-def test_check_position_movements_no_false_positive():
+def test_check_position_movements_no_false_positive(tmp_path, monkeypatch):
     """Test that POSITION_MOVEMENT uses previous close, not avg_price, as reference.
-    
+
     This guards against false positives when the market is flat intraday
     but the position has unrealized P&L since entry.
     """
     print("Test 4b: Check Position Movements - No False Positive")
     print("-" * 40)
-    
+
+    _isolate_alert_history(tmp_path, monkeypatch)
+
     positions = {
         "AI.PA": {"quantity": 10, "avg_price": 150.0, "current_price": 180.0},  # +20% since entry
     }
@@ -259,11 +279,13 @@ def test_thresholds_loaded():
     print("✓ Thresholds loaded test passed\n")
 
 
-def test_check_position_with_missing_price():
+def test_check_position_with_missing_price(tmp_path, monkeypatch):
     """Test position check when current price is missing."""
     print("Test 11: Position Check - Missing Price")
     print("-" * 40)
-    
+
+    _isolate_alert_history(tmp_path, monkeypatch)
+
     positions = {"SPY": {"quantity": 10, "avg_price": 400}}
     previous_close = {"SPY": 400}
     current_prices = {}  # Missing SPY price
@@ -510,8 +532,9 @@ class TestFiniteValueGuards:
         with pytest.raises(ValueError):
             monitor.save_alert_history(bad_history)
 
-    def test_stop_losses_skip_non_finite_current_price(self):
+    def test_stop_losses_skip_non_finite_current_price(self, tmp_path, monkeypatch):
         from portfolio.portfolio import Portfolio, Position
+        _isolate_alert_history(tmp_path, monkeypatch)
         portfolio = Portfolio(data_dir="/tmp/test_finite_stop")
         portfolio.positions['SPY'] = Position(
             ticker='SPY', quantity=10, avg_price=100, current_price=100
@@ -522,8 +545,9 @@ class TestFiniteValueGuards:
         )
         assert alerts == []
 
-    def test_stop_losses_skip_non_finite_drawdown(self):
+    def test_stop_losses_skip_non_finite_drawdown(self, tmp_path, monkeypatch):
         from portfolio.portfolio import Portfolio, Position
+        _isolate_alert_history(tmp_path, monkeypatch)
         portfolio = Portfolio(data_dir="/tmp/test_finite_stop2")
         portfolio.positions['SPY'] = Position(
             ticker='SPY', quantity=10, avg_price=0, current_price=100
