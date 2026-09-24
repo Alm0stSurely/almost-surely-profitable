@@ -1,0 +1,35 @@
+============================================================
+PORTFOLIO CHURN ANALYSIS
+============================================================
+
+Round Trips:          37
+Winning:              10 (27.0%)
+Losing:               27 (73.0%)
+Total Realized P&L:   €-53.46
+Avg Holding Period:   34.1 days
+
+--- Holding Period Breakdown ---
+Short (≤3d):          4 trips, win rate 0.0%, P&L €+0.00
+Medium (4-14d):       13 trips, win rate 15.4%, P&L €+24.10
+Long (>14d):          20 trips, win rate 40.0%, P&L €-77.57
+
+--- Activity Metrics ---
+Action Flips:         11
+Trades/Week:          4.5
+Annualized Turnover:  235 trades/year
+============================================================
+
+--- Pre/Post 2026-06-18 Cohort ---
+Pre:  32 RT, win 25.0%, avg hold 33.2d, 243 trades/yr
+Post: 5 RT, win 40.0%, avg hold 39.4d, 127 trades/yr
+
+--- Accounting Reset 2026-07-07 Cohort ---
+Pre-reset (artifact): 34 RT, win 26.5%, P&L €-18.98 (indicative only)
+Post-reset (clean):   3 RT, win 33.3%, avg hold 33.9d, P&L €-34.48
+
+--- Ledger Reconciliation (since 2026-07-07) ---
+Booked by sells since reset (14 sells): €+47.64
+Portfolio ledger realized P&L:                €+47.64
+✓ Ledger consistent with sell-by-sell replay (gap €+0.00).
+Pre-reset flagged trades: 84 (7 sells) — excluded from reconciliation (2026-07-06 reset artifact).
+============================================================
