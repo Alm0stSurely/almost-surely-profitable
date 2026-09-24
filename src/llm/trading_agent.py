@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import random
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -618,6 +619,14 @@ class TradingAgent:
     def parse_response(self, response: str) -> Dict:
         """
         Parse LLM response to extract actions.
+
+        Failure direction: malformed actions are dropped individually and
+        loudly, never promoted to a global hold-all. Discarding every valid
+        action because one is malformed would also discard any valid exit
+        (stop-loss included) — an unbounded-loss direction. Dropping one
+        malformed action costs at most one session of delay on that single
+        ticker: bounded and reversible. Hold-all remains the fallback only
+        when no valid action survives, or the envelope itself cannot parse.
         
         Args:
             response: Raw LLM response
@@ -637,21 +646,7 @@ class TradingAgent:
             
             # Try to find JSON object with "actions" key in the text
             if json_str is None:
-                import re
-                # Find the last JSON-like block containing "actions"
-                matches = list(re.finditer(r'{[^{}]*"actions"\s*:', response))
-                if matches:
-                    start = matches[-1].start()
-                    # Find matching closing brace
-                    depth = 0
-                    for i in range(start, len(response)):
-                        if response[i] == "{":
-                            depth += 1
-                        elif response[i] == "}":
-                            depth -= 1
-                            if depth == 0:
-                                json_str = response[start:i+1]
-                                break
+                json_str = self._extract_actions_object(response)
             
             if json_str is None:
                 json_str = response.strip()
@@ -661,14 +656,30 @@ class TradingAgent:
             # Validate structure
             if "actions" not in parsed:
                 raise ValueError("Missing 'actions' key")
+            if not isinstance(parsed["actions"], list):
+                raise ValueError("'actions' must be a list")
             
-            for action in parsed["actions"]:
-                if "ticker" not in action or "action" not in action:
-                    raise ValueError("Invalid action format")
-                if action["action"] not in ["buy", "sell", "hold"]:
-                    raise ValueError(f"Invalid action: {action['action']}")
+            valid_actions, dropped = self._validate_actions(parsed["actions"])
             
-            return parsed
+            if not valid_actions:
+                raise ValueError(f"No valid actions in response ({len(dropped)} malformed)")
+            
+            if dropped:
+                logger.error(
+                    f"Dropping {len(dropped)} malformed action(s), "
+                    f"executing {len(valid_actions)} valid one(s)"
+                )
+                for action in dropped:
+                    logger.error(f"  dropped: {action!r}")
+            
+            result = {k: v for k, v in parsed.items() if k != "actions"}
+            result["actions"] = valid_actions
+            if dropped:
+                note = f"[parse: dropped {len(dropped)} malformed action(s)]"
+                reasoning = result.get("reasoning")
+                result["reasoning"] = f"{reasoning} {note}" if reasoning else note
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error parsing LLM response: {e}")
@@ -679,6 +690,83 @@ class TradingAgent:
                 "reasoning": f"Error parsing response: {e}. Defaulting to hold all positions.",
                 "error": True
             }
+
+    @staticmethod
+    def _extract_actions_object(response: str) -> Optional[str]:
+        """Return the JSON object enclosing the last ``"actions"`` key.
+
+        Locates the ``"actions"`` key directly and walks back to the nearest
+        enclosing ``{``, so nested objects before the key (context metadata,
+        nested reasoning structures) no longer hide the envelope from the
+        extractor — the old ``{[^{}]*"actions"`` pattern required a flat
+        prefix and silently fell through to full-text parsing.
+        """
+        matches = list(re.finditer(r'"actions"\s*:', response))
+        if not matches:
+            return None
+        key_pos = matches[-1].start()
+        # Walk backwards from the key with reverse brace-depth tracking to
+        # find the opener of the object that actually encloses it — the
+        # nearest '{' is often a nested sibling that closed before the key.
+        depth = 0
+        start = -1
+        for i in range(key_pos - 1, -1, -1):
+            c = response[i]
+            if c == "}":
+                depth += 1
+            elif c == "{":
+                if depth == 0:
+                    start = i
+                    break
+                depth -= 1
+        if start == -1:
+            return None
+        depth = 0
+        for i in range(start, len(response)):
+            if response[i] == "{":
+                depth += 1
+            elif response[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return response[start:i + 1]
+        return None
+
+    @staticmethod
+    def _validate_actions(actions: List) -> tuple:
+        """Split *actions* into (valid, dropped).
+
+        Per-action validation — one malformed action must not void the
+        others (see :meth:`parse_response`). Accepted normalizations:
+        action casing/whitespace (``"BUY"``, ``"Sell "``) and optional
+        ``pct`` (executor defaults a missing ``pct`` to 0). An action is
+        dropped when its ticker is missing/blank, its action is unknown,
+        or its ``pct`` is present but not a finite number.
+        """
+        valid = []
+        dropped = []
+        for action in actions:
+            if not isinstance(action, dict):
+                dropped.append(action)
+                continue
+            ticker = action.get("ticker")
+            raw_action = action.get("action")
+            if not isinstance(ticker, str) or not ticker.strip():
+                dropped.append(action)
+                continue
+            if not isinstance(raw_action, str):
+                dropped.append(action)
+                continue
+            normalized = raw_action.strip().lower()
+            if normalized not in ("buy", "sell", "hold"):
+                dropped.append(action)
+                continue
+            if "pct" in action and not _is_finite_number(action["pct"]):
+                dropped.append(action)
+                continue
+            clean = dict(action)
+            clean["action"] = normalized
+            valid.append(clean)
+        return valid, dropped
     
     def get_trading_decision(
         self,
