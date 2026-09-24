@@ -276,8 +276,11 @@ class TradingAgent:
         
         decisions.append(decision)
 
-        # Keep only last 100 decisions
-        decisions = decisions[-100:]
+        # Keep only the most recent decisions (bounded history). The bound
+        # must comfortably exceed one year of trading days (~260) so the
+        # cap never silently discards history that research analyses depend
+        # on; the previous bound of 100 lost decisions within ~5 months.
+        decisions = decisions[-500:]
 
         with open(self.history_file, 'w') as f:
             if JSON_SAFE_AVAILABLE:

@@ -354,29 +354,33 @@ def test_api_call_network_error():
 
 
 def test_decision_history_limit():
-    """Test that history is limited to last 100 decisions."""
+    """Test that history is bounded but keeps well over a year of trading days."""
     print("Test 10: Decision History Limit")
     print("-" * 40)
-    
+
     with tempfile.TemporaryDirectory() as tmpdir:
         history_file = Path(tmpdir) / "decisions.json"
         agent = TradingAgent(api_key="test", history_file=str(history_file))
-        
-        # Save 110 decisions
-        for i in range(110):
+
+        # Save 510 decisions
+        for i in range(510):
             decision = {
                 "timestamp": datetime.now().isoformat(),
                 "actions": [{"ticker": "SPY", "action": "buy", "pct": 1}],
                 "reasoning": f"Decision {i}"
             }
             agent.save_decision(decision)
-        
-        # Load and verify only 100 kept
+
+        # Load and verify only the bound is kept
         with open(history_file) as f:
             saved = json.load(f)
-        
-        assert len(saved) == 100
-        print(f"  Saved 110 decisions, kept {len(saved)}")
+
+        assert len(saved) == 500
+        # The bound must exceed one year of trading days (~260) so research
+        # analyses never silently lose history (regression: the previous
+        # bound of 100 discarded decisions within ~5 months).
+        assert len(saved) > 260
+        print(f"  Saved 510 decisions, kept {len(saved)}")
         print("✓ History limit test passed\n")
 
 

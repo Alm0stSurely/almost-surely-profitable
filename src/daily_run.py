@@ -323,7 +323,7 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     
     # Step 4: Get LLM decision
     print("\n[4/7] Getting trading decision from LLM...")
-    agent = TradingAgent()
+    agent = TradingAgent(history_file=str(DATA_DIR / "decision_history.json"))
     # portfolio_summary already contains current prices and the risk_metrics we
     # just computed; do not re-fetch it here or the LLM will lose the CVaR/VaR
     # context.
