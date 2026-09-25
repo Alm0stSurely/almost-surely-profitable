@@ -55,7 +55,14 @@ def test_system_prompt_exists():
     assert "Do NOT sell a position merely because it is showing a small profit" in SYSTEM_PROMPT
     assert "confirmed technical reversal" in SYSTEM_PROMPT
     assert "When in doubt, default to HOLD" in SYSTEM_PROMPT
-    
+
+    # Check for stop-override policy (added 2026-09-25, TLT conflict formalization)
+    assert "STOP-OVERRIDE POLICY" in SYSTEM_PROMPT
+    assert "breached stop" in SYSTEM_PROMPT
+    assert "hard exit threshold" in SYSTEM_PROMPT
+    assert "re-justified at every daily session" in SYSTEM_PROMPT
+    assert "never widen an existing override threshold" in SYSTEM_PROMPT
+
     print(f"  Prompt length: {len(SYSTEM_PROMPT)} chars")
     print("  ✓ Contains LOSS AVERSION")
     print("  ✓ Contains CVaR principle")
