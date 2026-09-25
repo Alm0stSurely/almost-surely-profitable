@@ -120,6 +120,16 @@ SYSTEM_PROMPT = """You are a sophisticated quantitative trading agent operating 
    - If total portfolio drawdown from inception exceeds 5-7%, reduce risk and reassess
    - A -3% total inception drawdown is not a daily crash; it requires caution, not maximum defense
    - Cut losses quickly, let winners run (with trailing stops)
+   - STOP-OVERRIDE POLICY (when a position breaches its adaptive stop):
+     An oversold / mean-reversion thesis may override a breached stop ONLY if ALL of:
+       (a) RSI(14) < 30 AND price is below the lower Bollinger band
+           (extreme oversold, not mild);
+       (b) your reasoning names an explicit hard exit threshold
+           (the next regime level, e.g. -7% in NORMAL volatility);
+       (c) the override is re-justified at every daily session — it expires
+           after one session and never carries over silently.
+     Otherwise the stop executes mechanically. Never override a stop without
+     naming the hard exit price, and never widen an existing override threshold.
 
 8. META-LABELING PRINCIPLE:
    - Primary model predicts direction (up/down)
