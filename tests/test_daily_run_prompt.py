@@ -373,3 +373,161 @@ class TestDailyRunRiskMetricsPreserved:
         call_args = mock_agent.get_trading_decision.call_args
         passed_portfolio_summary = call_args[0][1]
         assert "risk_metrics" not in passed_portfolio_summary
+
+    def test_undefined_tail_stats_survive_as_none_not_zero(self, tmp_path, monkeypatch):
+        """tail_risk_analysis omits sortino/skew/kurt at small sample sizes.
+        daily_run must preserve the absence as None so the LLM prompt renders
+        n/a — coercing to 0.0 would present a fictitious 'zero Sortino /
+        symmetric / mesokurtic' measurement to the decision core."""
+        results_dir = tmp_path / "results" / "daily"
+        results_dir.mkdir(parents=True)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        monkeypatch.chdir(tmp_path)
+
+        dates = pd.date_range("2026-06-01", periods=70, freq="B")
+        market_data = {
+            "SPY": pd.DataFrame({"Close": [100.0 + i * 0.05 for i in range(70)]}, index=dates),
+        }
+        market_analysis = {
+            "assets": {
+                "SPY": {"latest": {"price": 103.0}, "returns": [0.0] * 69},
+            },
+            "analysis_date": "2026-08-12",
+        }
+
+        mock_portfolio = MagicMock()
+        mock_portfolio.positions = {}
+        mock_portfolio.trades = []
+        mock_portfolio.get_summary.return_value = {
+            "cash": 8000.0,
+            "positions_value": 2000.0,
+            "total_value": 10000.0,
+            "total_return_pct": 0.0,
+            "total_realized_pnl": 0.0,
+            "total_unrealized_pnl": 0.0,
+            "total_pnl": 0.0,
+            "num_positions": 1,
+            "positions": [
+                {
+                    "ticker": "SPY",
+                    "quantity": 20.0,
+                    "avg_price": 100.0,
+                    "current_price": 103.0,
+                    "market_value": 2000.0,
+                    "unrealized_pnl_pct": 3.0,
+                }
+            ],
+        }
+
+        mock_agent = MagicMock()
+        mock_agent.get_trading_decision.return_value = {
+            "reasoning": "HOLD for test",
+            "actions": [{"ticker": "SPY", "action": "hold", "pct": 0}],
+            "error": False,
+        }
+
+        mock_cooldown_mgr = MagicMock()
+        mock_cooldown_mgr.get_status.return_value = {
+            "trades_this_week": 0,
+            "weekly_cap": 5,
+            "adaptive_stop_loss": 5.0,
+            "active_entries": {},
+        }
+
+        mock_regime_state = MagicMock()
+        mock_regime_state.summary.return_value = "test-regime"
+        mock_regime_state.volatility_regime = "normal"
+        mock_regime_state.trend_regime = "neutral"
+        mock_regime_state.correlation_regime = "normal"
+        mock_regime_state.volatility_percentile = 50.0
+        mock_regime_state.adx_value = 20.0
+        mock_regime_state.avg_correlation = 0.5
+
+        mock_regime_detector = MagicMock()
+        mock_regime_detector.return_value.analyze.return_value = mock_regime_state
+        mock_regime_detector.return_value.get_strategy_recommendation.return_value = {
+            "position_sizing": "normal",
+            "stop_loss_tightening": False,
+            "mean_reversion_opportunities": False,
+            "trend_following": False,
+            "reduce_correlated_exposure": False,
+        }
+
+        mock_cvar = MagicMock()
+        mock_cvar.cvar_95 = -0.02
+        mock_cvar.cvar_99 = -0.03
+        mock_cvar.var_95 = -0.015
+        mock_cvar.var_99 = -0.025
+
+        # Small-sample tail analysis: only max_drawdown is defined.
+        mock_tail_risk = MagicMock(return_value={"max_drawdown": -0.04})
+
+        mock_perf_metrics = MagicMock()
+        mock_perf_metrics.sharpe_ratio = 1.5
+        mock_perf_metrics.sortino_ratio = 0.0
+        mock_perf_metrics.calmar_ratio = 0.9
+        mock_perf_metrics.volatility = 0.12
+        mock_perf_metrics.beta = 0.95
+        mock_perf_metrics.alpha = 0.01
+        mock_perf_metrics.treynor_ratio = 1.2
+        mock_perf_metrics.information_ratio = 0.5
+        mock_perf_metrics.tracking_error = 0.02
+        mock_perf_metrics.max_drawdown = -0.04
+        mock_perf_metrics.annualized_return = 0.08
+
+        mock_benchmark = MagicMock()
+        mock_benchmark.rebalance.return_value = {
+            "total_value": 10000.0,
+            "total_return_pct": 0.0,
+            "num_positions": 0,
+        }
+
+        class _FixedNow:
+            def __init__(self, when):
+                self._when = when
+
+            def now(self):
+                return self._when
+
+            def strftime(self, fmt):
+                return self._when.strftime(fmt)
+
+            def isoformat(self):
+                return self._when.isoformat()
+
+        fixed_date = datetime(2026, 8, 12, 10, 30, 0)
+
+        patches = {
+            "REPO_ROOT": tmp_path,
+            "DATA_DIR": data_dir,
+            "DAILY_RESULTS_DIR": results_dir,
+            "fetch_historical_data": MagicMock(return_value=market_data),
+            "analyze_market_data": MagicMock(return_value=market_analysis),
+            "fetch_current_prices": MagicMock(return_value={"SPY": 103.0}),
+            "Portfolio": MagicMock(return_value=mock_portfolio),
+            "TradingAgent": MagicMock(return_value=mock_agent),
+            "PositionCooldownManager": MagicMock(return_value=mock_cooldown_mgr),
+            "CooldownConfig": MagicMock(),
+            "calculate_portfolio_cvar": MagicMock(return_value=mock_cvar),
+            "tail_risk_analysis": mock_tail_risk,
+            "calculate_all_metrics": MagicMock(return_value=mock_perf_metrics),
+            "LiveEqualWeightBenchmark": MagicMock(return_value=mock_benchmark),
+            "RegimeDetector": mock_regime_detector,
+            "format_regime_for_llm": MagicMock(return_value="\n## Market Regime Analysis\n"),
+            "datetime": _FixedNow(fixed_date),
+        }
+
+        with patch.multiple("daily_run", **patches):
+            run_daily_pipeline(dry_run=False, no_overwrite=False)
+
+        call_args = mock_agent.get_trading_decision.call_args
+        passed_portfolio_summary = call_args[0][1]
+        risk_metrics = passed_portfolio_summary["risk_metrics"]
+        assert risk_metrics["sortino_ratio"] is None
+        assert risk_metrics["skewness"] is None
+        assert risk_metrics["kurtosis"] is None
+        # Defined metrics are untouched.
+        assert risk_metrics["max_drawdown"] == -0.04
+        assert risk_metrics["cvar_95"] == -0.02

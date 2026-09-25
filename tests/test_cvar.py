@@ -163,6 +163,34 @@ def test_tail_risk_small_sample():
     print("✓ Small-sample tail risk test passed\n")
 
 
+def test_tail_risk_undefined_stats_are_omitted_not_zero():
+    """skewness/kurtosis undefined at small n must be OMITTED, not reported
+    as 0.0 — a 0.0 sentinel collides with real measurements (symmetric /
+    mesokurtic) and already leaked into the W39 weekly report as
+    'Kurtosis | 0.00' from a 3-return week. Absent = not estimable, matching
+    the sortino_ratio/tracking_error convention test-pinned above."""
+    # n=2: skewness needs >= 3.
+    result = tail_risk_analysis(np.array([0.01, -0.02]))
+    assert 'skewness' not in result
+    assert 'kurtosis' not in result
+
+    # n=3: skewness defined (boundary), kurtosis still undefined (needs >= 4).
+    result = tail_risk_analysis(np.array([0.01, -0.02, 0.005]))
+    assert 'skewness' in result
+    assert np.isfinite(result['skewness'])
+    assert 'kurtosis' not in result
+
+    # n=4: both defined (boundary).
+    result = tail_risk_analysis(np.array([0.01, -0.02, 0.005, 0.001]))
+    assert 'skewness' in result
+    assert 'kurtosis' in result
+    assert np.isfinite(result['skewness'])
+    assert np.isfinite(result['kurtosis'])
+
+    # Non-finite input: whole dict is refused, as before.
+    assert tail_risk_analysis(np.array([0.01, np.nan, 0.005, 0.001])) == {}
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("CVaR Module Test Suite")

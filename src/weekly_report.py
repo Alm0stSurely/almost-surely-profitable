@@ -147,6 +147,23 @@ def _safe_position_field(value, fmt='.2f', default='n/a'):
     return default
 
 
+def _sortino_display(returns, sortino_ratio, risk_free_rate=0.02):
+    """Render the Sortino ratio, or 'n/a' when the sample cannot define it.
+
+    Mirrors the sample guard in risk.performance_metrics.calculate_sortino_ratio
+    (called by calculate_all_metrics with the same default risk-free rate):
+    fewer than two downside observations — returns below the daily risk-free
+    rate — make the sample downside deviation undefined (ddof=1). The producer
+    returns a 0.0 sentinel in that case; printing it would read as "no
+    downside risk" rather than "not estimable at this sample size".
+    """
+    arr = np.asarray(returns, dtype=float)
+    n_downside = int((arr < risk_free_rate / 252).sum())
+    if n_downside < 2:
+        return "n/a"
+    return f"{sortino_ratio:.2f}"
+
+
 def generate_weekly_report():
     """Generate and save weekly performance report."""
     print("="*70)
@@ -217,7 +234,7 @@ def generate_weekly_report():
         metrics = calculate_all_metrics(portfolio_returns, spy_returns)
         
         print(f"   Sharpe Ratio: {metrics.sharpe_ratio:.2f}")
-        print(f"   Sortino Ratio: {metrics.sortino_ratio:.2f}")
+        print(f"   Sortino Ratio: {_sortino_display(portfolio_returns, metrics.sortino_ratio)}")
         
         if metrics.beta is not None:
             print(f"   Beta (vs SPY): {metrics.beta:.2f}")
@@ -239,8 +256,11 @@ def generate_weekly_report():
         
         # Tail risk analysis (vs SPY as primary benchmark)
         tail = tail_risk_analysis(portfolio_returns, spy_returns)
-        print(f"   Skewness: {tail.get('skewness', 0):.2f}")
-        print(f"   Kurtosis: {tail.get('kurtosis', 0):.2f}")
+        # tail_risk_analysis omits keys that are undefined at this sample
+        # size (fewer than 3 observations for skewness, 4 for kurtosis) —
+        # render those as n/a instead of a fictitious 0.00.
+        print(f"   Skewness: {_safe_position_field(tail.get('skewness'))}")
+        print(f"   Kurtosis: {_safe_position_field(tail.get('kurtosis'))}")
     
     # Benchmark cumulative comparison for the week
     if benchmark_returns:
@@ -328,7 +348,11 @@ def generate_weekly_report():
             f.write(f"| Metric | Value | Interpretation |\n")
             f.write(f"|--------|-------|----------------|\n")
             f.write(f"| Sharpe Ratio | {metrics.sharpe_ratio:.2f} | {'Good' if metrics.sharpe_ratio > 1 else 'Poor'} |\n")
-            f.write(f"| Sortino Ratio | {metrics.sortino_ratio:.2f} | {'Good' if metrics.sortino_ratio > 1 else 'Poor'} |\n")
+            sortino_str = _sortino_display(portfolio_returns, metrics.sortino_ratio)
+            if sortino_str == "n/a":
+                f.write(f"| Sortino Ratio | n/a | n/a |\n")
+            else:
+                f.write(f"| Sortino Ratio | {sortino_str} | {'Good' if metrics.sortino_ratio > 1 else 'Poor'} |\n")
             
             if metrics.beta is not None:
                 beta_interp = "Neutral" if 0.9 < metrics.beta < 1.1 else ("Defensive" if metrics.beta < 0.9 else "Aggressive")
@@ -349,8 +373,8 @@ def generate_weekly_report():
             f.write(f"|--------|-------|\n")
             f.write(f"| CVaR 95% | {cvar_result.cvar_95:.2%} |\n")
             f.write(f"| VaR 95% | {cvar_result.var_95:.2%} |\n")
-            f.write(f"| Skewness | {tail.get('skewness', 0):.2f} |\n")
-            f.write(f"| Kurtosis | {tail.get('kurtosis', 0):.2f} |\n")
+            f.write(f"| Skewness | {_safe_position_field(tail.get('skewness'))} |\n")
+            f.write(f"| Kurtosis | {_safe_position_field(tail.get('kurtosis'))} |\n")
             
             # Benchmark cumulative comparison
             if benchmark_returns:
