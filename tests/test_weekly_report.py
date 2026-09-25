@@ -27,6 +27,7 @@ from weekly_report import (
     _safe_positive_scalar,
     _safe_value_str,
     _safe_weekly_return,
+    _sortino_display,
     calculate_weekly_returns,
     fetch_benchmark_returns,
     generate_weekly_report,
@@ -410,6 +411,35 @@ class TestFormatGuards:
         assert _safe_position_field(float("nan")) == "n/a"
         assert _safe_position_field(None) == "n/a"
 
+    def test_sortino_display_na_with_fewer_than_two_downside_observations(self):
+        """A single downside observation cannot define a sample downside
+        deviation (ddof=1) — the producer's 0.0 sentinel must not be printed
+        as if it were a measurement."""
+        # One negative return, positive producer sentinel.
+        returns = np.array([0.01, -0.02, 0.005])
+        assert _sortino_display(returns, 0.0) == "n/a"
+        # All positive returns: zero downside observations.
+        assert _sortino_display(np.array([0.01, 0.02, 0.005]), 0.0) == "n/a"
+        # Even a non-zero ratio must not be shown when the sample cannot
+        # define it (e.g. a stale ratio from a larger window).
+        assert _sortino_display(np.array([0.01, -0.02, 0.005]), 1.5) == "n/a"
+        # Empty sample.
+        assert _sortino_display(np.array([]), 0.0) == "n/a"
+
+    def test_sortino_display_formats_ratio_with_two_or_more_downside_observations(self):
+        returns = np.array([0.01, -0.02, -0.015, 0.005])
+        assert _sortino_display(returns, 1.234) == "1.23"
+        # Both negative: exactly two downside observations — defined.
+        assert _sortino_display(np.array([-0.01, -0.02]), -0.5) == "-0.50"
+
+    def test_sortino_display_respects_risk_free_threshold(self):
+        """A return below the daily risk-free rate counts as downside in the
+        producer (excess return < 0), even when the raw return is positive."""
+        daily_rf = 0.02 / 252  # ≈ 0.0000794
+        # One genuinely negative return + one positive-but-below-rf return.
+        returns = np.array([-0.01, daily_rf / 2, 0.005])
+        assert _sortino_display(returns, 0.9) == "0.90"
+
 
 class TestGenerateWeeklyReportFormatting:
     """Integration tests for generate_weekly_report with mocked dependencies."""
@@ -593,6 +623,112 @@ class TestGenerateWeeklyReportFormatting:
         assert "| **Total Value** | **n/a** |" in markdown
         assert "| Total Return | n/a |" in markdown
         assert "| SPY | n/a | n/a | n/a | n/a | n/a |" in markdown
+
+    def test_small_sample_week_renders_undefined_stats_as_na(self, capsys, tmp_path, monkeypatch):
+        """A week whose return sample cannot define Sortino/skew/kurtosis must
+        show n/a, not the producers' 0.0 sentinels (W39 shipped
+        'Sortino 0.00' next to 'Sharpe -3.95' and 'Kurtosis 0.00' from a
+        3-return, 1-downside-observation week)."""
+        summary = self._make_summary()
+        patches = self._patch_external_calls(tmp_path, monkeypatch, summary)
+
+        # Three daily results -> two positive weekly returns: zero downside
+        # observations, so the Sortino is undefined at this sample size.
+        weekly_report = sys.modules["weekly_report"]
+        weekly_report.ReportGenerator.return_value.load_daily_results.return_value = [
+            {
+                "date": "2026-08-24",
+                "portfolio_before": {"total_value": 10000.0},
+                "portfolio_after": {"total_value": 10000.0},
+                "executed_trades": [],
+            },
+            {
+                "date": "2026-08-25",
+                "portfolio_before": {"total_value": 10000.0},
+                "portfolio_after": {"total_value": 10050.0},
+                "executed_trades": [],
+            },
+            {
+                "date": "2026-08-26",
+                "portfolio_before": {"total_value": 10050.0},
+                "portfolio_after": {"total_value": 10080.0},
+                "executed_trades": [],
+            },
+        ]
+        # Producer-side: keys absent = undefined at this sample size.
+        patches["tail_risk_analysis"] = MagicMock(return_value={"max_drawdown": -0.005})
+        patches["calculate_all_metrics"] = MagicMock(return_value=MagicMock(
+            sharpe_ratio=2.5,
+            sortino_ratio=0.0,  # producer sentinel for "insufficient downside"
+            max_drawdown=-0.005,
+            volatility=0.1,
+            beta=None,
+            alpha=None,
+            information_ratio=None,
+        ))
+
+        with patch.multiple("weekly_report", **patches):
+            generate_weekly_report()
+
+        captured = capsys.readouterr().out
+        assert "Sortino Ratio: n/a" in captured
+        assert "Skewness: n/a" in captured
+        assert "Kurtosis: n/a" in captured
+
+        report_file = tmp_path / "results" / f"weekly-2026-W35.md"
+        markdown = report_file.read_text()
+        assert "| Sortino Ratio | n/a | n/a |" in markdown
+        assert "| Skewness | n/a |" in markdown
+        assert "| Kurtosis | n/a |" in markdown
+
+    def test_defined_stats_still_render_values(self, capsys, tmp_path, monkeypatch):
+        """With enough downside observations the real values must render."""
+        summary = self._make_summary()
+        patches = self._patch_external_calls(tmp_path, monkeypatch, summary)
+
+        weekly_report = sys.modules["weekly_report"]
+        weekly_report.ReportGenerator.return_value.load_daily_results.return_value = [
+            {
+                "date": "2026-08-24",
+                "portfolio_before": {"total_value": 10000.0},
+                "portfolio_after": {"total_value": 10000.0},
+                "executed_trades": [],
+            },
+            {
+                "date": "2026-08-25",
+                "portfolio_before": {"total_value": 10000.0},
+                "portfolio_after": {"total_value": 9800.0},
+                "executed_trades": [],
+            },
+            {
+                "date": "2026-08-26",
+                "portfolio_before": {"total_value": 9800.0},
+                "portfolio_after": {"total_value": 9700.0},
+                "executed_trades": [],
+            },
+        ]
+        patches["tail_risk_analysis"] = MagicMock(return_value={
+            "max_drawdown": -0.03,
+            "skewness": -1.73,
+            "kurtosis": 2.1,
+        })
+        patches["calculate_all_metrics"] = MagicMock(return_value=MagicMock(
+            sharpe_ratio=-1.2,
+            sortino_ratio=-1.5,
+            max_drawdown=-0.03,
+            volatility=0.2,
+            beta=None,
+            alpha=None,
+            information_ratio=None,
+        ))
+
+        with patch.multiple("weekly_report", **patches):
+            generate_weekly_report()
+
+        captured = capsys.readouterr().out
+        assert "Sortino Ratio: -1.50" in captured
+        assert "Skewness: -1.73" in captured
+        assert "Kurtosis: 2.10" in captured
 
 
 class TestFetchBenchmarkReturnsTzNormalization:

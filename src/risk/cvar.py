@@ -211,17 +211,18 @@ def tail_risk_analysis(
     metrics['var_95'] = var_95
     metrics['var_95_pct'] = var_95 * 100
     
-    # Skewness (asymmetry of returns)
+    # Skewness (asymmetry of returns). Undefined below n=3: omit the key,
+    # matching the sortino_ratio/tracking_error convention in this function —
+    # absent means "not estimable at this sample size", never a sentinel that
+    # collides with a real measurement (0.0 skew reads as "symmetric").
     if len(returns) >= 3:
         metrics['skewness'] = float(pd.Series(returns).skew())
-    else:
-        metrics['skewness'] = 0.0
     
-    # Kurtosis (fat tails)
+    # Kurtosis (fat tails). Undefined below n=4 (pandas' unbiased estimator
+    # divides by (n-1)(n-2)(n-3)): omit the key, same convention as above —
+    # a 0.0 sentinel would read as "mesokurtic / normal tails".
     if len(returns) >= 4:
         metrics['kurtosis'] = float(pd.Series(returns).kurtosis())
-    else:
-        metrics['kurtosis'] = 0.0
     
     # Maximum drawdown
     cumulative = np.cumprod(1 + returns)

@@ -316,9 +316,13 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
             'var_95': cvar_result.var_95,
             'var_99': cvar_result.var_99,
             'max_drawdown': tail_risk.get('max_drawdown', 0),
-            'sortino_ratio': tail_risk.get('sortino_ratio', 0),
-            'skewness': tail_risk.get('skewness', 0),
-            'kurtosis': tail_risk.get('kurtosis', 0)
+            # None (key absent from tail_risk_analysis) means "undefined at
+            # this sample size" — preserve it. Coercing to 0.0 would feed the
+            # LLM prompt a fictitious "zero Sortino / symmetric / mesokurtic"
+            # measurement; trading_agent renders None as n/a.
+            'sortino_ratio': tail_risk.get('sortino_ratio'),
+            'skewness': tail_risk.get('skewness'),
+            'kurtosis': tail_risk.get('kurtosis')
         }
     
     # Step 4: Get LLM decision
