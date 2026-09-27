@@ -856,6 +856,165 @@ def test_no_jitter_exact_backoff():
                 print("✓ No jitter exact backoff test passed\n")
 
 
+def _make_malformed_body_response() -> Mock:
+    """Helper: 200 response whose body fails JSON decoding (truncated/garbage body)."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.side_effect = requests.exceptions.JSONDecodeError(
+        "Expecting value", "<html>Gateway timeout</html>", 0
+    )
+    mock_response.raise_for_status.return_value = None
+    return mock_response
+
+
+def _make_envelope_response(envelope: dict) -> Mock:
+    """Helper: 200 response with a valid-JSON envelope of arbitrary (possibly wrong) shape."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = envelope
+    mock_response.raise_for_status.return_value = None
+    return mock_response
+
+
+def test_api_call_retry_on_malformed_json_body():
+    """A 200 with an undecodable body is a transient transport failure: retried, then succeeds.
+
+    A truncated/garbage body typically comes from a proxy or gateway that answered
+    200 while the real payload never arrived. requests raises JSONDecodeError,
+    which is a RequestException subclass, so the existing backoff retry applies.
+    This pins the exact interaction with the parse-level degradation of the
+    downstream parse path: a malformed *body* never reaches parse_response.
+    """
+    print("Test 23b: API Call - Retry on Malformed JSON Body")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=2)
+
+        malformed_response = _make_malformed_body_response()
+        success_response = _make_success_response('{"actions": [], "reasoning": "OK"}')
+
+        with patch('requests.post', side_effect=[malformed_response, success_response]) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+
+                assert result is not None
+                assert result == '{"actions": [], "reasoning": "OK"}'
+                assert mock_post.call_count == 2
+                assert mock_sleep.call_count == 1
+
+                print("  Malformed body retried successfully on second attempt")
+                print("✓ Malformed JSON body retry test passed\n")
+
+
+def test_api_call_no_retry_on_envelope_shape_failure():
+    """Valid JSON with a wrong shape (missing 'choices') fails after ONE attempt.
+
+    Retrying a well-formed 200 whose envelope lacks the expected keys is
+    unlikely to help — the provider will return the same shape. The failure
+    must be cheap (no backoff loop) and loud (returns None, caller holds all).
+    """
+    print("Test 23c: API Call - No Retry on Envelope Shape Failure")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=3)
+
+        wrong_shape = _make_envelope_response({"usage": {"total_tokens": 42}})
+
+        with patch('requests.post', return_value=wrong_shape) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+
+                assert result is None
+                assert mock_post.call_count == 1
+                assert mock_sleep.call_count == 0
+
+                print("  Wrong-shape envelope failed immediately without retry")
+                print("✓ No retry on envelope shape failure test passed\n")
+
+
+def test_api_call_empty_choices_list_fails_single_attempt():
+    """An empty choices list is a shape failure, not a transient one: single attempt, None."""
+    print("Test 23d: API Call - Empty Choices List Fails Single Attempt")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=2)
+
+        empty_choices = _make_envelope_response({"choices": []})
+
+        with patch('requests.post', return_value=empty_choices) as mock_post:
+            with patch('time.sleep', return_value=None) as mock_sleep:
+                result = agent.call_llm("test prompt")
+
+                assert result is None
+                assert mock_post.call_count == 1
+                assert mock_sleep.call_count == 0
+
+                print("  Empty choices list returned None after one attempt")
+                print("✓ Empty choices list test passed\n")
+
+
+def test_api_call_reasoning_content_fallback():
+    """Kimi may leave content empty and put the answer in reasoning_content."""
+    print("Test 23e: API Call - Reasoning Content Fallback")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file))
+
+        envelope = _make_envelope_response({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": '{"actions": [], "reasoning": "from-reasoning"}'
+                }
+            }]
+        })
+
+        with patch('requests.post', return_value=envelope):
+            result = agent.call_llm("test prompt")
+
+            assert result == '{"actions": [], "reasoning": "from-reasoning"}'
+
+            print("  Empty content recovered from reasoning_content")
+            print("✓ Reasoning content fallback test passed\n")
+
+
+def test_api_call_empty_content_holds_all_downstream():
+    """A 200 with an empty message dict degrades to a hold-all decision downstream.
+
+    End-to-end pin across the call_llm -> parse_response boundary (the PR #64
+    interaction): empty content is returned as "" and parse_response maps it to
+    error=True with zero actions — the global-absence fallback, never a crash
+    and never a partial decision.
+    """
+    print("Test 23f: API Call - Empty Content Holds All Downstream")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file))
+
+        empty_message = _make_envelope_response({"choices": [{"message": {}}]})
+
+        with patch('requests.post', return_value=empty_message):
+            content = agent.call_llm("test prompt")
+
+        assert content == ""
+        parsed = agent.parse_response(content)
+        assert parsed.get("error") is True
+        assert parsed.get("actions") == []
+
+        print("  Empty content -> parse_response -> hold-all with error flag")
+        print("✓ Empty content downstream hold-all test passed\n")
+
+
 def test_timeout_configuration():
     """Test that request timeout is configurable via constructor and env vars."""
     print("Test 24: Timeout Configuration")
