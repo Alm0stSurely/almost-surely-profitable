@@ -62,6 +62,12 @@ def test_system_prompt_exists():
     assert "hard exit threshold" in SYSTEM_PROMPT
     assert "re-justified at every daily session" in SYSTEM_PROMPT
     assert "never widen an existing override threshold" in SYSTEM_PROMPT
+    # Anti-drift anchoring (added 2026-09-28, TLT -7% -> -8% threshold drift under first policy-era override)
+    # NB: assert within-line fragments — the prompt literal wraps lines, so a phrase
+    # spanning a line break + indentation is not a contiguous substring.
+    assert "at least as tight as the" in SYSTEM_PROMPT
+    assert "tightest level previously named" in SYSTEM_PROMPT
+    assert "never loosen" in SYSTEM_PROMPT
 
     print(f"  Prompt length: {len(SYSTEM_PROMPT)} chars")
     print("  ✓ Contains LOSS AVERSION")

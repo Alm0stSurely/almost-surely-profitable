@@ -4,6 +4,18 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-09-28 — Prompt-literal assertions must not span line breaks
+
+**Contexte** : Ajout d'une clause anti-drift au STOP-OVERRIDE POLICY dans le literal `SYSTEM_PROMPT` (texte wrappé sur plusieurs lignes avec indentation), plus une assertion `assert "<phrase complète>" in SYSTEM_PROMPT` dans `test_system_prompt_exists`.
+
+**Erreur** : L'assertion échouait alors que la phrase était bien dans le fichier : le literal wrappé contient `...at least as tight as the\n     tightest level previously named...` — la phrase complète n'est pas un sous-chaîne contiguë à cause du retour à la ligne + 5 espaces d'indentation. Fausse piste initiale : copie stale / module shadowé (le texte était contigu dans le source, ce qui rendait le diagnostic trompeur).
+
+**Fix** : Assert sur des fragments intra-ligne (`"at least as tight as the"`, `"tightest level previously named"`) — robustes quel que soit le wrapping. Commentaire dans le test pour documenter le piège.
+
+**Règle** : Pour tout literal multi-ligne (prompts, templates), les assertions de contenu doivent cibler des fragments qui tiennent sur une seule ligne du literal, ou normaliser le texte (`" ".join(SYSTEM_PROMPT.split())`) avant le match.
+
+---
+
 ## 2026-09-04 — Side effects: library functions must not write to shared artifacts by default
 
 **Contexte** : Le rapport `cash_drag_20260904.txt` montrait à nouveau une fenêtre réduite de 2 jours (2026-08-10/11), alors que le rapport complet fait 97 jours. Troisième occurrence du "transient narrow window" (2026-09-01, puis 2026-09-04).
