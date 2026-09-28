@@ -544,8 +544,12 @@ class TradingAgent:
         Call the LLM API with exponential-backoff retries for transient errors.
 
         Retryable conditions: network errors (requests.exceptions.RequestException)
-        and HTTP status codes 429 (rate limit), 502, 503, 504 (server errors).
-        Non-retryable 4xx errors fail immediately.
+        and HTTP status codes 429 (rate limit), 500, 502, 503, 504 (server
+        errors). 500 is included deliberately: an Internal Server Error is a
+        transient server-side fault in the same trajectory class as
+        502/503/504 (and is retried by urllib3, google-api-core, and the
+        OpenAI SDK by default). A single transient 500 would otherwise abort
+        the day's decision outright. Non-retryable 4xx errors fail immediately.
 
         Args:
             prompt: The formatted prompt.
@@ -607,7 +611,7 @@ class TradingAgent:
             except requests.exceptions.HTTPError as e:
                 last_exception = e
                 status_code = e.response.status_code if e.response is not None else None
-                if status_code in (429, 502, 503, 504) and attempt < self.max_retries:
+                if status_code in (429, 500, 502, 503, 504) and attempt < self.max_retries:
                     self._sleep_before_retry(attempt, status_code=status_code)
                     continue
                 logger.error(f"Error calling LLM API: {e}")

@@ -6,8 +6,10 @@ Simulates transient API failures and measures how the exponential-backoff
 retry policy in src/llm/trading_agent.py improves the chance that a single
 call_llm() invocation returns a usable response.
 
-A retryable failure is defined as HTTP 429, 502, 503, 504 or a network-level
-requests exception. A non-retryable 4xx error is not retried.
+A retryable failure is defined as HTTP 429, 500, 502, 503, 504 or a
+network-level requests exception. A non-retryable 4xx error is not retried.
+(500 was added to the retry set on 2026-09-28: it is a transient
+server-side fault in the same trajectory class as 502/503/504.)
 """
 
 import random
@@ -43,7 +45,7 @@ def _make_error_response(status_code):
     return r
 
 
-def simulate_call(transient_failure_rate, max_retries, n_runs=1000):
+def simulate_call(transient_failure_rate, max_retries, n_runs=1000, status_code=503):
     """
     Simulate call_llm() with a fixed probability of transient failure on each
     HTTP request. Return the fraction of invocations that ultimately succeed.
@@ -55,7 +57,7 @@ def simulate_call(transient_failure_rate, max_retries, n_runs=1000):
         responses = []
         for _ in range(max_retries + 1):
             if random.random() < transient_failure_rate:
-                responses.append(_make_error_response(503))
+                responses.append(_make_error_response(status_code))
             else:
                 responses.append(_make_success_response())
                 break
@@ -95,6 +97,15 @@ def main():
         "chance of a failed daily trading session. A 75% transient failure "
         "rate still leaves ~68% of sessions successful."
     )
+    print()
+
+    # 500 equivalence: the status added to the retry set on 2026-09-28 must
+    # behave identically to 503 under the same transient-failure model.
+    for failure_rate in (0.25, 0.50, 0.75):
+        s500 = simulate_call(failure_rate, max_retries=3, status_code=500)
+        s503 = simulate_call(failure_rate, max_retries=3, status_code=503)
+        match = "OK" if abs(s500 - s503) < 0.05 else "MISMATCH"
+        print(f"  500 vs 503 @ {failure_rate:>4.0%} failure: {s500:.3f} vs {s503:.3f}  [{match}]")
     print()
 
 

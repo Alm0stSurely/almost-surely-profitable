@@ -1015,6 +1015,58 @@ def test_api_call_empty_content_holds_all_downstream():
         print("✓ Empty content downstream hold-all test passed\n")
 
 
+def test_api_call_retry_on_http_500_then_success():
+    """A transient HTTP 500 is retried with backoff, then succeeds.
+
+    Queued policy fix from the PR #66 audit notes: 500 was the only
+    server-side transient status outside the retry set. Old behavior: a
+    single 500 returned None immediately (the day's decision lost to one
+    server hiccup). New behavior: same trajectory class as 502/503/504.
+    """
+    print("Test 23g: API Call - Retry on HTTP 500 Then Success")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file))
+
+        responses = [
+            _make_error_response(500),
+            _make_success_response('{"actions": []}'),
+        ]
+
+        with patch('requests.post', side_effect=responses), patch('time.sleep', return_value=None):
+            content = agent.call_llm("test prompt")
+
+        assert content == '{"actions": []}'
+        print("  500 retried, succeeded on second attempt")
+        print("✓ HTTP 500 transient retry test passed\n")
+
+
+def test_api_call_persistent_500_exhausts_retries():
+    """A persistent HTTP 500 burns the full retry budget, then returns None.
+
+    Pins the bounded side of the policy: retrying does not help a
+    deterministic server fault, but the cost is capped at max_retries extra
+    attempts and the terminal state (None -> hold-all downstream) is
+    unchanged.
+    """
+    print("Test 23h: API Call - Persistent 500 Exhausts Retries")
+    print("-" * 40)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test_key", history_file=str(history_file), max_retries=2)
+
+        with patch('requests.post', side_effect=lambda *a, **k: _make_error_response(500)), \
+             patch('time.sleep', return_value=None):
+            content = agent.call_llm("test prompt")
+
+        assert content is None
+        print("  Persistent 500 exhausted retries and returned None")
+        print("✓ Persistent 500 exhaustion test passed\n")
+
+
 def test_timeout_configuration():
     """Test that request timeout is configurable via constructor and env vars."""
     print("Test 24: Timeout Configuration")
