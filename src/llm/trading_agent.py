@@ -73,6 +73,19 @@ def _safe_format(value, spec: str = ".2f", fallback: str = "n/a") -> str:
     return f"{float(value):{spec}}"
 
 
+def _safe_pct(value, spec: str = ".1f", fallback: str = "n/a") -> str:
+    """Format *value*×100 with *spec* when finite; otherwise return *fallback*.
+
+    Validates BEFORE scaling: a None/non-finite input never reaches the
+    multiplication (``None * 100`` raises TypeError downstream of any guard
+    placed after it), and an absent key stays absent instead of laundering
+    into a fictitious "0.00" reading via a numeric ``.get`` default.
+    """
+    if not _is_finite_number(value):
+        return fallback
+    return f"{float(value) * 100:{spec}}"
+
+
 SYSTEM_PROMPT = """You are a sophisticated quantitative trading agent operating in a paper trading environment with 10,000 EUR initial capital.
 
 
@@ -370,12 +383,16 @@ class TradingAgent:
         risk_metrics = portfolio_summary.get('risk_metrics', {})
         if risk_metrics:
             prompt_parts.append("\n=== RISK METRICS (Tail Risk Analysis) ===")
-            prompt_parts.append(f"CVaR 95% (Expected Shortfall): {_safe_format(risk_metrics.get('cvar_95', 0) * 100, '.2f')}%")
-            prompt_parts.append(f"VaR 95%: {_safe_format(risk_metrics.get('var_95', 0) * 100, '.2f')}%")
-            prompt_parts.append(f"Max Drawdown: {_safe_format(risk_metrics.get('max_drawdown', 0) * 100, '.2f')}%")
-            prompt_parts.append(f"Sortino Ratio: {_safe_format(risk_metrics.get('sortino_ratio', 0), '.2f')}")
-            prompt_parts.append(f"Return Skewness: {_safe_format(risk_metrics.get('skewness', 0), '.2f')}")
-            prompt_parts.append(f"Return Kurtosis: {_safe_format(risk_metrics.get('kurtosis', 0), '.2f')}")
+            # Absent keys and None values render as n/a — never as a
+            # fictitious 0.00 reading (0.0 collides with a real Sortino /
+            # symmetric-skew / mesokurtic measurement). _safe_pct validates
+            # before scaling so a None ratio cannot reach `None * 100`.
+            prompt_parts.append(f"CVaR 95% (Expected Shortfall): {_safe_pct(risk_metrics.get('cvar_95'), '.2f')}%")
+            prompt_parts.append(f"VaR 95%: {_safe_pct(risk_metrics.get('var_95'), '.2f')}%")
+            prompt_parts.append(f"Max Drawdown: {_safe_pct(risk_metrics.get('max_drawdown'), '.2f')}%")
+            prompt_parts.append(f"Sortino Ratio: {_safe_format(risk_metrics.get('sortino_ratio'), '.2f')}")
+            prompt_parts.append(f"Return Skewness: {_safe_format(risk_metrics.get('skewness'), '.2f')}")
+            prompt_parts.append(f"Return Kurtosis: {_safe_format(risk_metrics.get('kurtosis'), '.2f')}")
             prompt_parts.append("\nNote: CVaR measures expected loss in worst 5% of cases. Lower is safer.")
         
         positions = portfolio_summary.get('positions', [])
