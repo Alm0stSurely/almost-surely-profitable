@@ -1406,3 +1406,120 @@ def test_save_decision_fallback_branch_rejects_non_finite():
 
         print("  Fallback path: finite saves, non-finite raises ValueError")
         print("✓ Fallback strict-JSON contract test passed\n")
+
+
+def test_safe_pct_validates_before_scaling():
+    """_safe_pct scales finite ratios and renders absence/non-finite as n/a."""
+    from llm.trading_agent import _safe_pct
+
+    assert _safe_pct(-0.025, ".2f") == "-2.50"
+    assert _safe_pct(0.0, ".2f") == "0.00"
+    # None must never reach the multiplication (None * 100 raises TypeError).
+    assert _safe_pct(None, ".2f") == "n/a"
+    assert _safe_pct(float("nan"), ".2f") == "n/a"
+    assert _safe_pct(float("inf"), ".2f") == "n/a"
+    assert _safe_pct(float("-inf"), ".2f") == "n/a"
+    assert _safe_pct("abc", ".2f") == "n/a"
+    # bool ⊂ int in Python but is not a ratio measurement.
+    assert _safe_pct(True, ".2f") == "n/a"
+
+
+def test_build_prompt_absent_risk_metric_keys_render_na():
+    """Partial risk_metrics block: absent keys render n/a, never fictitious 0.00.
+
+    0.0 collides with a real Sortino / symmetric-skew / mesokurtic
+    measurement, so a missing key must not launder into "0.00" in the LLM
+    prompt (PR #65 sentinel-collision doctrine, consumer side).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": 10000.0,
+            "positions": [],
+            "risk_metrics": {
+                "cvar_95": -0.025,
+                "var_95": -0.02,
+                "max_drawdown": -0.10,
+                # sortino_ratio / skewness / kurtosis keys absent
+            },
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "CVaR 95% (Expected Shortfall): -2.50%" in prompt
+        assert "VaR 95%: -2.00%" in prompt
+        assert "Max Drawdown: -10.00%" in prompt
+        assert "Sortino Ratio: n/a" in prompt
+        assert "Return Skewness: n/a" in prompt
+        assert "Return Kurtosis: n/a" in prompt
+        assert "Sortino Ratio: 0.00" not in prompt
+        assert "Return Skewness: 0.00" not in prompt
+        assert "Return Kurtosis: 0.00" not in prompt
+
+
+def test_build_prompt_none_scaled_ratio_renders_na():
+    """None at a scaled ratio renders n/a% instead of raising TypeError."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": 10000.0,
+            "positions": [],
+            "risk_metrics": {
+                "cvar_95": None,
+                "var_95": -0.02,
+                "max_drawdown": -0.10,
+                "sortino_ratio": None,
+                "skewness": 0.10,
+                "kurtosis": 3.0,
+            },
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "CVaR 95% (Expected Shortfall): n/a%" in prompt
+        assert "Sortino Ratio: n/a" in prompt
+        # Sibling finite stats still render normally (per-element drop: one
+        # malformed element must not void the n−1 valid ones).
+        assert "VaR 95%: -2.00%" in prompt
+        assert "Max Drawdown: -10.00%" in prompt
+        assert "Return Skewness: 0.10" in prompt
+        assert "Return Kurtosis: 3.00" in prompt
+
+
+def test_build_prompt_finite_risk_metrics_render_unchanged():
+    """Healthy path pinned: finite risk stats format exactly as before."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": 10000.0,
+            "positions": [],
+            "risk_metrics": {
+                "cvar_95": -0.025,
+                "var_95": -0.02,
+                "max_drawdown": -0.10,
+                "sortino_ratio": 1.23,
+                "skewness": -0.45,
+                "kurtosis": 4.56,
+            },
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "CVaR 95% (Expected Shortfall): -2.50%" in prompt
+        assert "VaR 95%: -2.00%" in prompt
+        assert "Max Drawdown: -10.00%" in prompt
+        assert "Sortino Ratio: 1.23" in prompt
+        assert "Return Skewness: -0.45" in prompt
+        assert "Return Kurtosis: 4.56" in prompt
