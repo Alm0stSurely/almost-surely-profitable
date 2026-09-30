@@ -374,10 +374,14 @@ class TradingAgent:
         
         # Portfolio state
         prompt_parts.append("\n\n=== PORTFOLIO STATE ===")
-        prompt_parts.append(f"Cash: €{_safe_format(portfolio_summary.get('cash', 0), '.2f')}")
-        prompt_parts.append(f"Total Value: €{_safe_format(portfolio_summary.get('total_value', 0), '.2f')}")
-        prompt_parts.append(f"Total Return: {_safe_format(portfolio_summary.get('total_return_pct', 0), '.2f')}%")
-        prompt_parts.append(f"Total P&L: €{_safe_format(portfolio_summary.get('total_pnl', 0), '+.2f')}")
+        # Absent keys and None values render as n/a — never as a fictitious
+        # €0.00 / 0.00% reading (0.0 collides with a real breakeven portfolio;
+        # PR #65 sentinel-collision doctrine, consumer side — same convention
+        # as the risk-metrics block below).
+        prompt_parts.append(f"Cash: €{_safe_format(portfolio_summary.get('cash'), '.2f')}")
+        prompt_parts.append(f"Total Value: €{_safe_format(portfolio_summary.get('total_value'), '.2f')}")
+        prompt_parts.append(f"Total Return: {_safe_format(portfolio_summary.get('total_return_pct'), '.2f')}%")
+        prompt_parts.append(f"Total P&L: €{_safe_format(portfolio_summary.get('total_pnl'), '+.2f')}")
         
         # Risk metrics (CVaR)
         risk_metrics = portfolio_summary.get('risk_metrics', {})
