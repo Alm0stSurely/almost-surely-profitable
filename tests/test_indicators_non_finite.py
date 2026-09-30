@@ -135,3 +135,25 @@ def test_get_latest_indicators_handles_missing_columns():
     assert latest["rsi_14"] == 50.0
     assert latest["bb_position"] == 0.5
     assert latest["price"] == 100.0
+
+
+def test_calculate_all_indicators_guards_none_and_no_close_column():
+    """None input or a DataFrame without 'Close' must return an empty frame.
+
+    Regression 2026-09-30: yfinance fetch gaps can propagate None frames to
+    ad-hoc callers, previously raising AttributeError (silent failure
+    documented in the 2026-09-29/30 intraday monitor sessions).
+    """
+    result_none = calculate_all_indicators(None)
+    assert isinstance(result_none, pd.DataFrame)
+    assert result_none.empty
+
+    result_no_close = calculate_all_indicators(pd.DataFrame({"Open": [1.0, 2.0]}))
+    assert isinstance(result_no_close, pd.DataFrame)
+    assert result_no_close.empty
+
+
+def test_get_latest_indicators_guards_none():
+    """None input must return an empty dict, not raise."""
+    assert get_latest_indicators(None) == {}
+    assert get_latest_indicators(pd.DataFrame()) == {}

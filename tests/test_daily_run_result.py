@@ -323,6 +323,14 @@ def test_safe_format_helpers_handle_non_finite():
     assert _safe_pct_str(float("nan")) == "n/a"
     assert _safe_pct_str(float("inf"), fallback="-") == "-"
 
+    # already_percent: inputs in percentage points must not be re-scaled
+    # (regression 2026-09-30: console showed "-251.09%" for a -2.51% return
+    # and would have shown "500.0%" for the 5.0% adaptive stop-loss)
+    assert _safe_pct_str(-2.51, already_percent=True) == "-2.51%"
+    assert _safe_pct_str(5.0, ".1f", already_percent=True) == "5.0%"
+    assert _safe_pct_str(float("nan"), already_percent=True) == "n/a"
+    assert _safe_pct_str(-0.98, already_percent=True) == "-0.98%"
+
     assert _safe_value_str(123.456) == "€123.46"
     assert _safe_value_str(float("nan")) == "n/a"
     assert _safe_value_str(float("-inf")) == "n/a"

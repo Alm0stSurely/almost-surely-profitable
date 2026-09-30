@@ -50,10 +50,18 @@ def _safe_weight(market_value: float, total_value: float) -> float:
     return market_value / total_value
 
 
-def _safe_pct_str(value, spec: str = "+.2f", fallback: str = "n/a") -> str:
-    """Format *value* as a percentage string if finite, else return *fallback*."""
+def _safe_pct_str(value, spec: str = "+.2f", fallback: str = "n/a", already_percent: bool = False) -> str:
+    """Format *value* as a percentage string if finite, else return *fallback*.
+
+    By default *value* is a decimal fraction (0.05 -> "+5.00%"). Pass
+    ``already_percent=True`` when the input is already expressed in
+    percentage points (e.g. portfolio/benchmark ``total_return_pct`` or
+    the cooldown ``adaptive_stop_loss`` threshold) to avoid double-scaling.
+    """
     if not _is_finite_number(value):
         return fallback
+    if already_percent:
+        return f"{format(value, spec)}%"
     return f"{format(value * 100, spec)}%"
 
 
@@ -263,7 +271,7 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         print(f"  Pruned stale cooldown entries (exited outside recorded path): {', '.join(pruned)}")
     cooldown_status = cooldown_mgr.get_status()
     print(f"  ✓ Cooldown manager active — trades this week: {cooldown_status['trades_this_week']}/{cooldown_status['weekly_cap']}")
-    print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {_safe_pct_str(cooldown_status['adaptive_stop_loss'], '.1f')}")
+    print(f"  Volatility regime: {vol_regime} | Adaptive stop-loss: {_safe_pct_str(cooldown_status['adaptive_stop_loss'], '.1f', already_percent=True)}")
     if cooldown_status['active_entries']:
         print(f"  Active entries: {', '.join(cooldown_status['active_entries'].keys())}")
     
@@ -436,7 +444,7 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         # Get all current prices for benchmark universe
         benchmark_prices = fetch_current_prices(ALL_TICKERS, max_workers=8)
         benchmark_summary = benchmark.rebalance(benchmark_prices)
-        print(f"  Benchmark value: {_safe_value_str(benchmark_summary['total_value'])} ({_safe_pct_str(benchmark_summary['total_return_pct'])})")
+        print(f"  Benchmark value: {_safe_value_str(benchmark_summary['total_value'])} ({_safe_pct_str(benchmark_summary['total_return_pct'], already_percent=True)})")
         print(f"  Benchmark positions: {benchmark_summary['num_positions']}")
     except Exception as e:
         print(f"  ⚠ Benchmark update failed: {e}")
@@ -561,11 +569,11 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     print("\n" + "="*70)
     print("DAILY RUN COMPLETE")
     print("="*70)
-    print(f"Strategy Value: {_safe_value_str(portfolio_after_summary['total_value'])} ({_safe_pct_str(portfolio_after_summary['total_return_pct'])})")
+    print(f"Strategy Value: {_safe_value_str(portfolio_after_summary['total_value'])} ({_safe_pct_str(portfolio_after_summary['total_return_pct'], already_percent=True)})")
     if benchmark_summary:
-        print(f"Benchmark Value: {_safe_value_str(benchmark_summary['total_value'])} ({_safe_pct_str(benchmark_summary['total_return_pct'])})")
+        print(f"Benchmark Value: {_safe_value_str(benchmark_summary['total_value'])} ({_safe_pct_str(benchmark_summary['total_return_pct'], already_percent=True)})")
         gap = portfolio_after_summary['total_return_pct'] - benchmark_summary['total_return_pct']
-        print(f"Gap vs Benchmark: {_safe_pct_str(gap)}")
+        print(f"Gap vs Benchmark: {_safe_pct_str(gap, already_percent=True)}")
     print(f"Trades Executed: {len([t for t in executed_trades if t.get('status') == 'executed'])}")
     print("="*70)
     

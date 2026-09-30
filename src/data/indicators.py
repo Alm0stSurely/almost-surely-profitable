@@ -119,8 +119,19 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df: DataFrame with 'Close' column
     
     Returns:
-        DataFrame with added indicator columns
+        DataFrame with added indicator columns (empty DataFrame if input is
+        None or has no usable rows)
     """
+    # Guard against None / unusable input: yfinance fetch gaps can propagate
+    # None frames through ad-hoc callers, previously raising AttributeError
+    # (silent failure documented 2026-09-29/30 intraday monitor sessions).
+    if df is None:
+        logger.warning("calculate_all_indicators received None DataFrame")
+        return pd.DataFrame()
+    if 'Close' not in df.columns:
+        logger.warning("calculate_all_indicators: DataFrame has no 'Close' column")
+        return pd.DataFrame()
+
     # Drop rows with non-finite Close prices to avoid indicator corruption.
     # This handles cases where yfinance returns a row for today before market close
     # or returns Inf/NaN ticks from sparse data.
@@ -227,9 +238,9 @@ def get_latest_indicators(df: pd.DataFrame) -> Dict:
     Extract latest indicator values from a DataFrame.
     
     Returns:
-        Dict with current indicator values
+        Dict with current indicator values (empty dict if input is None or empty)
     """
-    if df.empty:
+    if df is None or df.empty:
         return {}
     
     latest = df.iloc[-1]
@@ -266,8 +277,15 @@ def analyze_market_data(data_dict: Dict[str, pd.DataFrame]) -> Dict:
     for ticker, df in data_dict.items():
         try:
             df_with_indicators = calculate_all_indicators(df.copy())
+            # Use the cleaned frame (non-finite rows dropped) for the return
+            # anchor so a stale/live NaN tick cannot poison total_return.
+            close = (
+                df_with_indicators['Close']
+                if not df_with_indicators.empty
+                else df['Close']
+            )
             total_return_raw = (
-                (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1 if len(df) > 1 else 0
+                (close.iloc[-1] / close.iloc[0]) - 1 if len(close) > 1 else 0
             )
             total_return = _safe_float(total_return_raw, 0.0)
             daily_returns = (
