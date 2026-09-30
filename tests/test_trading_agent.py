@@ -1523,3 +1523,78 @@ def test_build_prompt_finite_risk_metrics_render_unchanged():
         assert "Sortino Ratio: 1.23" in prompt
         assert "Return Skewness: -0.45" in prompt
         assert "Return Kurtosis: 4.56" in prompt
+
+
+def test_build_prompt_absent_portfolio_totals_render_na():
+    """Partial portfolio block: absent totals render n/a, never fictitious 0.00.
+
+    0.0 collides with a real breakeven portfolio (zero P&L, zero return), so
+    a missing key must not launder into "Cash: €0.00" in the LLM prompt
+    (PR #65 sentinel-collision doctrine, consumer side).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": 8000.0,
+            "positions": [],
+            # total_value / total_return_pct / total_pnl keys absent
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Cash: €8000.00" in prompt
+        assert "Total Value: €n/a" in prompt
+        assert "Total Return: n/a%" in prompt
+        assert "Total P&L: €n/a" in prompt
+        assert "Total Value: €0.00" not in prompt
+        assert "Total Return: 0.00%" not in prompt
+        assert "Total P&L: €+0.00" not in prompt
+
+
+def test_build_prompt_none_portfolio_total_renders_na():
+    """None portfolio totals render n/a while finite siblings stay intact."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": 8000.0,
+            "total_value": None,
+            "total_return_pct": None,
+            "total_pnl": None,
+            "positions": [],
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Cash: €8000.00" in prompt
+        assert "Total Value: €n/a" in prompt
+        assert "Total Return: n/a%" in prompt
+        assert "Total P&L: €n/a" in prompt
+
+
+def test_build_prompt_finite_portfolio_totals_render_unchanged():
+    """Healthy path pinned: finite portfolio totals format exactly as before."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {
+            "cash": 2725.69,
+            "total_value": 10123.45,
+            "total_return_pct": 1.23,
+            "total_pnl": 123.45,
+            "positions": [],
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Cash: €2725.69" in prompt
+        assert "Total Value: €10123.45" in prompt
+        assert "Total Return: 1.23%" in prompt
+        assert "Total P&L: €+123.45" in prompt
