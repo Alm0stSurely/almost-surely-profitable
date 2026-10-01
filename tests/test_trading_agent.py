@@ -1598,3 +1598,110 @@ def test_build_prompt_finite_portfolio_totals_render_unchanged():
         assert "Total Value: €10123.45" in prompt
         assert "Total Return: 1.23%" in prompt
         assert "Total P&L: €+123.45" in prompt
+
+
+def test_build_prompt_absent_asset_indicators_render_na():
+    """Empty per-asset `latest` dict: every indicator renders n/a, never a
+    fictitious reading.
+
+    Reachable in production: get_latest_indicators returns {} for an empty
+    indicator frame, so all seven keys are absent at once. The numeric
+    .get defaults used to launder that into \"Price: €0.00\", \"RSI(14):
+    50.0\" (a real neutral-momentum reading), \"Bollinger Position: 0.50\"
+    (a real mid-band reading) and \"Volatility (ann): 0.0%\" — every one a
+    collision with a plausible real measurement (PR #65 sentinel-collision
+    doctrine, consumer side). The € prefix sits outside _safe_format, so
+    absence renders \"€n/a\"; the % suffix sits outside _safe_pct, so
+    absence renders \"n/a%\" — both asserted literally.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        market_data = {"assets": {"SPY": {"latest": {}}}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {"cash": 8000.0, "positions": []}
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Price: €n/a" in prompt
+        assert "SMA20: €n/a | SMA50: €n/a" in prompt
+        assert "RSI(14): n/a" in prompt
+        assert "Bollinger Position: n/a" in prompt
+        assert "Volatility (ann): n/a%" in prompt
+        assert "Drawdown: n/a%" in prompt
+        assert "Daily Return: n/a%" in prompt
+        # No fictitious readings survive anywhere in the asset block.
+        assert "Price: €0.00" not in prompt
+        assert "RSI(14): 50.0" not in prompt
+        assert "Bollinger Position: 0.50" not in prompt
+        assert "Volatility (ann): 0.0%" not in prompt
+        assert "Drawdown: 0.00%" not in prompt
+        assert "Daily Return: 0.00%" not in prompt
+
+
+def test_build_prompt_none_asset_indicator_renders_na():
+    """None scaled-ratio renders n/a% and cannot crash the prompt build.
+
+    _safe_pct validates BEFORE scaling: on old code
+    `latest.get('volatility_annual', 0) * 100` raised TypeError for a
+    stored None, killing the whole prompt build (a lost trading day).
+    Per-element drop: one malformed element must not void the n−1 valid
+    ones, so finite siblings keep rendering.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        latest = {
+            "price": 100.0,
+            "sma_20": 99.0,
+            "sma_50": 98.0,
+            "rsi_14": 45.0,
+            "bb_position": 0.3,
+            "volatility_annual": None,
+            "drawdown": None,
+            "daily_return": 0.01,
+        }
+        market_data = {"assets": {"SPY": {"latest": latest}}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {"cash": 8000.0, "positions": []}
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Volatility (ann): n/a%" in prompt
+        assert "Drawdown: n/a%" in prompt
+        # Finite siblings intact.
+        assert "Price: €100.00" in prompt
+        assert "SMA20: €99.00 | SMA50: €98.00" in prompt
+        assert "RSI(14): 45.0" in prompt
+        assert "Bollinger Position: 0.30" in prompt
+        assert "Daily Return: 1.00%" in prompt
+
+
+def test_build_prompt_finite_asset_indicators_render_unchanged():
+    """Healthy path pinned: finite asset indicators format exactly as before."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        history_file = Path(tmpdir) / "decisions.json"
+        agent = TradingAgent(api_key="test", history_file=str(history_file))
+
+        latest = {
+            "price": 592.35,
+            "sma_20": 588.10,
+            "sma_50": 575.20,
+            "rsi_14": 61.7,
+            "bb_position": 0.82,
+            "volatility_annual": 0.152,
+            "drawdown": -0.034,
+            "daily_return": 0.012,
+        }
+        market_data = {"assets": {"SPY": {"latest": latest}}, "correlations": pd.DataFrame(), "regime": None}
+        portfolio = {"cash": 8000.0, "positions": []}
+
+        prompt = agent.build_prompt(market_data, portfolio)
+
+        assert "Price: €592.35" in prompt
+        assert "SMA20: €588.10 | SMA50: €575.20" in prompt
+        assert "RSI(14): 61.7" in prompt
+        assert "Bollinger Position: 0.82" in prompt
+        assert "Volatility (ann): 15.2%" in prompt
+        assert "Drawdown: -3.40%" in prompt
+        assert "Daily Return: 1.20%" in prompt
