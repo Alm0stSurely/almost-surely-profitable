@@ -343,13 +343,21 @@ class TradingAgent:
         for ticker, data in assets.items():
             latest = data.get('latest', {})
             prompt_parts.append(f"\n{ticker}:")
-            prompt_parts.append(f"  Price: €{_safe_format(latest.get('price', 0), '.2f')}")
-            prompt_parts.append(f"  SMA20: €{_safe_format(latest.get('sma_20', 0), '.2f')} | SMA50: €{_safe_format(latest.get('sma_50', 0), '.2f')}")
-            prompt_parts.append(f"  RSI(14): {_safe_format(latest.get('rsi_14', 50), '.1f')}")
-            prompt_parts.append(f"  Bollinger Position: {_safe_format(latest.get('bb_position', 0.5), '.2f')}")
-            prompt_parts.append(f"  Volatility (ann): {_safe_format(latest.get('volatility_annual', 0) * 100, '.1f')}%")
-            prompt_parts.append(f"  Drawdown: {_safe_format(latest.get('drawdown', 0) * 100, '.2f')}%")
-            prompt_parts.append(f"  Daily Return: {_safe_format(latest.get('daily_return', 0) * 100, '.2f')}%")
+            # Absent keys and None values render as n/a — never as a
+            # fictitious reading: €0.00 price, RSI 50.0 "neutral", BB 0.50
+            # mid-band and 0.0% volatility all collide with real
+            # measurements (PR #65 sentinel-collision doctrine, consumer
+            # side — same convention as the risk-metrics and
+            # portfolio-totals blocks below). _safe_pct validates BEFORE
+            # scaling so a None ratio cannot reach `None * 100` and kill
+            # the whole prompt build.
+            prompt_parts.append(f"  Price: €{_safe_format(latest.get('price'), '.2f')}")
+            prompt_parts.append(f"  SMA20: €{_safe_format(latest.get('sma_20'), '.2f')} | SMA50: €{_safe_format(latest.get('sma_50'), '.2f')}")
+            prompt_parts.append(f"  RSI(14): {_safe_format(latest.get('rsi_14'), '.1f')}")
+            prompt_parts.append(f"  Bollinger Position: {_safe_format(latest.get('bb_position'), '.2f')}")
+            prompt_parts.append(f"  Volatility (ann): {_safe_pct(latest.get('volatility_annual'), '.1f')}%")
+            prompt_parts.append(f"  Drawdown: {_safe_pct(latest.get('drawdown'), '.2f')}%")
+            prompt_parts.append(f"  Daily Return: {_safe_pct(latest.get('daily_return'), '.2f')}%")
         
         # Correlations
         correlations = market_data.get('correlations', {})
