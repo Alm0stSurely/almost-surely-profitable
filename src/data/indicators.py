@@ -28,8 +28,33 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _drop_non_finite(prices: pd.Series) -> pd.Series:
+    """Drop non-finite ticks from a raw price series.
+
+    Primitive-level contract (2026-10-02): raw callers such as
+    monitor.check_bollinger_breakouts and the backtest examples feed
+    yfinance series straight into these functions, bypassing the cleaning
+    convention that lives in calculate_all_indicators. Rolling-based
+    primitives happened to skip NaN but absorbed Inf into every subsequent
+    window; calculate_drawdown propagated NaN into the last value. Market
+    data is dirty at every entry point, so the drop happens here — at the
+    primitive boundary — for every consumer, whatever wrapper (if any)
+    called it. Idempotent: an already-clean series passes through
+    unchanged (index preserved).
+    """
+    try:
+        # Vectorized fast path: numeric dtype. np.isfinite is O(n) in C.
+        mask = np.isfinite(prices.to_numpy(dtype=float, na_value=np.nan))
+        return prices[mask]
+    except (TypeError, ValueError):
+        # Object-dtype or otherwise exotic input: element-wise verdicts.
+        mask = prices.map(_is_finite_number)
+        return prices[mask]
+
+
 def calculate_sma(prices: pd.Series, window: int) -> pd.Series:
     """Calculate Simple Moving Average."""
+    prices = _drop_non_finite(prices)
     return prices.rolling(window=window, min_periods=1).mean()
 
 
@@ -40,6 +65,7 @@ def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     RSI = 100 - (100 / (1 + RS))
     where RS = Average Gain / Average Loss
     """
+    prices = _drop_non_finite(prices)
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
@@ -66,6 +92,7 @@ def calculate_bollinger_bands(
     Returns:
         (upper_band, middle_band, lower_band)
     """
+    prices = _drop_non_finite(prices)
     middle_band = calculate_sma(prices, window)
     std_dev = prices.rolling(window=window, min_periods=1).std()
     upper_band = middle_band + (std_dev * num_std)
@@ -77,6 +104,7 @@ def calculate_volatility(prices: pd.Series, window: int = 20) -> pd.Series:
     """
     Calculate rolling volatility (standard deviation of returns).
     """
+    prices = _drop_non_finite(prices)
     returns = prices.pct_change()
     return returns.rolling(window=window, min_periods=1).std() * np.sqrt(252)
 
@@ -87,6 +115,7 @@ def calculate_drawdown(prices: pd.Series) -> pd.Series:
     
     Drawdown = (Current Price / Running Max) - 1
     """
+    prices = _drop_non_finite(prices)
     running_max = prices.expanding().max()
     drawdown = (prices / running_max) - 1
     return drawdown
