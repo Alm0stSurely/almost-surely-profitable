@@ -191,6 +191,70 @@ def test_tail_risk_undefined_stats_are_omitted_not_zero():
     assert tail_risk_analysis(np.array([0.01, np.nan, 0.005, 0.001])) == {}
 
 
+def test_portfolio_cvar_custom_levels_fail_loud_not_zero():
+    """Custom confidence levels must not launder absent 95/99 fields into 0.0.
+
+    calculate_portfolio_cvar forwards confidence_levels verbatim to
+    calculate_cvar, so asking for [0.90] leaves cvar_95/cvar_99/var_95/var_99
+    not estimated. A .get(level, 0.0) default would render "no tail risk"
+    fiction downstream (0.0 is a plausible CVaR/VaR reading); the direct
+    index fails loud at the boundary instead. Fails on old code, which
+    silently returns a zeroed result.
+    """
+    import pytest
+
+    pr = {
+        'SPY': np.array([0.01, -0.02, 0.005, -0.01, 0.008, 0.012]),
+        'QQQ': np.array([0.005, 0.01, -0.01, 0.002, -0.008, 0.006]),
+    }
+    weights = {'SPY': 0.5, 'QQQ': 0.5}
+
+    with pytest.raises(KeyError):
+        calculate_portfolio_cvar(pr, weights, confidence_levels=[0.90])
+
+
+def test_portfolio_cvar_default_levels_unchanged_by_lookup_hardening():
+    """The loud-lookup change must not alter the default-levels contract."""
+    pr = {
+        'SPY': np.array([0.01, -0.02, 0.005, -0.01, 0.008, 0.012]),
+        'QQQ': np.array([0.005, 0.01, -0.01, 0.002, -0.008, 0.006]),
+    }
+    weights = {'SPY': 0.5, 'QQQ': 0.5}
+
+    result = calculate_portfolio_cvar(pr, weights)
+    assert result.cvar_95 > 0.0
+    assert result.cvar_99 > 0.0
+    assert result.var_95 > 0.0
+    assert result.var_99 > 0.0
+    assert result.expected_shortfall_pct == result.cvar_95 * 100
+
+
+def test_drawdown_cvar_lookup_contract():
+    """A producer that omits the requested level must raise, not default.
+
+    calculate_drawdown_cvar's only protection against a contract drift in
+    calculate_cvar is the lookup: with .get(confidence, 0.0), a future
+    producer returning {} would read as "no drawdown tail risk". Pinned via
+    monkeypatch so the discriminator survives producer refactors.
+    """
+    import pytest
+    import risk.cvar as cvar_module
+
+    equity = np.array([100.0, 105.0, 103.0, 98.0, 101.0, 97.0])
+
+    # Happy path first: real producer still returns the requested level.
+    assert calculate_drawdown_cvar(equity, window=3, confidence=0.95) > 0.0
+
+    # Contract-violating producer: absence must be loud.
+    original = cvar_module.calculate_cvar
+    try:
+        cvar_module.calculate_cvar = lambda returns, levels: {}
+        with pytest.raises(KeyError):
+            calculate_drawdown_cvar(equity, window=3, confidence=0.95)
+    finally:
+        cvar_module.calculate_cvar = original
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("CVaR Module Test Suite")
