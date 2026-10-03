@@ -133,13 +133,17 @@ def calculate_portfolio_cvar(
     var_results = {level: float(np.percentile(-portfolio_returns, level * 100)) 
                    for level in confidence_levels}
     
+    # Index directly rather than .get(level, 0.0): a missing confidence level
+    # means the producer contract was violated (or levels were customised), and
+    # 0.0 is a *plausible* CVaR/VaR reading — the silent default would launder
+    # "not estimated" into "no tail risk". Fail loud at the boundary instead.
     return CVaRResult(
-        cvar_95=cvar_results.get(0.95, 0.0),
-        cvar_99=cvar_results.get(0.99, 0.0),
-        var_95=var_results.get(0.95, 0.0),
-        var_99=var_results.get(0.99, 0.0),
+        cvar_95=cvar_results[0.95],
+        cvar_99=cvar_results[0.99],
+        var_95=var_results[0.95],
+        var_99=var_results[0.99],
         worst_case=float(np.min(portfolio_returns)),
-        expected_shortfall_pct=cvar_results.get(0.95, 0.0) * 100
+        expected_shortfall_pct=cvar_results[0.95] * 100
     )
 
 
@@ -177,9 +181,12 @@ def calculate_drawdown_cvar(
     if len(drawdown_returns) == 0:
         return 0.0
     
-    # Calculate CVaR on drawdowns
+    # Calculate CVaR on drawdowns. Direct index, no .get(confidence, 0.0):
+    # calculate_cvar contractually returns every requested level; a missing key
+    # is a contract violation, and 0.0 reads as "no drawdown tail risk" — the
+    # most optimistic estimate. Absence must fail loud, not launder.
     cvar_dict = calculate_cvar(drawdown_returns, [confidence])
-    return cvar_dict.get(confidence, 0.0)
+    return cvar_dict[confidence]
 
 
 def tail_risk_analysis(
