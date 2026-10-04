@@ -1705,3 +1705,140 @@ def test_build_prompt_finite_asset_indicators_render_unchanged():
         assert "Volatility (ann): 15.2%" in prompt
         assert "Drawdown: -3.40%" in prompt
         assert "Daily Return: 1.20%" in prompt
+
+
+# --- PR #73: cooldown/decision display block — absence renders n/a ---------
+
+
+def _make_agent(tmpdir):
+    history_file = Path(tmpdir) / "decisions.json"
+    return TradingAgent(api_key="test", history_file=str(history_file))
+
+
+def _bare_market_portfolio():
+    return {"assets": {}, "correlations": pd.DataFrame()}, {"cash": 0.0, "positions": []}
+
+
+def test_build_prompt_truncated_cooldown_counters_render_na():
+    """A cooldown dict missing trades_this_week/weekly_cap must render
+    "n/a/n/a", not the old "0/2" full-budget fiction."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        market_data, portfolio = _bare_market_portfolio()
+
+        prompt = agent.build_prompt(market_data, portfolio, [], {"active_entries": {}})
+
+        assert "Weekly trades used: n/a/n/a" in prompt
+        assert "Weekly trades used: 0/2" not in prompt
+
+
+def test_build_prompt_missing_hold_days_and_min_hold_render_na():
+    """Missing hold_days / min_hold_days must render n/a and block the sell
+    display (fail-closed), not fabricate "held 0.0 days"."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        market_data, portfolio = _bare_market_portfolio()
+        cooldown_status = {
+            "trades_this_week": 1,
+            "weekly_cap": 3,
+            "active_entries": {"MC.PA": {"entry_date": "2026-09-01T00:00:00"}},
+            "config": {},
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio, [], cooldown_status)
+
+        assert "MC.PA: held n/a days — ✗ hold n/a more days" in prompt
+        assert "held 0.0 days" not in prompt
+
+
+def test_build_prompt_finite_hold_days_missing_min_hold_blocks_sell():
+    """Finite hold_days with an absent threshold must still block the sell
+    display — an unknown threshold must not read as "can sell"."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        market_data, portfolio = _bare_market_portfolio()
+        cooldown_status = {
+            "trades_this_week": 1,
+            "weekly_cap": 3,
+            "active_entries": {
+                "MC.PA": {"entry_date": "2026-09-01T00:00:00", "hold_days": 12.5}
+            },
+            "config": {},
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio, [], cooldown_status)
+
+        assert "MC.PA: held 12.5 days — ✗ hold n/a more days" in prompt
+        assert "✓ can sell" not in prompt
+
+
+def test_build_prompt_missing_days_since_exit_and_flip_days_render_na():
+    """Missing days_since_exit / flip_cooldown_days must render n/a and block
+    the re-buy display, not fabricate "exited 0.0 days ago"."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        market_data, portfolio = _bare_market_portfolio()
+        cooldown_status = {
+            "trades_this_week": 1,
+            "weekly_cap": 3,
+            "recent_exits": {"TLT": {"exit_date": "2026-09-15T00:00:00"}},
+            "config": {},
+        }
+
+        prompt = agent.build_prompt(market_data, portfolio, [], cooldown_status)
+
+        assert "TLT: exited n/a days ago — ✗ wait n/a more days" in prompt
+        assert "exited 0.0 days ago" not in prompt
+
+
+def test_build_prompt_action_without_pct_renders_no_suffix():
+    """pct is optional by action contract (hold carries none): the display
+    must omit the % suffix instead of laundering absence into "0%"."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        market_data, portfolio = _bare_market_portfolio()
+        recent = [{
+            "timestamp": "2026-10-02T21:30:00",
+            "reasoning": "x",
+            "actions": [{"ticker": "SPY", "action": "hold"}],
+        }]
+
+        prompt = agent.build_prompt(market_data, portfolio, recent)
+
+        assert "- SPY: hold" in prompt
+        assert "- SPY: hold 0%" not in prompt
+
+
+def test_build_prompt_cooldown_and_history_healthy_path_unchanged():
+    """Healthy path pinned: populated cooldown counters, thresholds, and
+    finite action pcts format exactly as before."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        market_data, portfolio = _bare_market_portfolio()
+        cooldown_status = {
+            "trades_this_week": 1,
+            "weekly_cap": 3,
+            "active_entries": {
+                "MC.PA": {"entry_date": "2026-09-01T00:00:00", "hold_days": 12.5}
+            },
+            "recent_exits": {
+                "TLT": {"exit_date": "2026-09-15T00:00:00", "days_since_exit": 4.0}
+            },
+            "config": {"min_hold_days": 5, "flip_cooldown_days": 10},
+        }
+        recent = [{
+            "timestamp": "2026-10-02T21:30:00",
+            "reasoning": "x",
+            "actions": [
+                {"ticker": "AI.PA", "action": "buy", "pct": 17},
+                {"ticker": "SPY", "action": "hold"},
+            ],
+        }]
+
+        prompt = agent.build_prompt(market_data, portfolio, recent, cooldown_status)
+
+        assert "Weekly trades used: 1/3" in prompt
+        assert "MC.PA: held 12.5 days — ✓ can sell" in prompt
+        assert "TLT: exited 4.0 days ago — ✗ wait 6.0 more days" in prompt
+        assert "- AI.PA: buy 17%" in prompt
+        assert "- SPY: hold" in prompt
