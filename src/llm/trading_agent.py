@@ -471,13 +471,24 @@ class TradingAgent:
                 prompt_parts.append(f"  Reasoning: {d.get('reasoning', 'N/A')[:200]}...")
                 actions = d.get('actions', [])
                 for a in actions:
-                    prompt_parts.append(f"  - {a['ticker']}: {a['action']} {a.get('pct', 0)}%")
+                    # pct is optional by action contract (hold carries none;
+                    # _validate_actions accepts absent pct). Render the
+                    # suffix only for a finite pct — absence must not be
+                    # laundered into a fictitious "0%" reading.
+                    pct = a.get('pct')
+                    suffix = f" {pct}%" if _is_finite_number(pct) else ""
+                    prompt_parts.append(f"  - {a['ticker']}: {a['action']}{suffix}")
         
         # Cooldown guardrails
         if cooldown_status:
             prompt_parts.append("\n\n=== COOLDOWN GUARDRAILS ===")
-            trades_this_week = cooldown_status.get('trades_this_week', 0)
-            weekly_cap = cooldown_status.get('weekly_cap', 2)
+            # Both producers (position_cooldown.get_status,
+            # backtest_cooldown.get_status) always populate these keys; the
+            # render below falls back to n/a on absence, so no numeric
+            # default is needed — a default here would launder a truncated
+            # dict into a "0/2 budget remaining" fiction.
+            trades_this_week = cooldown_status.get('trades_this_week')
+            weekly_cap = cooldown_status.get('weekly_cap')
             prompt_parts.append(
                 f"Weekly trades used: "
                 f"{_safe_format(trades_this_week, '.0f', fallback='n/a')}/"
@@ -488,9 +499,12 @@ class TradingAgent:
             if active_entries:
                 prompt_parts.append("\nActive positions (holding period):")
                 for ticker, info in active_entries.items():
-                    hold_days = info.get('hold_days', 0)
-                    min_hold = cooldown_status.get('config', {}).get('min_hold_days', 5)
-                    if not _is_finite_number(hold_days):
+                    # Producers always set hold_days / min_hold_days; absence
+                    # renders n/a and blocks the sell display (fail-closed:
+                    # an unknown threshold must not read as "can sell").
+                    hold_days = info.get('hold_days')
+                    min_hold = cooldown_status.get('config', {}).get('min_hold_days')
+                    if not _is_finite_number(hold_days) or not _is_finite_number(min_hold):
                         status = "✗ hold n/a more days"
                     else:
                         status = "✓ can sell" if hold_days >= min_hold else f"✗ hold {min_hold - hold_days:.1f} more days"
@@ -502,9 +516,13 @@ class TradingAgent:
             if recent_exits:
                 prompt_parts.append("\nRecent exits (flip cooldown):")
                 for ticker, info in recent_exits.items():
-                    days_since = info.get('days_since_exit', 0)
-                    flip_days = cooldown_status.get('config', {}).get('flip_cooldown_days', 10)
-                    if not _is_finite_number(days_since):
+                    # Producers always set days_since_exit / flip_cooldown_days;
+                    # absence renders n/a and blocks the re-buy display
+                    # (fail-closed: an unknown threshold must not read as
+                    # "can re-buy").
+                    days_since = info.get('days_since_exit')
+                    flip_days = cooldown_status.get('config', {}).get('flip_cooldown_days')
+                    if not _is_finite_number(days_since) or not _is_finite_number(flip_days):
                         status = "✗ wait n/a more days"
                     else:
                         status = "✓ can re-buy" if days_since >= flip_days else f"✗ wait {flip_days - days_since:.1f} more days"
