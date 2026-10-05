@@ -48,8 +48,16 @@ def test_non_finite_close_rows_are_dropped():
     assert np.isfinite(result["Close"]).all()
 
 
-def test_latest_indicators_default_on_non_finite_output():
-    """get_latest_indicators must coerce non-finite indicator values to defaults."""
+def test_latest_indicators_omit_non_finite_output():
+    """Non-finite indicator values must OMIT the key, not launder it into a
+    sentinel reading that collides with a real measurement.
+
+    Producer side of the PR #65 sentinel-collision doctrine: rsi_14=50.0 is
+    a genuine neutral-momentum reading, bb_position=0.5 a genuine mid-band
+    reading, drawdown=0.0 a genuine at-peak reading — every old default was
+    producible by real data. The consumer prompt layer renders omission as
+    n/a (PR #70). Per-element: each malformed indicator drops alone.
+    """
     df = pd.DataFrame({
         "Close": [100.0],
         "SMA_20": [np.nan],
@@ -67,20 +75,40 @@ def test_latest_indicators_default_on_non_finite_output():
 
     latest = get_latest_indicators(df)
 
-    assert latest == {
-        "price": 100.0,
-        "sma_20": 0.0,
-        "sma_50": 0.0,
-        "sma_200": 0.0,
-        "rsi_14": 50.0,
-        "bb_upper": 0.0,
-        "bb_lower": 0.0,
-        "bb_position": 0.5,
-        "volatility_annual": 0.0,
-        "drawdown": 0.0,
-        "max_drawdown": 0.0,
-        "daily_return": 0.0,
+    # Only the finite Close survives; every non-finite indicator is absent.
+    assert latest == {"price": 100.0}
+    assert _all_finite(latest)
+
+
+def test_latest_indicators_partial_absence_keeps_finite_siblings():
+    """Per-element drop: one malformed indicator must not void the n−1
+    healthy siblings (scope of failure == scope of malformation)."""
+    df = pd.DataFrame({
+        "Close": [100.0],
+        "SMA_20": [105.0],
+        "RSI_14": [np.nan],
+        "BB_position": [0.5],  # genuine mid-band reading, must survive
+    })
+
+    latest = get_latest_indicators(df)
+
+    assert latest == {"price": 100.0, "sma_20": 105.0, "bb_position": 0.5}
+
+
+def test_latest_indicators_full_frame_emits_every_key():
+    """Bounded side: a real calculate_all_indicators frame populates all
+    twelve keys (both production producers route through it)."""
+    df = pd.DataFrame({"Close": np.linspace(100.0, 119.0, 30)})
+    with_ind = calculate_all_indicators(df)
+
+    latest = get_latest_indicators(with_ind)
+
+    expected_keys = {
+        "price", "sma_20", "sma_50", "sma_200", "rsi_14",
+        "bb_upper", "bb_lower", "bb_position", "volatility_annual",
+        "drawdown", "max_drawdown", "daily_return",
     }
+    assert set(latest) == expected_keys
     assert _all_finite(latest)
 
 
@@ -126,15 +154,17 @@ def test_calculate_all_indicators_no_runtime_warnings_on_bad_ticks():
 
 
 def test_get_latest_indicators_handles_missing_columns():
-    """Missing indicator columns should fall back to defaults without errors."""
+    """Missing indicator columns omit the key — never a fabricated default.
+
+    rsi_14=50.0 and bb_position=0.5 are genuine readings a real frame can
+    carry, so they cannot double as absence markers (PR #65 doctrine).
+    """
     df = pd.DataFrame({"Close": [100.0]})
 
     latest = get_latest_indicators(df)
 
+    assert latest == {"price": 100.0}
     assert _all_finite(latest)
-    assert latest["rsi_14"] == 50.0
-    assert latest["bb_position"] == 0.5
-    assert latest["price"] == 100.0
 
 
 def test_calculate_all_indicators_guards_none_and_no_close_column():

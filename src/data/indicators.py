@@ -19,8 +19,14 @@ def _is_finite_number(value) -> bool:
         return False
 
 
-def _safe_float(value, default: float = 0.0) -> float:
-    """Return *value* as a float when it is finite, otherwise *default*."""
+def _safe_float(value, default: Optional[float] = 0.0) -> Optional[float]:
+    """Return *value* as a float when it is finite, otherwise *default*.
+
+    Pass ``default=None`` to signal absence instead of a sentinel — the
+    producer-side half of the sentinel-collision doctrine (PR #65): a
+    numeric sentinel is only safe when real data cannot produce it, and
+    0.0 / 50.0 / 0.5 are all genuine measurements for these indicators.
+    """
     try:
         f = float(value)
         return f if np.isfinite(f) else default
@@ -265,29 +271,42 @@ def calculate_correlation_matrix(
 def get_latest_indicators(df: pd.DataFrame) -> Dict:
     """
     Extract latest indicator values from a DataFrame.
-    
+
     Returns:
-        Dict with current indicator values (empty dict if input is None or empty)
+        Dict with current indicator values (empty dict if input is None or
+        empty). A key is emitted only when the underlying column exists AND
+        its latest value is finite — a missing column or a NaN/Inf value
+        both render as an omitted key, never as a sentinel that collides
+        with a real measurement (PR #65 sentinel-collision doctrine,
+        producer side; the consumer prompt layer renders omission as n/a,
+        PR #70). Per-element: one malformed indicator cannot void the
+        n−1 healthy siblings.
     """
     if df is None or df.empty:
         return {}
-    
+
     latest = df.iloc[-1]
 
-    return {
-        "price": _safe_float(latest['Close'], 0.0),
-        "sma_20": _safe_float(latest.get('SMA_20', 0), 0.0),
-        "sma_50": _safe_float(latest.get('SMA_50', 0), 0.0),
-        "sma_200": _safe_float(latest.get('SMA_200', 0), 0.0),
-        "rsi_14": _safe_float(latest.get('RSI_14', 50), 50.0),
-        "bb_upper": _safe_float(latest.get('BB_upper', 0), 0.0),
-        "bb_lower": _safe_float(latest.get('BB_lower', 0), 0.0),
-        "bb_position": _safe_float(latest.get('BB_position', 0.5), 0.5),
-        "volatility_annual": _safe_float(latest.get('Volatility_20', 0), 0.0),
-        "drawdown": _safe_float(latest.get('Drawdown', 0), 0.0),
-        "max_drawdown": _safe_float(latest.get('Max_Drawdown', 0), 0.0),
-        "daily_return": _safe_float(latest.get('Daily_Return', 0), 0.0),
-    }
+    result = {}
+    for key, column in (
+        ("price", "Close"),
+        ("sma_20", "SMA_20"),
+        ("sma_50", "SMA_50"),
+        ("sma_200", "SMA_200"),
+        ("rsi_14", "RSI_14"),
+        ("bb_upper", "BB_upper"),
+        ("bb_lower", "BB_lower"),
+        ("bb_position", "BB_position"),
+        ("volatility_annual", "Volatility_20"),
+        ("drawdown", "Drawdown"),
+        ("max_drawdown", "Max_Drawdown"),
+        ("daily_return", "Daily_Return"),
+    ):
+        value = _safe_float(latest.get(column), None)
+        if value is not None:
+            result[key] = value
+
+    return result
 
 
 def analyze_market_data(data_dict: Dict[str, pd.DataFrame]) -> Dict:
