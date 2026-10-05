@@ -4,6 +4,7 @@ Weekly report generator with performance metrics.
 Run every Friday after market close to generate weekly performance report.
 """
 
+import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -164,6 +165,70 @@ def _sortino_display(returns, sortino_ratio, risk_free_rate=0.02):
     return f"{sortino_ratio:.2f}"
 
 
+def _load_week_trades_from_history(week_start_date, week_end_date, existing_trades):
+    """Supplement the daily-result trade list with intraday/monitor trades.
+
+    The weekly report historically listed only trades captured in
+    results/daily/*.json ``executed_trades``, missing intraday monitor
+    executions — the monitor writes directly to data/trades_history.json
+    and updates the portfolio without producing a daily result file.
+    W40-2026 showed 2 trades listed vs 4 real (TTE.PA and TLT monitor
+    sells on 2026-10-01 absent from the daily results). This helper merges
+    the authoritative ledger for the ISO-week window, deduplicating
+    against the daily-derived list on (date, ticker, action, price).
+
+    Args:
+        week_start_date: Monday of the report week (YYYY-MM-DD).
+        week_end_date: End of the report week (YYYY-MM-DD, inclusive).
+        existing_trades: Trades already collected from daily results.
+
+    Returns:
+        List of extra trade dicts (date/ticker/action/price/realized_pnl/
+        status/source), sorted by (date, ticker, action).
+    """
+    history_file = DATA_DIR / "trades_history.json"
+    if not history_file.exists():
+        return []
+    try:
+        with open(history_file) as f:
+            history = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    def _key(date, ticker, action, price):
+        try:
+            price_key = round(float(price), 4)
+        except (TypeError, ValueError):
+            price_key = 0.0
+        return (date, ticker, action, price_key)
+
+    seen = {
+        _key(t.get('date'), t.get('ticker'), t.get('action'), t.get('price'))
+        for t in existing_trades
+    }
+    extra = []
+    for trade in history:
+        ts = trade.get('timestamp', '')
+        date = ts[:10]
+        if not date or not (week_start_date <= date <= week_end_date):
+            continue
+        key = _key(date, trade.get('ticker'), trade.get('action'), trade.get('price'))
+        if key in seen:
+            continue
+        seen.add(key)
+        extra.append({
+            'date': date,
+            'ticker': trade.get('ticker'),
+            'action': trade.get('action'),
+            'price': trade.get('price'),
+            'realized_pnl': trade.get('realized_pnl', 0),
+            'status': 'executed',
+            'source': 'trades_history',
+        })
+    extra.sort(key=lambda t: (t['date'], t['ticker'], t['action']))
+    return extra
+
+
 def generate_weekly_report():
     """Generate and save weekly performance report."""
     print("="*70)
@@ -294,6 +359,16 @@ def generate_weekly_report():
                     'date': day_result.get('date', 'unknown'),
                     **trade
                 })
+
+    # Supplement with intraday/monitor trades from the authoritative ledger
+    # (data/trades_history.json) — daily results alone miss monitor
+    # executions (see _load_week_trades_from_history docstring).
+    all_trades.extend(_load_week_trades_from_history(
+        week_start.strftime('%Y-%m-%d'),
+        today.strftime('%Y-%m-%d'),
+        all_trades,
+    ))
+    all_trades.sort(key=lambda t: (t.get('date', ''), t.get('ticker', '')))
     
     if all_trades:
         print(f"\n🔄 Trades This Week ({len(all_trades)}):")
