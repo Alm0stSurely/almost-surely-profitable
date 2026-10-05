@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 
 from weekly_report import (
+    _load_week_trades_from_history,
     _safe_benchmark_alpha,
     _safe_pct_str,
     _safe_position_field,
@@ -762,3 +763,108 @@ class TestFetchBenchmarkReturnsTzNormalization:
 
         assert result is not None
         assert result["SPY"]["cumulative_return"] == pytest.approx(405.0 / 400.0 - 1, abs=1e-9)
+
+
+class TestLoadWeekTradesFromHistory:
+    """Tests for the intraday-trade supplement helper (W40-2026 gap fix).
+
+    The weekly report used to list only daily-result ``executed_trades``,
+    missing monitor executions recorded solely in data/trades_history.json
+    (W40: 2 listed vs 4 real — TTE.PA/TLT monitor sells on 2026-10-01).
+    """
+
+    def _write_history(self, tmp_path, trades):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        history_file = data_dir / "trades_history.json"
+        history_file.write_text(json.dumps(trades))
+        return data_dir
+
+    def test_no_history_file_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("weekly_report.DATA_DIR", tmp_path / "nonexistent")
+        assert _load_week_trades_from_history("2026-09-28", "2026-10-02", []) == []
+
+    def test_corrupt_history_returns_empty(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "trades_history.json").write_text("{not json")
+        monkeypatch.setattr("weekly_report.DATA_DIR", data_dir)
+        assert _load_week_trades_from_history("2026-09-28", "2026-10-02", []) == []
+
+    def test_merges_monitor_trades_missing_from_daily(self, tmp_path, monkeypatch):
+        """W40-2026 reproduction: daily results carry TLT sell (09-29) and
+        AI.PA buy (09-30); the ledger adds the two 10-01 monitor sells."""
+        data_dir = self._write_history(tmp_path, [
+            {"timestamp": "2026-09-29T21:06:52.421369", "ticker": "TLT",
+             "action": "sell", "price": 78.26000213623047, "realized_pnl": -18.52},
+            {"timestamp": "2026-09-30T21:07:22.886021", "ticker": "AI.PA",
+             "action": "buy", "price": 170.8800048828125},
+            {"timestamp": "2026-10-01T08:09:08.485579", "ticker": "TTE.PA",
+             "action": "sell", "price": 74.02999877929688, "realized_pnl": -27.74},
+            {"timestamp": "2026-10-01T14:37:38.911219", "ticker": "TLT",
+             "action": "sell", "price": 77.19999694824219, "realized_pnl": -21.96},
+        ])
+        monkeypatch.setattr("weekly_report.DATA_DIR", data_dir)
+
+        existing = [
+            {"date": "2026-09-29", "ticker": "TLT", "action": "sell",
+             "price": 78.26000213623047, "realized_pnl": -18.52, "status": "executed"},
+            {"date": "2026-09-30", "ticker": "AI.PA", "action": "buy",
+             "price": 170.8800048828125, "status": "executed"},
+        ]
+        extra = _load_week_trades_from_history("2026-09-28", "2026-10-02", existing)
+
+        assert len(extra) == 2
+        tickers = {(t["ticker"], t["date"]) for t in extra}
+        assert tickers == {("TTE.PA", "2026-10-01"), ("TLT", "2026-10-01")}
+        assert all(t["status"] == "executed" for t in extra)
+        assert all(t["source"] == "trades_history" for t in extra)
+        # Sorted by (date, ticker, action): TLT before TTE.PA on 10-01.
+        assert [(t["date"], t["ticker"]) for t in extra] == [
+            ("2026-10-01", "TLT"), ("2026-10-01", "TTE.PA"),
+        ]
+
+    def test_dedupes_identical_ledger_entries(self, tmp_path, monkeypatch):
+        """Daily-pipeline trades also land in trades_history.json — they must
+        not be double-counted."""
+        data_dir = self._write_history(tmp_path, [
+            {"timestamp": "2026-09-29T21:06:52.421369", "ticker": "TLT",
+             "action": "sell", "price": 78.26000213623047, "realized_pnl": -18.52},
+        ])
+        monkeypatch.setattr("weekly_report.DATA_DIR", data_dir)
+
+        existing = [
+            {"date": "2026-09-29", "ticker": "TLT", "action": "sell",
+             "price": 78.26000213623047, "realized_pnl": -18.52, "status": "executed"},
+        ]
+        assert _load_week_trades_from_history("2026-09-28", "2026-10-02", existing) == []
+
+    def test_window_boundaries_are_inclusive(self, tmp_path, monkeypatch):
+        data_dir = self._write_history(tmp_path, [
+            {"timestamp": "2026-09-28T09:00:00", "ticker": "SPY",
+             "action": "buy", "price": 700.0},
+            {"timestamp": "2026-10-02T21:00:00", "ticker": "QQQ",
+             "action": "buy", "price": 500.0},
+            {"timestamp": "2026-09-27T21:00:00", "ticker": "OLD",
+             "action": "buy", "price": 1.0},
+            {"timestamp": "2026-10-03T09:00:00", "ticker": "NEW",
+             "action": "buy", "price": 2.0},
+        ])
+        monkeypatch.setattr("weekly_report.DATA_DIR", data_dir)
+
+        extra = _load_week_trades_from_history("2026-09-28", "2026-10-02", [])
+        assert {t["ticker"] for t in extra} == {"SPY", "QQQ"}
+
+    def test_missing_fields_do_not_crash(self, tmp_path, monkeypatch):
+        data_dir = self._write_history(tmp_path, [
+            {"timestamp": "2026-09-29T21:00:00", "ticker": "GLD", "action": "buy"},
+            {"ticker": "X", "action": "buy", "price": 1.0},
+        ])
+        monkeypatch.setattr("weekly_report.DATA_DIR", data_dir)
+
+        extra = _load_week_trades_from_history("2026-09-28", "2026-10-02", [])
+        # First entry: no price → key falls back to 0.0, still merged.
+        # Second entry: no timestamp → skipped (no date).
+        assert len(extra) == 1
+        assert extra[0]["ticker"] == "GLD"
+        assert extra[0]["price"] is None
