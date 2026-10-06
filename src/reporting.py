@@ -290,8 +290,10 @@ class ReportGenerator:
                 if not _is_finite_number(start_price) or start_price <= 0 or not _is_finite_number(end_price):
                     return None
                 return (end_price / start_price) - 1
-        except Exception:
-            pass
+        except Exception as e:
+            # Loud fallback: without a log the report silently shows no
+            # benchmark comparison and the fetch failure leaves no trace.
+            logger.warning(f"Could not fetch benchmark {ticker}: {type(e).__name__}: {e}")
         return None
     
     def save_report(self, report: Dict, output_dir: str = "results/reports") -> str:

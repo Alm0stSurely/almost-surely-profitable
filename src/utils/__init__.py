@@ -59,7 +59,11 @@ def load_valid_daily_results(
                 data = json.load(f)
             if is_valid_daily_result(data):
                 results.append(data)
-        except Exception:
+        except Exception as e:
+            # Loud skip (read-fallback class): a corrupt or invalid daily
+            # result is excluded from every downstream aggregate; the failure
+            # path must not be quieter than the state it replaces.
+            logger.warning(f"Skipping {file.name}: {type(e).__name__}: {e}")
             continue
     return results
 

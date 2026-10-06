@@ -256,3 +256,56 @@ class TestSharedFormattingHelpers:
         assert btf._fmt_pct is _fmt_pct
         assert bt._fmt_finite is _fmt_finite
         assert bt._fmt_pct is _fmt_pct
+
+
+class TestLoadValidDailyResultsLoudSkip:
+    """PR #75 regression: corrupt/invalid daily results must be skipped loudly.
+
+    The loader feeds every downstream research aggregate (evaluation trends,
+    decision quality, keyword analysis); a silently excluded file skews all of
+    them with no trace. The failure path must not be quieter than the state
+    it replaces (read-fallback doctrine).
+    """
+
+    def _valid_result(self, date):
+        return {
+            "date": date,
+            "dry_run": False,
+            "market_summary": {"assets_analyzed": 32},
+            "decision": {"reasoning": "Normal market analysis."},
+            "portfolio_after": {"cash": 2623.93, "total_value": 9716.20},
+        }
+
+    def test_corrupt_json_logs_warning_and_keeps_valid_siblings(self, tmp_path, caplog):
+        import logging
+
+        (tmp_path / "2026-10-01.json").write_text("{ corrupt json !!")
+        (tmp_path / "2026-10-02.json").write_text(
+            json.dumps(self._valid_result("2026-10-02"))
+        )
+
+        with caplog.at_level(logging.WARNING, logger="utils"):
+            results = load_valid_daily_results(str(tmp_path))
+
+        # n-1 siblings property: one corrupt file must not void the valid one
+        assert len(results) == 1
+        assert results[0]["date"] == "2026-10-02"
+        assert any(
+            "Skipping 2026-10-01.json" in r.getMessage() and "JSONDecodeError" in r.getMessage()
+            for r in caplog.records
+        ), "corrupt file must be skipped with a loud per-file log"
+
+    def test_validator_exception_logs_warning_and_skips(self, tmp_path, caplog):
+        import logging
+
+        # Valid JSON, wrong shape: is_valid_daily_result raises AttributeError
+        (tmp_path / "2026-10-03.json").write_text(json.dumps([1, 2, 3]))
+
+        with caplog.at_level(logging.WARNING, logger="utils"):
+            results = load_valid_daily_results(str(tmp_path))
+
+        assert results == []
+        assert any(
+            "Skipping 2026-10-03.json" in r.getMessage()
+            for r in caplog.records
+        ), "validator exceptions must not be swallowed silently either"
