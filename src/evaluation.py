@@ -52,8 +52,10 @@ def _get_benchmark_return(start_date: str, end_date: str, benchmark: str = "SPY"
                 start_price = float(closes[0])
                 end_price = float(closes[-1])
                 return (end_price / start_price) - 1
-    except Exception:
-        pass
+    except Exception as e:
+        # Loud fallback: without a trace the evaluation silently drops the
+        # benchmark comparison for the whole period.
+        print(f"⚠ Could not fetch benchmark {benchmark}: {type(e).__name__}: {e}")
     return None
 
 
