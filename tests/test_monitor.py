@@ -651,6 +651,57 @@ class TestFiniteValueGuards:
         assert loaded['alerts'][0]['movement_pct'] == -2.5
 
 
+class TestLoudReadFallback:
+    """PR #75 regression: per-ticker alert calc crashes must not be silent.
+
+    A crashing indicator calculation previously disabled the Bollinger alert
+    class for the ticker with no trace — the failure path must not be quieter
+    than the state it replaces (read-fallback doctrine).
+    """
+
+    def test_calc_crash_logs_and_skips_ticker(self, tmp_path, monkeypatch, capsys):
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+        monkeypatch.setattr(monitor, "CHECK_BOLLINGER", True)
+
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir=str(tmp_path / "data"))
+        portfolio.positions['SPY'] = Position(
+            ticker='SPY', quantity=10, avg_price=100.0, current_price=125.0
+        )
+
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch:
+            mock_fetch.side_effect = ConnectionError("network down")
+
+            alerts = monitor.check_bollinger_breakouts({'SPY': 125.0}, portfolio)
+
+        assert alerts == []
+        out = capsys.readouterr().out
+        assert "Bollinger check failed for SPY" in out
+        assert "ConnectionError" in out
+
+    def test_healthy_path_unchanged_no_crash_log(self, tmp_path, monkeypatch, capsys):
+        """Bounded side: a ticker with no data still skips quietly-by-design
+        (the `len < 20` continue is a normal absence, not a failure)."""
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+        monkeypatch.setattr(monitor, "CHECK_BOLLINGER", True)
+
+        from portfolio.portfolio import Portfolio, Position
+        portfolio = Portfolio(data_dir=str(tmp_path / "data"))
+        portfolio.positions['SPY'] = Position(
+            ticker='SPY', quantity=10, avg_price=100.0, current_price=125.0
+        )
+
+        with patch("data.fetch_market_data.fetch_historical_data", return_value={}):
+            alerts = monitor.check_bollinger_breakouts({'SPY': 125.0}, portfolio)
+
+        assert alerts == []
+        assert "Bollinger check failed" not in capsys.readouterr().out
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running Intraday Monitor Tests")

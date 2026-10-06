@@ -805,3 +805,20 @@ class TestBenchmarkAlphaLabel:
         out = self._run_report(monkeypatch, capsys, total_value=9500.0, spy_start=100.0, spy_end=110.0)
         assert "vs Buy & Hold (SPY)" not in out
         assert "pp" in out
+
+
+class TestBenchmarkFallbackIsLoud:
+    """PR #75 regression: evaluation benchmark fetch failure must print a trace."""
+
+    def test_fetch_failure_prints_warning_and_returns_none(self, monkeypatch, capsys):
+        import evaluation
+
+        def boom(*_args, **_kwargs):
+            raise ConnectionError("network down")
+
+        monkeypatch.setattr(evaluation, "fetch_historical_data", boom)
+
+        out = evaluation._get_benchmark_return("2026-01-01", "2026-02-01")
+
+        assert out is None
+        assert "Could not fetch benchmark SPY" in capsys.readouterr().out

@@ -428,7 +428,11 @@ def check_bollinger_breakouts(
                     record_alert(ticker, breakout_margin_pct, 'bollinger_breakout_lower', 'medium', history)
 
         except Exception as e:
-            # Silently skip if calculation fails
+            # Loud skip (read-fallback class): a crashing indicator calc
+            # otherwise disables this alert class for the ticker with no
+            # trace — the failure path must not be quieter than the state
+            # it replaces.
+            print(f"Warning: Bollinger check failed for {ticker}: {type(e).__name__}: {e}")
             continue
     
     save_alert_history(history)

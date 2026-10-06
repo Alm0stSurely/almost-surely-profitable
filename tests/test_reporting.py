@@ -505,3 +505,24 @@ class TestMonthlyReportWithNonFiniteEnd:
         # are still captured from the last day. The single position has finite PnL.
         assert report["best_position"]["ticker"] == "SPY"
         assert report["best_position"]["pnl_pct"] == 5 * 0.5
+
+class TestBenchmarkFetchFailureIsLoud:
+    """PR #75 regression: a benchmark fetch failure must leave a trace."""
+
+    def test_fetch_failure_logs_warning_and_returns_none(self, monkeypatch, caplog):
+        import logging
+        import yfinance as yf
+
+        def boom(*_args, **_kwargs):
+            raise ConnectionError("network down")
+
+        monkeypatch.setattr(yf, "download", boom)
+
+        with caplog.at_level(logging.WARNING, logger="reporting"):
+            out = ReportGenerator()._get_benchmark_return("SPY", "2026-01-01", "2026-02-01")
+
+        assert out is None
+        assert any(
+            "Could not fetch benchmark SPY" in r.getMessage() and "ConnectionError" in r.getMessage()
+            for r in caplog.records
+        ), "benchmark fetch failure must be logged, not swallowed"
