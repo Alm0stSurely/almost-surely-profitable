@@ -198,6 +198,77 @@ def test_fetch_with_invalid_ticker():
         print("✓ Invalid ticker test passed\n")
 
 
+def test_fetch_current_prices_rejects_nan_close():
+    """NaN Close from yfinance must return None, not a NaN 'price'.
+
+    Contract: fetch_current_prices returns Dict[str, Optional[float]] where
+    None means unavailable and float means valid finite scalar.  A NaN Close
+    violates that contract — it is neither None nor usable — and must be
+    rejected at the ingress boundary so consumers never see it.
+    """
+    dates = pd.date_range("2024-01-01", periods=1)
+    mock_df = pd.DataFrame(
+        {
+            "Open": [float("nan")],
+            "High": [float("nan")],
+            "Low": [float("nan")],
+            "Close": [float("nan")],
+            "Volume": [0],
+        },
+        index=dates,
+    )
+
+    mock_ticker = Mock()
+    mock_ticker.history.return_value = mock_df
+
+    with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+        prices = fetch_current_prices(tickers=["SPY"])
+        assert prices["SPY"] is None, f"NaN close must map to None, got {prices['SPY']!r}"
+
+
+def test_fetch_current_prices_rejects_inf_close():
+    """+inf and -inf Close must also return None."""
+    for bad_val, label in [(float("inf"), "+inf"), (float("-inf"), "-inf")]:
+        dates = pd.date_range("2024-01-01", periods=1)
+        mock_df = pd.DataFrame(
+            {
+                "Open": [bad_val],
+                "High": [bad_val],
+                "Low": [bad_val],
+                "Close": [bad_val],
+                "Volume": [0],
+            },
+            index=dates,
+        )
+        mock_ticker = Mock()
+        mock_ticker.history.return_value = mock_df
+
+        with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+            prices = fetch_current_prices(tickers=["SPY"])
+            assert prices["SPY"] is None, f"{label} close must map to None, got {prices['SPY']!r}"
+
+
+def test_fetch_current_prices_healthy_unchanged():
+    """A healthy finite price must survive the guard unchanged."""
+    dates = pd.date_range("2024-01-01", periods=1)
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [99.0],
+            "Close": [104.5],
+            "Volume": [1000],
+        },
+        index=dates,
+    )
+    mock_ticker = Mock()
+    mock_ticker.history.return_value = mock_df
+
+    with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+        prices = fetch_current_prices(tickers=["SPY"])
+        assert prices["SPY"] == 104.5
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running Market Data Fetcher Tests")
