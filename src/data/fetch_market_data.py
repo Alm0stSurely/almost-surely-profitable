@@ -4,6 +4,7 @@ Reads asset universe from config/universe.json.
 """
 
 import json
+import math
 import os
 import yfinance as yf
 import pandas as pd
@@ -145,7 +146,14 @@ def fetch_historical_data(
 
 
 def _fetch_single_price(ticker: str) -> tuple:
-    """Fetch current price for a single ticker. Returns (ticker, price or None)."""
+    """Fetch current price for a single ticker. Returns (ticker, price or None).
+
+    A non-finite Close (NaN, ±inf) from yfinance is rejected at ingress and
+    returned as None — same contract as an empty history or a fetch exception.
+    ``Optional[float]`` means *unavailable* (None) or *valid finite scalar*;
+    NaN is neither, and letting it through would force every consumer to guard
+    individually instead of once at the boundary.
+    """
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1d", interval="1m")
@@ -156,12 +164,19 @@ def _fetch_single_price(ticker: str) -> tuple:
         if hist.empty:
             # Try 1mo for some indices like ^FCHI
             hist = stock.history(period="1mo")
-        
+
         if hist.empty:
             logger.warning(f"No price data for {ticker} (may be delisted or not available)")
             return ticker, None
 
         current_price = float(hist["Close"].iloc[-1])
+
+        if not math.isfinite(current_price):
+            logger.warning(
+                f"Non-finite Close for {ticker}: {current_price!r} — treating as unavailable"
+            )
+            return ticker, None
+
         return ticker, current_price
 
     except Exception as e:
