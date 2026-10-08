@@ -25,7 +25,7 @@ from analysis.decision_analyzer import DecisionAnalyzer
 from data.fetch_market_data import fetch_historical_data
 from risk.cvar import calculate_portfolio_cvar
 from risk.performance_metrics import _has_non_finite, calculate_all_metrics
-from utils import load_valid_daily_results, load_valid_daily_results_limited
+from utils import _is_finite_number, load_valid_daily_results, load_valid_daily_results_limited
 
 
 def load_portfolio_data():
@@ -51,6 +51,14 @@ def _get_benchmark_return(start_date: str, end_date: str, benchmark: str = "SPY"
             if len(closes) >= 2:
                 start_price = float(closes[0])
                 end_price = float(closes[-1])
+                # Contract: Optional[float] means None (unavailable/invalid),
+                # never NaN/±inf — a non-finite or non-positive window edge
+                # produces ratios that are NaN, ±inf, or finite garbage
+                # (e.g. -inf edge -> -1.0, i.e. "-100% benchmark") that passes
+                # downstream isfinite checks. Same guard as the twin producer
+                # reporting.py::_get_benchmark_return.
+                if not _is_finite_number(start_price) or start_price <= 0 or not _is_finite_number(end_price):
+                    return None
                 return (end_price / start_price) - 1
     except Exception as e:
         # Loud fallback: without a trace the evaluation silently drops the
