@@ -30,6 +30,24 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_a
 logger = logging.getLogger(__name__)
 
 
+def _put_finite(features: Dict[str, float], key: str, value: Any) -> bool:
+    """Emit a feature only when its value is finite.
+
+    Degenerate windows (NaN/inf inputs, zero denominators) produce NaN/inf
+    candidates; per-element drop keeps the n-1 healthy siblings (scope of
+    failure == scope of malformation) and keeps non-finite values away from
+    the sklearn boundary, where NaN is silently learned as a split direction
+    and inf crashes the entire fit/predict call.
+    """
+    try:
+        finite = bool(np.isfinite(value))
+    except TypeError:
+        finite = False
+    if finite:
+        features[key] = float(value)
+    return finite
+
+
 class SignalType(Enum):
     """Type of trading signal."""
     BUY = 1
@@ -152,60 +170,96 @@ class MetaLabeler:
             return {}
         
         recent = available_data.tail(window)
-        
-        features = {}
-        
-        # Price-based features
-        if 'close' in recent.columns:
-            closes = recent['close']
-            
-            # Returns
-            returns = closes.pct_change().dropna()
-            features['returns_mean'] = returns.mean()
-            features['returns_std'] = returns.std()
-            features['returns_skew'] = returns.skew()
-            features['cumulative_return'] = (closes.iloc[-1] / closes.iloc[0]) - 1
-            
-            # Trend
-            features['price_vs_sma20'] = (closes.iloc[-1] / closes.mean()) - 1
-            
-            # Volatility regime
-            if len(returns) >= 10:
-                recent_vol = returns.tail(10).std()
-                older_vol = returns.head(10).std() if len(returns) >= 20 else recent_vol
-                features['volatility_trend'] = recent_vol / (older_vol + 1e-8) - 1
-            else:
-                features['volatility_trend'] = 0
-        
-        # Volume features
-        if 'volume' in recent.columns:
-            volumes = recent['volume']
-            features['volume_vs_mean'] = (volumes.iloc[-1] / volumes.mean()) - 1
-            features['volume_trend'] = volumes.tail(5).mean() / (volumes.head(5).mean() + 1e-8) - 1
-        
-        # Technical indicators if available
-        for col in ['rsi', 'rsi_14']:
-            if col in recent.columns:
-                features['rsi'] = recent[col].iloc[-1]
-                features['rsi_trend'] = recent[col].tail(5).mean() - recent[col].head(5).mean()
-                break
-        
-        # Bollinger position
-        for col in ['bb_position', 'bollinger_position']:
-            if col in recent.columns:
-                features['bb_position'] = recent[col].iloc[-1]
-                break
-        
+
+        features: Dict[str, float] = {}
+        dropped: List[str] = []
+
+        # Price-based features. Degenerate-window arithmetic (NaN close,
+        # zero first close, all-NaN returns) is validated on the output
+        # candidate: every operation below propagates NaN/inf, so an output
+        # finiteness filter has no blind spot here — a finite result from
+        # pathological inputs would require a singularity to cancel, and no
+        # operation in this block can cancel one.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            if 'close' in recent.columns:
+                closes = recent['close']
+
+                # Returns
+                returns = closes.pct_change().dropna()
+                if not _put_finite(features, 'returns_mean', returns.mean()):
+                    dropped.append('returns_mean')
+                if not _put_finite(features, 'returns_std', returns.std()):
+                    dropped.append('returns_std')
+                if not _put_finite(features, 'returns_skew', returns.skew()):
+                    dropped.append('returns_skew')
+                if not _put_finite(features, 'cumulative_return',
+                                   (closes.iloc[-1] / closes.iloc[0]) - 1):
+                    dropped.append('cumulative_return')
+
+                # Trend
+                if not _put_finite(features, 'price_vs_sma20',
+                                   (closes.iloc[-1] / closes.mean()) - 1):
+                    dropped.append('price_vs_sma20')
+
+                # Volatility regime
+                if len(returns) >= 10:
+                    recent_vol = returns.tail(10).std()
+                    older_vol = returns.head(10).std() if len(returns) >= 20 else recent_vol
+                    if not _put_finite(features, 'volatility_trend',
+                                       recent_vol / (older_vol + 1e-8) - 1):
+                        dropped.append('volatility_trend')
+                else:
+                    features['volatility_trend'] = 0
+
+            # Volume features
+            if 'volume' in recent.columns:
+                volumes = recent['volume']
+                if not _put_finite(features, 'volume_vs_mean',
+                                   (volumes.iloc[-1] / volumes.mean()) - 1):
+                    dropped.append('volume_vs_mean')
+                if not _put_finite(features, 'volume_trend',
+                                   volumes.tail(5).mean() / (volumes.head(5).mean() + 1e-8) - 1):
+                    dropped.append('volume_trend')
+
+            # Technical indicators if available
+            for col in ['rsi', 'rsi_14']:
+                if col in recent.columns:
+                    if not _put_finite(features, 'rsi', recent[col].iloc[-1]):
+                        dropped.append('rsi')
+                    if not _put_finite(features, 'rsi_trend',
+                                       recent[col].tail(5).mean() - recent[col].head(5).mean()):
+                        dropped.append('rsi_trend')
+                    break
+
+            # Bollinger position
+            for col in ['bb_position', 'bollinger_position']:
+                if col in recent.columns:
+                    if not _put_finite(features, 'bb_position', recent[col].iloc[-1]):
+                        dropped.append('bb_position')
+                    break
+
+        if dropped:
+            logger.warning(
+                f"Dropped non-finite features at {ts} ({signal.ticker}): {dropped}"
+            )
+
         # Primary signal features
         features['primary_signal'] = signal.signal.value
-        features['signal_confidence'] = signal.confidence or 0.5
-        
+        # Absence (None) defaults to the uniform prior 0.5; an explicit
+        # confidence of 0.0 must survive as 0.0 (a falsy `or` would
+        # launder it into 0.5, colliding with the absent case).
+        confidence = signal.confidence if signal.confidence is not None else 0.5
+        if not _put_finite(features, 'signal_confidence', confidence):
+            logger.warning(
+                f"Dropped non-finite signal_confidence at {ts} ({signal.ticker}): {signal.confidence!r}"
+            )
+
         # Temporal features
         features['hour'] = ts.hour
         features['day_of_week'] = ts.dayofweek
         features['is_month_start'] = int(ts.is_month_start)
         features['is_month_end'] = int(ts.is_month_end)
-        
+
         return features
     
     def fit(
@@ -246,9 +300,30 @@ class MetaLabeler:
             logger.warning(f"Too few valid samples: {len(X_list)}. Need at least 100.")
             return self
         
-        # Convert to DataFrame for consistent column ordering
+        # Convert to DataFrame for consistent column ordering.
+        # Ragged keys (features a signal lost to the finite filter) surface
+        # as NaN columns; any row still containing NaN/inf here would either
+        # be silently learned as a split direction by sklearn (NaN) or crash
+        # the whole call (inf) — one malformed sample must void only itself.
         X_df = pd.DataFrame(X_list)
         self.feature_names = list(X_df.columns)
+
+        finite_mask = np.isfinite(X_df.to_numpy(dtype=float)).all(axis=1)
+        n_dropped = int((~finite_mask).sum())
+        if n_dropped:
+            dropped_idx = [valid_indices[i] for i in np.nonzero(~finite_mask)[0]]
+            logger.warning(
+                f"Dropping {n_dropped}/{len(X_list)} training samples with "
+                f"non-finite features (signal indices {dropped_idx})"
+            )
+            X_df = X_df[finite_mask]
+            y_list = [y for y, keep in zip(y_list, finite_mask) if keep]
+            valid_indices = [v for v, keep in zip(valid_indices, finite_mask) if keep]
+
+        if len(X_df) < 100:
+            logger.warning(f"Too few valid samples: {len(X_df)}. Need at least 100.")
+            return self
+
         X = X_df.values
         y = np.array(y_list)
         
@@ -325,9 +400,29 @@ class MetaLabeler:
                     predicted_proba=0.0
                 ))
                 continue
-            
+
+            # A signal missing any feature the model was trained on has a
+            # hole in its feature vector; filling it with 0 would fabricate a
+            # reading on a coordinate the data never occupied (0 is inside
+            # the support of most features here). Treat as insufficient data:
+            # the meta-model's job is restraint, so skipping is the
+            # recoverable-loss direction.
+            missing = [f for f in self.feature_names if f not in features]
+            if missing:
+                logger.warning(
+                    f"Skipping signal at {signal.timestamp} ({signal.ticker}): "
+                    f"missing features {missing}"
+                )
+                results.append(MetaLabel(
+                    signal=signal,
+                    features=features,
+                    actual_outcome=0,
+                    predicted_proba=0.0
+                ))
+                continue
+
             # Ensure consistent feature ordering
-            X = np.array([[features.get(f, 0) for f in self.feature_names]])
+            X = np.array([[features[f] for f in self.feature_names]])
             proba = self.model.predict_proba(X)[0, 1]
             
             results.append(MetaLabel(
@@ -355,10 +450,31 @@ class MetaLabeler:
             MetaLabels with position_size field populated
         """
         sized_labels = []
-        
+
+        # Kelly is only defined for a positive finite win/loss ratio; a
+        # non-positive or non-finite ratio is a caller bug and must fail loud
+        # here, not divide by zero or inflate the fraction downstream.
+        if not np.isfinite(avg_win_loss_ratio) or avg_win_loss_ratio <= 0:
+            raise ValueError(
+                f"avg_win_loss_ratio must be a positive finite number, got {avg_win_loss_ratio!r}"
+            )
+
         for label in meta_labels:
             p = label.predicted_proba
-            
+
+            # A missing or non-finite probability cannot clear the threshold
+            # and must not reach the Kelly arithmetic (NaN propagated through
+            # the clamps used to land on 0 by accident of comparison
+            # semantics — undesigned behavior pinned here as a refusal).
+            if p is None or not np.isfinite(p):
+                logger.warning(
+                    f"Refusing to size position for {label.signal.ticker} at "
+                    f"{label.signal.timestamp}: predicted_proba={p!r}"
+                )
+                label.position_size = 0.0
+                sized_labels.append(label)
+                continue
+
             # Filter low-probability trades
             if p < self.config.min_probability:
                 label.position_size = 0.0
