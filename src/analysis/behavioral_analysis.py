@@ -17,9 +17,17 @@ def _safe_cash_pct(cash, total):
     """Return cash as a percentage of total, or None when the ratio is undefined.
 
     Guards against zero/negative totals, missing values, and non-finite
-    inputs that can leak from degenerate daily result files.
+    inputs that can leak from degenerate daily result files. Booleans are
+    rejected (``bool`` is a subclass of ``int``): a JSON ``true`` must not
+    be read as a cash or total value — same convention as
+    ``utils._is_finite_number``.
     """
-    if not isinstance(cash, (int, float)) or not isinstance(total, (int, float)):
+    if (
+        not isinstance(cash, (int, float))
+        or isinstance(cash, bool)
+        or not isinstance(total, (int, float))
+        or isinstance(total, bool)
+    ):
         return None
     if not math.isfinite(cash) or not math.isfinite(total) or total <= 0:
         return None
