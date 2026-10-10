@@ -59,8 +59,18 @@ class Trade:
 
 
 def _is_valid_positive_scalar(value) -> bool:
-    """Return True if value is a finite number greater than zero."""
-    return isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+    """Return True if value is a finite number greater than zero.
+
+    Booleans are rejected (``bool`` is a subclass of ``int``): a JSON
+    ``true`` must not be read as the number 1 — same convention as
+    ``utils._is_finite_number``.
+    """
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
 
 
 def _is_valid_percentage(value) -> bool:
