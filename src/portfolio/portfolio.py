@@ -78,6 +78,22 @@ def _is_valid_percentage(value) -> bool:
     return _is_valid_positive_scalar(value) and value <= 100
 
 
+def _is_valid_price(value) -> bool:
+    """Return True if value is a finite, non-boolean number >= 0.
+
+    ``0.0`` is the documented "price unknown" default (Position.current_price
+    and update_prices both treat absence as 0.0), so the lower bound is
+    inclusive — unlike avg_price/quantity, which must be strictly positive.
+    Booleans are rejected for the same reason as _is_valid_positive_scalar.
+    """
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 class Portfolio:
     """
     Paper portfolio manager.
@@ -121,15 +137,44 @@ class Portfolio:
             self.cash = state.get('cash', self.INITIAL_CAPITAL)
             self.total_realized_pnl = state.get('total_realized_pnl', 0.0)
             
-            # Restore positions
+            # Restore positions — validate every field at the ingress
+            # boundary. Values coming from the state JSON would otherwise be
+            # laundered straight into Position arithmetic: bool is an int
+            # subclass (quantity=True * price == price — a fabricated market
+            # value), json.load accepts NaN/Infinity tokens by default (a NaN
+            # quantity loads silently and kills the next save_state, which is
+            # strict allow_nan=False), and a string avg_price only crashes
+            # later, at first P&L access, far from the cause. Scope of
+            # failure must match scope of malformation (PR #64 doctrine):
+            # one malformed position is dropped loudly, its healthy siblings
+            # survive — the outer except below stays reserved for global
+            # failure (unparseable file, non-mapping top level).
             positions_data = state.get('positions', {})
             self.positions = {}
+            if not isinstance(positions_data, dict):
+                print(f"⚠ Ignoring positions: expected an object, got {type(positions_data).__name__}")
+                positions_data = {}
             for ticker, pos_data in positions_data.items():
+                if not isinstance(pos_data, dict):
+                    print(f"⚠ Dropping position {ticker}: expected an object, got {type(pos_data).__name__}")
+                    continue
+                quantity = pos_data.get('quantity')
+                avg_price = pos_data.get('avg_price')
+                current_price = pos_data.get('current_price', 0.0)
+                if not _is_valid_positive_scalar(quantity):
+                    print(f"⚠ Dropping position {ticker}: invalid quantity {quantity!r} (expected a finite number > 0)")
+                    continue
+                if not _is_valid_positive_scalar(avg_price):
+                    print(f"⚠ Dropping position {ticker}: invalid avg_price {avg_price!r} (expected a finite number > 0)")
+                    continue
+                if not _is_valid_price(current_price):
+                    print(f"⚠ Dropping position {ticker}: invalid current_price {current_price!r} (expected a finite number >= 0)")
+                    continue
                 self.positions[ticker] = Position(
                     ticker=ticker,
-                    quantity=pos_data['quantity'],
-                    avg_price=pos_data['avg_price'],
-                    current_price=pos_data.get('current_price', 0.0)
+                    quantity=quantity,
+                    avg_price=avg_price,
+                    current_price=current_price
                 )
             
             print(f"✓ Loaded portfolio state: {len(self.positions)} positions, €{self.cash:.2f} cash")
