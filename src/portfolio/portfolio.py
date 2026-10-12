@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from utils import load_json_list_or_quarantine
+from utils import _is_finite_number, load_json_list_or_quarantine
 
 
 @dataclass
@@ -94,6 +94,25 @@ def _is_valid_price(value) -> bool:
     )
 
 
+def _is_valid_cash(value) -> bool:
+    """Return True if value is a finite, non-boolean number >= 0.
+
+    Cash can never go negative on the healthy path: buy() rejects any
+    order whose total_cost exceeds the available cash before subtracting,
+    so the persisted balance is always >= 0. A negative, NaN, bool, or
+    string cash therefore always means a corrupted or hand-edited state
+    file. Unlike a position — droppable per the PR #64 doctrine — cash
+    is the monetary base: there is no partial portfolio, only a
+    fabricated one. See load_state for the loss comparison.
+    """
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 class Portfolio:
     """
     Paper portfolio manager.
@@ -126,17 +145,66 @@ class Portfolio:
         self.load_state()
     
     def load_state(self) -> None:
-        """Load portfolio state from JSON file."""
+        """Load portfolio state from JSON file.
+
+        Failure doctrine, from the loss comparison at each boundary:
+
+        - Unparseable file / non-mapping top level → the file makes NO
+          usable claim, so falling back to a fresh portfolio is not a
+          fabrication: it is the same state as "no file". Loud log,
+          in-memory only (PR #60 quarantine doctrine covers the ledger;
+          this file is the one well-behaved mutator's output).
+        - Invalid cash or total_realized_pnl → REFUSE the load (raise
+          ValueError). Both keys are written unconditionally by
+          save_state, so a missing or malformed value always means a
+          corrupted or hand-edited file. Here a fresh-state fallback IS
+          a fabrication: resetting cash to INITIAL_CAPITAL resurrects
+          the ghost-portfolio class (a real balance silently replaced
+          by the €10,000 default), and 0.0 collides with two legitimate
+          states ("all-in positions", "no realized P&L"). Unlike a
+          position — droppable per the PR #64 doctrine — there is no
+          partial monetary base: every order, weight, and prompt field
+          derives from cash. A blocked run costs one evening and is
+          fixed by hand; a run trading on a fabricated base writes
+          ghost trades into the append-only ledger and the LLM's
+          decision context. Fail loud, at the cause, file untouched.
+        """
         if not self.state_file.exists():
             return
-        
+
         try:
             with open(self.state_file, 'r') as f:
                 state = json.load(f)
-            
-            self.cash = state.get('cash', self.INITIAL_CAPITAL)
-            self.total_realized_pnl = state.get('total_realized_pnl', 0.0)
-            
+        except Exception as e:
+            print(f"Error loading state: {e}. Starting fresh.")
+            self.cash = self.INITIAL_CAPITAL
+            self.positions = {}
+            return
+
+        if not isinstance(state, dict):
+            print(f"Error loading state: expected a JSON object, got {type(state).__name__}. Starting fresh.")
+            self.cash = self.INITIAL_CAPITAL
+            self.positions = {}
+            return
+
+        cash = state.get('cash')
+        if not _is_valid_cash(cash):
+            raise ValueError(
+                f"Refusing to load portfolio state: 'cash' is {cash!r} "
+                f"(expected a finite number >= 0). Fix or quarantine "
+                f"{self.state_file} manually."
+            )
+        realized_pnl = state.get('total_realized_pnl')
+        if not _is_finite_number(realized_pnl):
+            raise ValueError(
+                f"Refusing to load portfolio state: 'total_realized_pnl' is "
+                f"{realized_pnl!r} (expected a finite number). Fix or "
+                f"quarantine {self.state_file} manually."
+            )
+        self.cash = cash
+        self.total_realized_pnl = realized_pnl
+
+        try:
             # Restore positions — validate every field at the ingress
             # boundary. Values coming from the state JSON would otherwise be
             # laundered straight into Position arithmetic: bool is an int
@@ -147,8 +215,9 @@ class Portfolio:
             # later, at first P&L access, far from the cause. Scope of
             # failure must match scope of malformation (PR #64 doctrine):
             # one malformed position is dropped loudly, its healthy siblings
-            # survive — the outer except below stays reserved for global
-            # failure (unparseable file, non-mapping top level).
+            # survive — the except below stays reserved for failure of the
+            # position restore itself (never expected on a validated file;
+            # kept as a last-resort global fallback).
             positions_data = state.get('positions', {})
             self.positions = {}
             if not isinstance(positions_data, dict):
