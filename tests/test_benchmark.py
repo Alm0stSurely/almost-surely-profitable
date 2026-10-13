@@ -178,18 +178,23 @@ def test_load_state_sanitizes_non_finite_shares(tmp_data_dir):
     assert bm.cash == 2000.0
 
 
-def test_load_state_sanitizes_non_finite_cash(tmp_data_dir):
+def test_load_state_refuses_non_finite_cash(tmp_data_dir):
     state = {
         "shares": {"SPY": 10.0},
         "cash": float("nan"),
         "start_date": "2026-07-31",
     }
     tmp_data_dir.mkdir(parents=True, exist_ok=True)
-    with open(tmp_data_dir / "equalweight_benchmark_state.json", "w") as f:
+    state_path = tmp_data_dir / "equalweight_benchmark_state.json"
+    with open(state_path, "w") as f:
         json.dump(state, f)
+    before = state_path.read_bytes()
 
-    bm = LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir=str(tmp_data_dir))
-    assert bm.cash == 10000.0
+    with pytest.raises(ValueError, match="cash"):
+        LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir=str(tmp_data_dir))
+
+    # Blast-radius pin: the file is byte-untouched, no fabrication persisted.
+    assert state_path.read_bytes() == before
 
 
 def test_load_state_handles_corrupted_file(tmp_data_dir):
