@@ -55,19 +55,48 @@ class LiveEqualWeightBenchmark:
         # destroying the corrupt state without a trace. Quarantine instead.
         state = load_json_dict_or_quarantine(self.state_file, context="benchmark state")
 
-        # Sanitize any non-finite values that may have been written by a buggy
-        # previous version or a corrupted file; reset to safe defaults instead of
-        # letting NaN/Infinity propagate into daily-run output.
+        # No-claim boundary (PR #81): an empty result means the file was
+        # absent (handled above) or quarantined as unreadable/wrong-shape.
+        # Either way the source makes no claim, so the constructor defaults
+        # are an honest fresh start — the refusal doctrine below applies
+        # only to a file that parsed and therefore claims something.
+        if not state:
+            return
+
+        # Monetary-base refusal (PR #81 doctrine, three-branch tree): cash is
+        # the unit in which every benchmark value is measured — total_value,
+        # total_return_pct, and every strategy-vs-benchmark comparison derive
+        # from it. It is not an element of a collection (no per-element drop
+        # applies), and a file whose JSON parses DOES claim a value (no honest
+        # fallback exists: initial_capital fabricates a fresh baseline, 0.0
+        # collides with a legitimate all-in state). Worse, rebalance() calls
+        # save_state(), so a fabricated cash is persisted on the very next
+        # rebalance and silently corrupts every future comparison. Refuse
+        # instead: raise before any mutation, file byte-untouched.
+        # daily_run.py wraps construction in try/except, so the benchmark
+        # section is skipped loud and the trading run is unaffected.
+        cash = state.get("cash")
+        if not self._is_valid_cash(cash):
+            raise ValueError(
+                f"Refusing to load benchmark state {self.state_file}: "
+                f"'cash' must be a finite non-negative number, got {cash!r}. "
+                "File left untouched for manual repair."
+            )
+
         self.shares = self._sanitize_shares(state.get("shares", {}))
-        self.cash = self._sanitize_scalar(state.get("cash"), self.initial_capital)
+        self.cash = float(cash)
         self.start_date = state.get("start_date")
         self.last_rebalanced = state.get("last_rebalanced")
 
-    def _sanitize_scalar(self, value: Any, default: float) -> float:
-        """Return a finite float, or *default* if the value is unusable."""
-        if _is_finite_number(value):
-            return float(value)
-        return float(default)
+    @staticmethod
+    def _is_valid_cash(value: Any) -> bool:
+        """Cash invariant: finite, non-bool, and >= 0.
+
+        The lower bound is a healthy-path invariant: rebalance() invests
+        (100 - cash_buffer)% and leaves cash = total * buffer_pct/100 >= 0,
+        so a negative persisted cash can only come from corruption.
+        """
+        return _is_finite_number(value) and float(value) >= 0
 
     def _sanitize_shares(self, shares: Any) -> Dict[str, float]:
         """Return a dict of finite share counts, dropping invalid entries."""
