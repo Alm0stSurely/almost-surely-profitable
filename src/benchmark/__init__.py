@@ -6,12 +6,15 @@ Provides a fair baseline for comparison.
 """
 
 import json
+import logging
 import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from utils import _is_finite_number, dump_json_safe, load_json_dict_or_quarantine
+
+logger = logging.getLogger(__name__)
 
 
 class LiveEqualWeightBenchmark:
@@ -99,14 +102,43 @@ class LiveEqualWeightBenchmark:
         return _is_finite_number(value) and float(value) >= 0
 
     def _sanitize_shares(self, shares: Any) -> Dict[str, float]:
-        """Return a dict of finite share counts, dropping invalid entries."""
+        """Return a dict of finite share counts, dropping invalid entries loudly.
+
+        Per-element drop (PR #64 doctrine): a malformed entry invalidates
+        only itself, never its healthy siblings. Every drop is one loud
+        warning naming the ticker, the offending value, and the reason —
+        a silent drop here is invisible until the next save_state()
+        persists the pruned dict, destroying the evidence of which
+        positions the corrupt file claimed.
+        """
         if not isinstance(shares, dict):
+            logger.warning(
+                "Benchmark state 'shares' is not a mapping (got %r); "
+                "treating as no positions.",
+                type(shares).__name__,
+            )
             return {}
-        return {
-            ticker: float(quantity)
-            for ticker, quantity in shares.items()
-            if _is_finite_number(quantity) and float(quantity) >= 0
-        }
+
+        sanitized: dict[str, float] = {}
+        for ticker, quantity in shares.items():
+            if not _is_finite_number(quantity):
+                logger.warning(
+                    "Dropping benchmark share entry %r: quantity %r is not a "
+                    "finite number.",
+                    ticker,
+                    quantity,
+                )
+                continue
+            if float(quantity) < 0:
+                logger.warning(
+                    "Dropping benchmark share entry %r: quantity %r is "
+                    "negative.",
+                    ticker,
+                    quantity,
+                )
+                continue
+            sanitized[ticker] = float(quantity)
+        return sanitized
 
     def save_state(self) -> None:
         """Persist benchmark state as strict JSON (no NaN/Infinity tokens)."""
