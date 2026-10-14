@@ -439,15 +439,18 @@ ASSESSMENT
 """
         
         # Add qualitative assessment
+        # (banner keys on the 5D window; label it explicitly so it is not
+        # mistaken for the 1D win rate printed above — observed 2026-10-13:
+        # banner fired on 5D 33.3% while 1D showed 50.0%)
         win_rate = outcomes_5d['win_rate']
         sharpe = outcomes_5d['sharpe_of_decisions']
-        
+
         if win_rate > 0.55:
-            report += "✓ LLM shows predictive skill (win rate > 55%)\n"
+            report += f"✓ LLM shows predictive skill (5D win rate {win_rate*100:.1f}% > 55%)\n"
         elif win_rate > 0.45:
-            report += "~ LLM performance is near random (45-55% win rate)\n"
+            report += f"~ LLM performance is near random (5D win rate {win_rate*100:.1f}%, 45-55% band)\n"
         elif win_rate > 0:
-            report += "⚠ LLM underperforming (win rate < 45%)\n"
+            report += f"⚠ LLM underperforming (5D win rate {win_rate*100:.1f}% < 45%)\n"
         else:
             report += "⚠ No valid win rate calculated (insufficient data)\n"
         
