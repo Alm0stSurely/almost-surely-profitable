@@ -806,3 +806,64 @@ def test_forward_return_tz_aware_entry_date_normalized_to_utc(mock_fetch, analyz
     result = analyzer._get_forward_return("AI.PA", "2026-09-10T22:30:00+02:00", 100.0, days=1)
 
     assert result == pytest.approx(110.0 / 100.0 - 1, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# ASSESSMENT banner window labeling (regression, 2026-10-14)
+# ---------------------------------------------------------------------------
+
+def _fake_outcomes(win_rate, sharpe=0.0):
+    return {
+        "win_rate": win_rate,
+        "buy_count": 3,
+        "sell_count": 3,
+        "buy_accuracy": 0.4,
+        "sell_accuracy": 0.5,
+        "avg_forward_return_buy": 0.01,
+        "avg_forward_return_sell": -0.01,
+        "sharpe_of_decisions": sharpe,
+        "total_decisions": 6,
+        "valid_decisions": 6,
+    }
+
+
+def _fake_behavioral():
+    return {
+        "avg_trades_per_day": 1.0,
+        "overconfidence_check": 0.5,
+        "diversification_score": 2.0,
+        "loss_aversion_score": 0.5,
+        "unique_assets_traded": 2,
+    }
+
+
+def test_assessment_banner_labels_5d_window(analyzer, tmp_path, monkeypatch):
+    """The banner must name its window: on 2026-10-13 it fired
+    'underperforming (win rate < 45%)' keyed on the 5D win rate (33.3%)
+    while the 1D line right above showed 50.0% — misleading by omission."""
+    analyzer.results_dir = tmp_path
+    with open(tmp_path / "2026-10-13.json", "w") as f:
+        json.dump({
+            "date": "2026-10-13",
+            "decision": {"actions": [{"ticker": "SPY", "action": "buy"}], "reasoning": "r"},
+            "executed_trades": [{"ticker": "SPY", "action": "buy", "price": 176.0}],
+            "portfolio_before": {},
+            "portfolio_after": {},
+        }, f)
+
+    def fake_outcomes(decisions, forward_days=5, **kwargs):
+        # Divergent windows reproduce the confusing 2026-10-13 display:
+        # 5D poor, 1D fine.
+        return _fake_outcomes(1 / 3) if forward_days == 5 else _fake_outcomes(0.5)
+
+    monkeypatch.setattr(analyzer, "analyze_outcomes", fake_outcomes)
+    monkeypatch.setattr(analyzer, "analyze_behavioral_patterns", lambda d: _fake_behavioral())
+
+    report = analyzer.generate_report(days=30)
+
+    assert "Overall Win Rate: 33.3%" in report
+    assert "Overall Win Rate (1D): 50.0%" in report
+    # The banner must explicitly reference the 5D window and its value.
+    assert "5D win rate 33.3% < 45%" in report
+    # And must NOT use the unqualified phrasing that caused the confusion.
+    assert "underperforming (win rate < 45%)" not in report
