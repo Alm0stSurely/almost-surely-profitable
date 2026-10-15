@@ -8,6 +8,14 @@ which positions the corrupt file had claimed. The discriminators below
 assert the *loudness* (the drop itself is unchanged behaviour and would
 pass pre-fix); the healthy-path pins assert expected absences stay quiet
 and must pass on BOTH sides of a fail-on-old stash.
+
+Note: since the strict-reader convention (``parse_constant`` rejection of
+NaN/Infinity tokens, pinned generically in
+``tests/test_utils_strict_json_reader.py``), a file containing non-finite
+tokens is quarantined whole at parse time — non-finite quantities are no
+longer reachable at this layer. The malformed-value discriminators below
+use *parseable* invalids (bool, string, None, negative); the per-entry
+drop + loudness contract is unchanged for those.
 """
 
 import json
@@ -55,15 +63,12 @@ def _load(state_dir):
 @pytest.mark.parametrize(
     "bad_quantity",
     [
-        float("nan"),
-        float("inf"),
-        float("-inf"),
         True,  # bool launders: True * price == price
         "10",  # string parses JSON but is not numeric
         None,
     ],
 )
-def test_non_finite_or_non_numeric_quantity_dropped_loudly(
+def test_malformed_quantity_dropped_loudly(
     state_dir, caplog, bad_quantity
 ):
     _write_state(state_dir, {"SPY": bad_quantity, "GLD": 5.0})
@@ -103,7 +108,7 @@ def test_every_dropped_entry_gets_its_own_warning(state_dir, caplog):
     """Lipschitz loudness: one warning per element, not one for the batch."""
     _write_state(
         state_dir,
-        {"AAA": float("nan"), "BBB": True, "CCC": -1.0, "DDD": "x", "GLD": 5.0},
+        {"AAA": None, "BBB": True, "CCC": -1.0, "DDD": "x", "GLD": 5.0},
     )
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         bench = _load(state_dir)
