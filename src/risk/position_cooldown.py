@@ -190,6 +190,21 @@ class PositionCooldownManager:
         Returns:
             (allowed: bool, reason: str)
         """
+        # Check stop-loss override first: a position already below its adaptive
+        # stop must be allowed to exit regardless of the weekly trade cap.
+        # The cap exists to prevent noise-driven overtrading; blocking a risk
+        # exit would leave the portfolio holding a breaching position, which
+        # contradicts the prompt language ("except stop-loss overrides") and
+        # the fail-open-on-exit design principle.
+        if self.config.allow_stop_loss_override and avg_price > 0:
+            drawdown_pct = ((current_price - avg_price) / avg_price) * 100
+            adaptive_stop = self._get_dynamic_stop_loss()
+            if drawdown_pct <= -adaptive_stop:
+                return (
+                    True,
+                    f"Stop-loss override (drawdown {drawdown_pct:.1f}%, adaptive threshold {adaptive_stop:.1f}%)"
+                )
+
         # Check weekly trade cap (dynamic based on regime, ISO calendar week)
         trade_cap = self._get_dynamic_trade_cap()
         week_start = self._week_start(datetime.now())
@@ -217,15 +232,6 @@ class PositionCooldownManager:
 
         hold_days = (datetime.now() - entry_time).total_seconds() / 86400
         if hold_days < self.config.min_hold_days:
-            # Check stop-loss override with adaptive threshold
-            if self.config.allow_stop_loss_override and avg_price > 0:
-                drawdown_pct = ((current_price - avg_price) / avg_price) * 100
-                adaptive_stop = self._get_dynamic_stop_loss()
-                if drawdown_pct <= -adaptive_stop:
-                    return (
-                        True,
-                        f"Stop-loss override (drawdown {drawdown_pct:.1f}%, adaptive threshold {adaptive_stop:.1f}%)"
-                    )
             return (
                 False,
                 f"Minimum hold period not met ({hold_days:.1f} < {self.config.min_hold_days} days)"
