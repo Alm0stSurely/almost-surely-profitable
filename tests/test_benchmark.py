@@ -162,9 +162,14 @@ def test_save_state_uses_strict_json(tmp_data_dir):
     assert loaded["shares"]["SPY"] is None
 
 
-def test_load_state_sanitizes_non_finite_shares(tmp_data_dir):
+def test_load_state_sanitizes_malformed_shares(tmp_data_dir):
+    # Parseable-but-invalid share values exercise the per-element drop
+    # (PR #64 doctrine). Non-finite floats are no longer reachable at this
+    # layer: the strict reader (parse_constant) rejects a file containing
+    # NaN/Infinity tokens at parse time — pinned generically in
+    # tests/test_utils_strict_json_reader.py.
     state = {
-        "shares": {"SPY": 10.0, "GLD": float("nan"), "FEZ": float("inf"), "BAD": -5.0},
+        "shares": {"SPY": 10.0, "GLD": "x", "FEZ": True, "BAD": -5.0},
         "cash": 2000.0,
         "start_date": "2026-07-31",
         "last_rebalanced": "2026-07-31T10:00:00",
@@ -178,7 +183,14 @@ def test_load_state_sanitizes_non_finite_shares(tmp_data_dir):
     assert bm.cash == 2000.0
 
 
-def test_load_state_refuses_non_finite_cash(tmp_data_dir):
+def test_load_state_quarantines_non_finite_cash(tmp_data_dir):
+    # Strict-reader contract: a NaN token is not valid JSON, so the file
+    # makes no parseable claim. The quarantine helper renames it aside
+    # (bytes preserved) and the benchmark starts honest-fresh from
+    # initial_capital — the PR #81 no-claim boundary. The refusal doctrine
+    # (PR #82) applies to *parseable* invalid values (negative, bool,
+    # string), not to unparseable files. Generic contract pinned in
+    # tests/test_utils_strict_json_reader.py.
     state = {
         "shares": {"SPY": 10.0},
         "cash": float("nan"),
@@ -188,13 +200,15 @@ def test_load_state_refuses_non_finite_cash(tmp_data_dir):
     state_path = tmp_data_dir / "equalweight_benchmark_state.json"
     with open(state_path, "w") as f:
         json.dump(state, f)
-    before = state_path.read_bytes()
 
-    with pytest.raises(ValueError, match="cash"):
-        LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir=str(tmp_data_dir))
+    bm = LiveEqualWeightBenchmark(initial_capital=10000.0, data_dir=str(tmp_data_dir))
 
-    # Blast-radius pin: the file is byte-untouched, no fabrication persisted.
-    assert state_path.read_bytes() == before
+    # Loud + recoverable: the corrupt file is preserved aside, the
+    # benchmark starts fresh — no fabricated cash, no ghost baseline.
+    assert bm.cash == 10000.0
+    assert bm.shares == {}
+    assert not state_path.exists()
+    assert list(tmp_data_dir.glob("equalweight_benchmark_state.json.corrupt-*"))
 
 
 def test_load_state_handles_corrupted_file(tmp_data_dir):

@@ -56,7 +56,7 @@ def load_valid_daily_results(
             continue
         try:
             with open(file) as f:
-                data = json.load(f)
+                data = json.load(f, parse_constant=reject_nonstandard_constant)
             if is_valid_daily_result(data):
                 results.append(data)
         except Exception as e:
@@ -106,6 +106,23 @@ def sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, float):
         return obj if _is_finite_number(obj) else None
     return obj
+
+
+def reject_nonstandard_constant(value: str):
+    """``parse_constant`` hook: reject non-standard JSON numeric tokens.
+
+    Python's :func:`json.load` accepts the literal tokens ``NaN``,
+    ``Infinity`` and ``-Infinity`` by default and maps them to the
+    corresponding floats. No writer in this repository can emit them —
+    every persistence path serializes with ``allow_nan=False`` — so such
+    a token is data the system ingests silently but can never produce
+    itself (a hand-edited or externally corrupted file). Rejecting at the
+    read boundary keeps the reader at least as strict as the writers and
+    surfaces the malformation at the cause instead of letting a NaN
+    poison aggregates downstream or crash the next strict write maximally
+    far from the source.
+    """
+    raise ValueError(f"non-standard JSON constant {value!r} rejected")
 
 
 def dump_json_safe(
@@ -175,9 +192,9 @@ def load_json_list_or_quarantine(path, *, context: str = "ledger") -> List[Any]:
     reason = "unparseable"
     try:
         with open(path, "r") as f:
-            data = json.load(f)
+            data = json.load(f, parse_constant=reject_nonstandard_constant)
         reason = f"wrong shape (expected list, got {type(data).__name__})"
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+    except (ValueError, UnicodeDecodeError, OSError) as exc:
         reason = f"unreadable ({type(exc).__name__}: {exc})"
 
     if not isinstance(data, list):
@@ -221,9 +238,9 @@ def load_json_dict_or_quarantine(path, *, context: str = "state") -> Dict[str, A
     reason = "unparseable"
     try:
         with open(path, "r") as f:
-            data = json.load(f)
+            data = json.load(f, parse_constant=reject_nonstandard_constant)
         reason = f"wrong shape (expected dict, got {type(data).__name__})"
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+    except (ValueError, UnicodeDecodeError, OSError) as exc:
         reason = f"unreadable ({type(exc).__name__}: {exc})"
 
     if not isinstance(data, dict):

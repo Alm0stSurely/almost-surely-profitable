@@ -176,8 +176,13 @@ class TestMarketStateQuarantine:
         assert len(_quarantine_siblings(market_state_path)) == 1
         assert any("wrong shape" in r.message for r in caplog.records)
 
-    def test_healthy_state_returned_with_finite_filter(self, market_state_path, caplog):
-        # json.load accepts the non-standard `NaN` literal; it must be filtered.
+    def test_non_standard_token_state_quarantined(self, market_state_path, caplog):
+        # Strict-reader contract: json.load accepts the non-standard `NaN`
+        # literal by default, but no repo writer can emit it — so a file
+        # containing it is treated as unparseable and quarantined whole
+        # (bytes preserved, loud error), not ingested with a per-entry
+        # filter. Generic contract pinned in
+        # tests/test_utils_strict_json_reader.py.
         market_state_path.write_text(
             '{"timestamp": "2026-09-21T08:00:00", '
             '"previous_close": {"SPY": 600.1, "GLD": NaN, "QQQ": 520.0}}'
@@ -186,9 +191,11 @@ class TestMarketStateQuarantine:
         with caplog.at_level(logging.ERROR):
             references = load_previous_close(portfolio=None)
 
-        assert references == {"SPY": 600.1, "QQQ": 520.0}
-        assert _quarantine_siblings(market_state_path) == []
-        assert caplog.records == []
+        assert references == {}
+        assert len(_quarantine_siblings(market_state_path)) == 1
+        assert any(
+            "non-standard JSON constant" in r.message for r in caplog.records
+        )
 
     def test_missing_state_returns_empty_silent(self, market_state_path, caplog):
         with caplog.at_level(logging.ERROR):

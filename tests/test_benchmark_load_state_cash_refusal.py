@@ -11,6 +11,13 @@ Pre-fix behaviour pinned by stash-verification: NaN/inf/bool/string/missing/
 list-shaped cash all silently loaded as fabricated initial_capital (or, for
 finite negatives, silently loaded as-is); the file was then overwritten on
 the next rebalance, making the fabrication sticky.
+
+Note: since the strict-reader convention (``parse_constant`` rejection of
+NaN/Infinity tokens, pinned generically in
+``tests/test_utils_strict_json_reader.py``), non-finite cash is rejected at
+parse time — the whole file is quarantined (PR #81 no-claim boundary) before
+this field-level refusal ever runs. The refusals below cover *parseable*
+invalid values: bool, string, wrong shape, missing key, finite negative.
 """
 
 import json
@@ -56,9 +63,6 @@ def _load(state_dir):
 @pytest.mark.parametrize(
     "bad_cash",
     [
-        float("nan"),
-        float("inf"),
-        float("-inf"),
         True,  # bool launders into €1 of monetary base pre-fix
         False,  # fabricates full initial_capital pre-fix
         "10000.0",  # string
@@ -102,12 +106,12 @@ def test_refuses_negative_cash(state_dir):
 
 
 def test_error_message_names_field_value_and_file(state_dir):
-    state_path = _write_state(state_dir, cash=float("nan"))
+    state_path = _write_state(state_dir, cash="garbage")
     with pytest.raises(ValueError) as exc_info:
         _load(state_dir)
     message = str(exc_info.value)
     assert "cash" in message
-    assert "nan" in message
+    assert "'garbage'" in message
     assert str(state_path) in message
 
 
