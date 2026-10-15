@@ -42,15 +42,32 @@ class TestPositionCooldownManager:
 
     def test_missing_entry_record_does_not_block_stop_loss_exit(self):
         # A position bleeding past the stop-loss threshold with lost
-        # bookkeeping must remain exitable through the guarded path.
+        # bookkeeping must remain exitable. The stop-loss override fires
+        # first (before the entry-record check) and is the more informative
+        # reason — both paths allow the exit.
         ok, reason = self.mgr.can_sell("SPY", 340.0, 400.0)
         assert ok is True
-        assert "No entry record" in reason
+        assert "Stop-loss override" in reason
+
+    def test_stop_loss_override_bypasses_weekly_cap(self):
+        # A position already below its adaptive stop must be allowed to exit
+        # even when the weekly trade cap is reached. The cap prevents
+        # noise-driven overtrading; blocking a risk exit would leave the
+        # portfolio holding a breaching position.
+        self.mgr.record_entry("A")
+        self.mgr.record_exit("A")
+        self.mgr.record_entry("B")
+        self.mgr.record_exit("B")
+        self.mgr.record_entry("C")
+        self.mgr.record_exit("C")
+        ok, reason = self.mgr.can_sell("SPY", 340.0, 400.0)
+        assert ok is True
+        assert "Stop-loss override" in reason
 
     def test_missing_entry_record_still_respects_weekly_cap(self):
-        # The weekly trade cap is verifiable bookkeeping and restrains
-        # frequency, not risk exits of unrecorded positions — but it is
-        # evaluated before the entry-record check and still applies.
+        # The weekly trade cap restrains frequency for positions NOT below
+        # their stop. A missing entry record with no stop breach is still
+        # blocked by the cap.
         self.mgr.record_entry("A")
         self.mgr.record_exit("A")
         self.mgr.record_entry("B")
