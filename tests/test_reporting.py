@@ -395,29 +395,41 @@ class TestNonFiniteGuards:
                     json.dump(data, f)
             yield tmpdir
 
-    def test_non_finite_start_value_defaults_to_10000(self, mock_week_dir):
-        """A NaN/inf/negative start value should fall back to the default initial capital."""
+    def test_non_finite_start_file_excluded(self, mock_week_dir, caplog):
+        """A first-day file containing a NaN token is not valid JSON: the
+        strict reader excludes it loudly (pinned generically in
+        tests/test_utils_strict_json_reader.py) and the report starts from
+        the first remaining valid day."""
+        import logging
+
         bad_file = Path(mock_week_dir) / "2026-01-05.json"
         data = json.loads(bad_file.read_text())
         data["portfolio_after"]["total_value"] = float("nan")
         bad_file.write_text(json.dumps(data))
 
-        rg = ReportGenerator(results_dir=mock_week_dir)
-        report = rg.generate_weekly_report(2026, 2)
-        assert report["start_value"] == 10000.0
-        assert report["weekly_return_pct"] == pytest.approx(1.5, abs=0.01)
+        with caplog.at_level(logging.WARNING, logger="utils"):
+            rg = ReportGenerator(results_dir=mock_week_dir)
+            report = rg.generate_weekly_report(2026, 2)
+        assert "Skipping 2026-01-05.json" in caplog.text
+        assert report["start_value"] == 10100.0  # first remaining day (Jan 6)
+        assert report["weekly_return_pct"] == pytest.approx(0.495, abs=0.01)
 
-    def test_non_finite_end_value_yields_none_return(self, mock_week_dir):
-        """A NaN/inf end value makes the weekly return undefined."""
+    def test_non_finite_end_file_excluded(self, mock_week_dir, caplog):
+        """A last-day file containing an inf token is excluded loudly; the
+        report ends at the last remaining valid day."""
+        import logging
+
         bad_file = Path(mock_week_dir) / "2026-01-09.json"
         data = json.loads(bad_file.read_text())
         data["portfolio_after"]["total_value"] = float("inf")
         bad_file.write_text(json.dumps(data))
 
-        rg = ReportGenerator(results_dir=mock_week_dir)
-        report = rg.generate_weekly_report(2026, 2)
-        assert report["end_value"] is None
-        assert report["weekly_return_pct"] is None
+        with caplog.at_level(logging.WARNING, logger="utils"):
+            rg = ReportGenerator(results_dir=mock_week_dir)
+            report = rg.generate_weekly_report(2026, 2)
+        assert "Skipping 2026-01-09.json" in caplog.text
+        assert report["end_value"] == 10200.0  # last remaining day (Jan 8)
+        assert report["weekly_return_pct"] == pytest.approx(2.0, abs=0.01)
         assert _is_finite_number(report["volatility"]) and report["volatility"] >= 0
 
     def test_non_finite_intermediate_value_skipped_for_daily_returns(self, mock_week_dir):
@@ -489,22 +501,28 @@ class TestMonthlyReportWithNonFiniteEnd:
                     json.dump(data, f)
             yield tmpdir
 
-    def test_monthly_non_finite_end_value(self, mock_month_dir_non_finite):
-        """A NaN/inf end-of-month total value makes the monthly return undefined."""
-        rg = ReportGenerator(results_dir=mock_month_dir_non_finite)
-        report = rg.generate_monthly_report(2026, 1)
-        assert report["end_value"] is None
-        assert report["monthly_return_pct"] is None
+    def test_monthly_non_finite_end_file_excluded(self, mock_month_dir_non_finite, caplog):
+        """A last-day file containing a NaN token is not valid JSON: the
+        strict reader excludes it loudly and the month ends at the last
+        remaining valid day."""
+        import logging
 
-    def test_monthly_non_finite_position_pnl_excluded(self, mock_month_dir_non_finite):
-        """Positions with NaN/inf unrealized PnL are excluded from best/worst selection."""
+        with caplog.at_level(logging.WARNING, logger="utils"):
+            rg = ReportGenerator(results_dir=mock_month_dir_non_finite)
+            report = rg.generate_monthly_report(2026, 1)
+        assert "Skipping 2026-01-05.json" in caplog.text
+        assert report["end_value"] == 10200.0  # day 4, last remaining
+        assert report["monthly_return_pct"] == pytest.approx(1.49, abs=0.01)
+
+    def test_monthly_non_finite_end_file_positions_from_last_valid_day(
+        self, mock_month_dir_non_finite
+    ):
+        """Positions are captured from the last valid day (day 4) after the
+        NaN-token day-5 file is excluded."""
         rg = ReportGenerator(results_dir=mock_month_dir_non_finite)
         report = rg.generate_monthly_report(2026, 1)
-        # Last day has NaN total value but finite position PnL on previous days.
-        # With a NaN last day total value, end_value becomes None, but positions
-        # are still captured from the last day. The single position has finite PnL.
         assert report["best_position"]["ticker"] == "SPY"
-        assert report["best_position"]["pnl_pct"] == 5 * 0.5
+        assert report["best_position"]["pnl_pct"] == 4 * 0.5
 
 class TestBenchmarkFetchFailureIsLoud:
     """PR #75 regression: a benchmark fetch failure must leave a trace."""

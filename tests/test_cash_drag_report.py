@@ -110,15 +110,22 @@ def test_cash_drag_invalid_zero_total(tmp_path):
     assert "Invalid data   : 1" in text
 
 
-def test_cash_drag_invalid_nan_total(tmp_path):
-    """A non-finite total_value is flagged invalid rather than producing a NaN percentage."""
+def test_cash_drag_non_finite_token_file_excluded(tmp_path, caplog):
+    """A file containing a non-standard NaN token is not valid JSON: the
+    strict reader excludes it from analysis with a loud skip (pinned
+    generically in tests/test_utils_strict_json_reader.py). The invalid-row
+    contract for *parseable* values is pinned by the zero/negative/missing
+    siblings below."""
+    import logging
+
     _write_result(
         tmp_path, "2026-08-10", cash=1000, total=float("nan"), regime="normal", trades=0
     )
-    text, rows = analyze_cash_drag(tmp_path)
-    assert rows[0]["status"] == "invalid"
-    assert rows[0]["cash_pct"] is None
-    assert "Invalid data   : 1" in text
+    with caplog.at_level(logging.WARNING, logger="utils"):
+        text, rows = analyze_cash_drag(tmp_path)
+    assert rows == []
+    assert "Skipping 2026-08-10.json" in caplog.text
+    assert "non-standard JSON constant" in caplog.text
 
 
 def test_cash_drag_invalid_missing_portfolio(tmp_path):
@@ -154,8 +161,12 @@ def test_cash_drag_invalid_negative_total(tmp_path):
     assert rows[0]["cash_pct"] is None
 
 
-def test_cash_drag_invalid_infinite_cash(tmp_path):
-    """An infinite cash value is flagged invalid."""
+def test_cash_drag_infinite_token_file_excluded(tmp_path, caplog):
+    """An infinite cash value renders the file non-standard JSON; excluded
+    loudly per the strict-reader contract (see
+    test_cash_drag_non_finite_token_file_excluded)."""
+    import logging
+
     _write_result(
         tmp_path,
         "2026-08-10",
@@ -164,9 +175,10 @@ def test_cash_drag_invalid_infinite_cash(tmp_path):
         regime="normal",
         trades=0,
     )
-    _text, rows = analyze_cash_drag(tmp_path)
-    assert rows[0]["status"] == "invalid"
-    assert rows[0]["cash_pct"] is None
+    with caplog.at_level(logging.WARNING, logger="utils"):
+        _text, rows = analyze_cash_drag(tmp_path)
+    assert rows == []
+    assert "Skipping 2026-08-10.json" in caplog.text
 
 
 def test_cash_drag_invalid_rows_skipped_in_diagnosis(tmp_path):
