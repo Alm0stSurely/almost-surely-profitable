@@ -114,9 +114,26 @@ class BacktestCooldownManager:
         """
         self.trade_attempts += 1
 
-        # Filter expired trades before checking cap (ISO calendar week)
+        # Filter expired trades before any check (ISO calendar week)
         week_start = self._week_start(current_date)
         self.weekly_trades = [t for t in self.weekly_trades if t >= week_start]
+
+        # Check stop-loss override first: a position already below its adaptive
+        # stop must be allowed to exit regardless of the weekly trade cap or the
+        # minimum holding period. The cap exists to prevent noise-driven
+        # overtrading; blocking a risk exit would leave the simulation holding
+        # a breaching position, which contradicts the live manager's prompt
+        # language ("except stop-loss overrides") and the fail-open-on-exit
+        # design principle. Mirrors PositionCooldownManager.can_sell (PR #86).
+        if self.config.allow_stop_loss_override and avg_price > 0:
+            drawdown_pct = ((current_price - avg_price) / avg_price) * 100
+            adaptive_stop = self._get_dynamic_stop_loss()
+            if drawdown_pct <= -adaptive_stop:
+                self.stop_loss_overrides += 1
+                return (
+                    True,
+                    f"Stop-loss override (drawdown {drawdown_pct:.1f}%, adaptive threshold {adaptive_stop:.1f}%)"
+                )
 
         # Check weekly trade cap (dynamic based on regime)
         trade_cap = self._get_dynamic_trade_cap()
@@ -143,16 +160,6 @@ class BacktestCooldownManager:
 
         hold_days = (current_date - entry_time).total_seconds() / 86400
         if hold_days < self.config.min_hold_days:
-            # Check stop-loss override with adaptive threshold
-            if self.config.allow_stop_loss_override and avg_price > 0:
-                drawdown_pct = ((current_price - avg_price) / avg_price) * 100
-                adaptive_stop = self._get_dynamic_stop_loss()
-                if drawdown_pct <= -adaptive_stop:
-                    self.stop_loss_overrides += 1
-                    return (
-                        True,
-                        f"Stop-loss override (drawdown {drawdown_pct:.1f}%, adaptive threshold {adaptive_stop:.1f}%)"
-                    )
             self.blocked_sells += 1
             return (
                 False,
