@@ -1,20 +1,30 @@
 """Ingress guards for the portfolio monetary base (cash + realized P&L).
 
 Companion to tests/test_portfolio_load_state_guard.py (PR #80), which pins
-the per-position drop doctrine. This module pins the *global refusal*
-doctrine for the two session-global scalars:
+the per-position drop doctrine, and tests/test_portfolio_load_state_quarantine.py
+(PR #85), which pins the whole-file quarantine for unparseable state. This
+module pins the *global refusal* doctrine for the two session-global
+scalars on *parseable* dicts:
 
 - ``cash`` is the monetary base: every order size, portfolio weight, and
-  LLM prompt field derives from it. A malformed cash (NaN, bool, string,
+  LLM prompt field derives from it. A malformed cash (bool, string,
   negative, or absent) therefore poisons the entire session — and there is
   no non-fabricating substitute. Refusal (ValueError) beats fabrication.
 - ``total_realized_pnl`` is a session-global aggregate feeding the LLM
-  prompt and the strict ``save_state``: NaN loads silently but kills the
-  NEXT save (allow_nan=False), i.e. the session crashes at the write
-  site, maximally far from the cause. Same refusal doctrine.
+  prompt and the strict ``save_state``: a malformed value either feeds a
+  fiction into the prompt or crashes the next save, far from the cause.
+  Same refusal doctrine.
 
 Both keys are written unconditionally by ``save_state``, so a missing or
-malformed value always means a corrupted or hand-edited state file.
+malformed value always means a corrupted or hand-edited file.
+
+Re-classification (PR #85, same cascade as the benchmark suite in PR #84):
+non-finite *tokens* (NaN/Infinity) never reach these guards — the strict
+reader rejects them at parse time and the whole file is quarantined one
+layer up, pinned in test_portfolio_load_state_quarantine.py. The refusal
+tests that used NaN fixtures were rewritten to use parseable invalids and
+moved/kept per the PR #74 doctrine (tests pinning the old layer contract
+are the bug's specification; they now pin the new one).
 
 Discriminators (must FAIL pre-fix, i.e. raise nothing) assert the refusal
 mechanism itself: ``ValueError`` propagates out of ``Portfolio()`` and the
@@ -43,25 +53,6 @@ def _write_state(tmp_path, state: dict) -> str:
     return str(data_dir)
 
 
-def _write_state_with_nan(tmp_path, nan_key: str, state: dict) -> str:
-    """Write a state file with a literal NaN token for *nan_key*.
-
-    json.dump(..., allow_nan=False) cannot produce the token, so the
-    fixture is dumped with a placeholder and replaced (same trick as the
-    PR #80 repro): a NaN token is data no repo code can write but
-    json.load accepts by default.
-    """
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    state = dict(state)
-    state[nan_key] = "__NAN_PLACEHOLDER__"
-    text = json.dumps(state, indent=2)
-    text = text.replace('"__NAN_PLACEHOLDER__"', "NaN")
-    with open(data_dir / "portfolio_state.json", "w") as f:
-        f.write(text)
-    return str(data_dir)
-
-
 _HEALTHY = {
     "cash": 2295.17,
     "total_realized_pnl": -112.50,
@@ -74,10 +65,11 @@ _HEALTHY = {
 class TestCashRefusal:
     """Invalid cash must refuse the whole load — never fabricate."""
 
-    def test_nan_cash_refused(self, tmp_path):
-        data_dir = _write_state_with_nan(tmp_path, "cash", _HEALTHY)
-        with pytest.raises(ValueError, match="'cash' is nan"):
-            Portfolio(data_dir=data_dir)
+    # NOTE (PR #85 re-classification): the NaN-cash token case moved to
+    # tests/test_portfolio_load_state_quarantine.py — a non-finite token
+    # makes the whole file unparseable, so the strict reader quarantines
+    # it one layer up and the refusal guards below only ever see
+    # *parseable* values (PR #84 layering).
 
     def test_bool_cash_refused(self, tmp_path):
         state = dict(_HEALTHY, cash=True)
@@ -114,12 +106,11 @@ class TestCashRefusal:
 
 
 class TestRealizedPnlRefusal:
-    """Invalid total_realized_pnl must refuse — NaN kills the next save."""
+    """Invalid total_realized_pnl must refuse — malformed aggregates lie."""
 
-    def test_nan_realized_pnl_refused(self, tmp_path):
-        data_dir = _write_state_with_nan(tmp_path, "total_realized_pnl", _HEALTHY)
-        with pytest.raises(ValueError, match="'total_realized_pnl' is nan"):
-            Portfolio(data_dir=data_dir)
+    # NOTE (PR #85 re-classification): the NaN-token case moved to
+    # tests/test_portfolio_load_state_quarantine.py (whole-file quarantine);
+    # see the matching note in TestCashRefusal.
 
     def test_bool_realized_pnl_refused(self, tmp_path):
         state = dict(_HEALTHY, total_realized_pnl=True)
@@ -150,7 +141,9 @@ class TestRefusalBlastRadius:
     """The refusal must not destroy, rewrite, or fabricate anything."""
 
     def test_refusal_leaves_file_untouched(self, tmp_path):
-        data_dir = _write_state_with_nan(tmp_path, "cash", _HEALTHY)
+        # Parseable invalid (string cash): the refusal fires, and the
+        # claim-shaped file stays byte-identical for manual repair.
+        data_dir = _write_state(tmp_path, dict(_HEALTHY, cash="2295.17"))
         state_file = tmp_path / "data" / "portfolio_state.json"
         before = state_file.read_bytes()
         with pytest.raises(ValueError):
@@ -161,7 +154,7 @@ class TestRefusalBlastRadius:
         # Blast-radius pin: the positions in the file are healthy, but the
         # monetary base is not — the load refuses BEFORE the position
         # restore, so no in-memory ghost state is ever built.
-        data_dir = _write_state_with_nan(tmp_path, "cash", _HEALTHY)
+        data_dir = _write_state(tmp_path, dict(_HEALTHY, cash="2295.17"))
         with pytest.raises(ValueError):
             Portfolio(data_dir=data_dir)
 

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from utils import _is_finite_number, load_json_list_or_quarantine
+from utils import _is_finite_number, load_json_dict_or_quarantine, load_json_list_or_quarantine
 
 
 @dataclass
@@ -147,13 +147,21 @@ class Portfolio:
     def load_state(self) -> None:
         """Load portfolio state from JSON file.
 
-        Failure doctrine, from the loss comparison at each boundary:
+        Failure doctrine, from the loss comparison at each boundary
+        (the PR #81 ingress tree applied at two resolutions, with the
+        PR #84 strict reader in the parse layer):
 
-        - Unparseable file / non-mapping top level → the file makes NO
-          usable claim, so falling back to a fresh portfolio is not a
-          fabrication: it is the same state as "no file". Loud log,
-          in-memory only (PR #60 quarantine doctrine covers the ledger;
-          this file is the one well-behaved mutator's output).
+        - Unparseable file (garbage bytes, NaN/Infinity tokens) or
+          non-mapping top level (``null``, a list, a scalar) → the file
+          makes NO usable claim, so falling back to a fresh portfolio is
+          not a fabrication: it is the same state as "no file". But the
+          corrupt bytes must not be left in place to be silently
+          OVERWRITTEN by the next save_state — that is the PR #60 class
+          (a corrupt state file destroyed by the system's own write
+          path, evidence gone without a trace). The shared quarantine
+          helper renames the file aside (bytes preserved, loud error
+          log) and returns an empty dict; branch 2 of the ingress tree,
+          with the evidence kept.
         - Invalid cash or total_realized_pnl → REFUSE the load (raise
           ValueError). Both keys are written unconditionally by
           save_state, so a missing or malformed value always means a
@@ -169,22 +177,13 @@ class Portfolio:
           ghost trades into the append-only ledger and the LLM's
           decision context. Fail loud, at the cause, file untouched.
         """
-        if not self.state_file.exists():
-            return
-
-        try:
-            with open(self.state_file, 'r') as f:
-                state = json.load(f)
-        except Exception as e:
-            print(f"Error loading state: {e}. Starting fresh.")
-            self.cash = self.INITIAL_CAPITAL
-            self.positions = {}
-            return
-
-        if not isinstance(state, dict):
-            print(f"Error loading state: expected a JSON object, got {type(state).__name__}. Starting fresh.")
-            self.cash = self.INITIAL_CAPITAL
-            self.positions = {}
+        state = load_json_dict_or_quarantine(self.state_file, context="portfolio state")
+        if not state:
+            # Claim/no-claim gate (PR #82 doctrine): an absent file, a just-
+            # quarantined corrupt file, and an empty mapping are all
+            # indistinguishable "no claim" at this layer — the fresh-portfolio
+            # default is honest for all three, and the monetary refusal below
+            # must not fire on the quarantine helper's empty-dict output.
             return
 
         cash = state.get('cash')
@@ -204,54 +203,50 @@ class Portfolio:
         self.cash = cash
         self.total_realized_pnl = realized_pnl
 
-        try:
-            # Restore positions — validate every field at the ingress
-            # boundary. Values coming from the state JSON would otherwise be
-            # laundered straight into Position arithmetic: bool is an int
-            # subclass (quantity=True * price == price — a fabricated market
-            # value), json.load accepts NaN/Infinity tokens by default (a NaN
-            # quantity loads silently and kills the next save_state, which is
-            # strict allow_nan=False), and a string avg_price only crashes
-            # later, at first P&L access, far from the cause. Scope of
-            # failure must match scope of malformation (PR #64 doctrine):
-            # one malformed position is dropped loudly, its healthy siblings
-            # survive — the except below stays reserved for failure of the
-            # position restore itself (never expected on a validated file;
-            # kept as a last-resort global fallback).
-            positions_data = state.get('positions', {})
-            self.positions = {}
-            if not isinstance(positions_data, dict):
-                print(f"⚠ Ignoring positions: expected an object, got {type(positions_data).__name__}")
-                positions_data = {}
-            for ticker, pos_data in positions_data.items():
-                if not isinstance(pos_data, dict):
-                    print(f"⚠ Dropping position {ticker}: expected an object, got {type(pos_data).__name__}")
-                    continue
-                quantity = pos_data.get('quantity')
-                avg_price = pos_data.get('avg_price')
-                current_price = pos_data.get('current_price', 0.0)
-                if not _is_valid_positive_scalar(quantity):
-                    print(f"⚠ Dropping position {ticker}: invalid quantity {quantity!r} (expected a finite number > 0)")
-                    continue
-                if not _is_valid_positive_scalar(avg_price):
-                    print(f"⚠ Dropping position {ticker}: invalid avg_price {avg_price!r} (expected a finite number > 0)")
-                    continue
-                if not _is_valid_price(current_price):
-                    print(f"⚠ Dropping position {ticker}: invalid current_price {current_price!r} (expected a finite number >= 0)")
-                    continue
-                self.positions[ticker] = Position(
-                    ticker=ticker,
-                    quantity=quantity,
-                    avg_price=avg_price,
-                    current_price=current_price
-                )
-            
-            print(f"✓ Loaded portfolio state: {len(self.positions)} positions, €{self.cash:.2f} cash")
-            
-        except Exception as e:
-            print(f"Error loading state: {e}. Starting fresh.")
-            self.cash = self.INITIAL_CAPITAL
-            self.positions = {}
+        # Restore positions — validate every field at the ingress
+        # boundary. Values coming from the state JSON would otherwise be
+        # laundered straight into Position arithmetic: bool is an int
+        # subclass (quantity=True * price == price — a fabricated market
+        # value) and a string avg_price only crashes later, at first P&L
+        # access, far from the cause. (Non-finite tokens never reach this
+        # layer: the strict reader rejects them at parse time and the
+        # whole file is quarantined one level up — PR #84.) Scope of
+        # failure must match scope of malformation (PR #64 doctrine):
+        # one malformed position is dropped loudly, its healthy siblings
+        # survive. There is deliberately NO catch-all here: any unexpected
+        # error now propagates loudly with the file untouched, instead of
+        # the old fallback that overwrote the just-validated real cash
+        # with the €10,000 default — the widest possible blast radius for
+        # an unspecified failure.
+        positions_data = state.get('positions', {})
+        self.positions = {}
+        if not isinstance(positions_data, dict):
+            print(f"⚠ Ignoring positions: expected an object, got {type(positions_data).__name__}")
+            positions_data = {}
+        for ticker, pos_data in positions_data.items():
+            if not isinstance(pos_data, dict):
+                print(f"⚠ Dropping position {ticker}: expected an object, got {type(pos_data).__name__}")
+                continue
+            quantity = pos_data.get('quantity')
+            avg_price = pos_data.get('avg_price')
+            current_price = pos_data.get('current_price', 0.0)
+            if not _is_valid_positive_scalar(quantity):
+                print(f"⚠ Dropping position {ticker}: invalid quantity {quantity!r} (expected a finite number > 0)")
+                continue
+            if not _is_valid_positive_scalar(avg_price):
+                print(f"⚠ Dropping position {ticker}: invalid avg_price {avg_price!r} (expected a finite number > 0)")
+                continue
+            if not _is_valid_price(current_price):
+                print(f"⚠ Dropping position {ticker}: invalid current_price {current_price!r} (expected a finite number >= 0)")
+                continue
+            self.positions[ticker] = Position(
+                ticker=ticker,
+                quantity=quantity,
+                avg_price=avg_price,
+                current_price=current_price
+            )
+
+        print(f"✓ Loaded portfolio state: {len(self.positions)} positions, €{self.cash:.2f} cash")
     
     def save_state(self) -> None:
         """Save portfolio state to JSON file."""
