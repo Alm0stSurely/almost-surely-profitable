@@ -1,15 +1,12 @@
-"""Regression tests for the Portfolio.load_state ingress guard.
+"""Regression tests for the Portfolio.load_state per-position ingress guard.
 
-Contract: position fields (quantity, avg_price, current_price) read from the
-state JSON must be validated at the ingress boundary, before they reach
-Position arithmetic. Pre-fix they were passed straight through:
+Contract: position fields (quantity, avg_price, current_price) read from a
+*parseable* state JSON must be validated at the ingress boundary, before
+they reach Position arithmetic. Pre-fix they were passed straight through:
 
 - ``bool`` is an int subclass: ``quantity=True`` laundered into a fabricated
   market value (``True * price == price``); the PR #79 note in
   test_bool_guard_rejection.py flagged exactly this ingress as the follow-up.
-- ``json.load`` accepts ``NaN``/``Infinity`` tokens by default: a NaN
-  quantity loaded silently and killed the *next* ``save_state`` (strict
-  ``allow_nan=False``) — corruption in, crash out, far from the cause.
 - a string ``avg_price`` loaded fine and crashed later, at first P&L access.
 - a list-shaped position entry crashed the whole load via the outer
   ``except`` — which also reset cash to INITIAL_CAPITAL (blast radius far
@@ -17,8 +14,9 @@ Position arithmetic. Pre-fix they were passed straight through:
 
 Scope of failure must match scope of malformation (PR #64 doctrine): one
 malformed position is dropped loudly, healthy siblings survive, and the
-persisted cash is preserved. The outer ``except`` stays reserved for global
-failure (unparseable file).
+persisted cash is preserved. (Non-finite *tokens* never reach these guards
+since PR #85: the strict reader quarantines the whole file one layer up —
+see test_portfolio_load_state_quarantine.py.)
 
 Discriminators assert the malformed entry is refused loudly; bounded
 healthy-path pins assert real states round-trip byte-identically on both
@@ -37,10 +35,11 @@ from portfolio.portfolio import Portfolio
 
 
 def _write_state(tmpdir: str, positions, cash: float = 5000.0) -> None:
-    """Write a state file by hand so non-standard tokens (NaN/Infinity) work.
+    """Write a state file for the per-element guard tests.
 
-    ``json.dump(..., allow_nan=False)`` — rightly — refuses these tokens,
-    so the file is assembled manually; only tests need the raw forms.
+    (The token-replacement machinery for NaN/Infinity fixtures moved to
+    tests/test_portfolio_load_state_quarantine.py with the PR #85
+    re-classification; the remaining callers pass only parseable values.)
     """
     state = {
         "cash": cash,
@@ -102,37 +101,13 @@ class TestLoadStateRejectsBoolFields:
         assert "current_price" in out
 
 
-class TestLoadStateRejectsNonFiniteFields:
-    """NaN/Infinity tokens (accepted by json.load) must not reach Position."""
-
-    def test_nan_quantity_dropped_and_save_survives(self, capsys):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_state(tmpdir, {"SPY": {"quantity": float("nan"), "avg_price": 400.0, "current_price": 410.0}})
-            portfolio = Portfolio(data_dir=tmpdir)
-            assert "SPY" not in portfolio.positions
-            assert math.isfinite(portfolio.total_value)
-            # The downstream kill is gone: saving the cleaned state must work.
-            portfolio.save_state()
-            reloaded = Portfolio(data_dir=tmpdir)
-            assert reloaded.positions == {}
-
-    def test_infinity_avg_price_dropped(self, capsys):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_state(tmpdir, {"SPY": {"quantity": 10.0, "avg_price": float("inf"), "current_price": 410.0}})
-            portfolio = Portfolio(data_dir=tmpdir)
-        assert "SPY" not in portfolio.positions
-
-    def test_negative_inf_current_price_dropped(self, capsys):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_state(tmpdir, {"SPY": {"quantity": 10.0, "avg_price": 400.0, "current_price": float("-inf")}})
-            portfolio = Portfolio(data_dir=tmpdir)
-        assert "SPY" not in portfolio.positions
-
-    def test_nan_current_price_dropped(self, capsys):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_state(tmpdir, {"SPY": {"quantity": 10.0, "avg_price": 400.0, "current_price": float("nan")}})
-            portfolio = Portfolio(data_dir=tmpdir)
-        assert "SPY" not in portfolio.positions
+# NOTE (PR #85 re-classification): non-finite *tokens* (NaN/Infinity) no
+# longer reach the field guards — the strict reader (PR #84) rejects them
+# at parse time and the whole file is quarantined one layer up. The
+# token-file contract is pinned in
+# tests/test_portfolio_load_state_quarantine.py; the tests that lived here
+# were moved there, rewritten to pin the new contract (PR #74 doctrine).
+# This file pins the per-element guards for *parseable* invalids only.
 
 
 class TestLoadStateRejectsWrongTypesAndShapes:
@@ -255,9 +230,11 @@ class TestLoadStateHealthyPathsUnchanged:
         assert "SPY" in out  # the drop was loud
 
     def test_all_malformed_loads_empty_loudly(self, capsys):
+        # All-parseable invalids (since PR #85 a NaN token would quarantine
+        # the whole file one layer up — see test_portfolio_load_state_quarantine).
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_state(tmpdir, {
-                "SPY": {"quantity": float("nan"), "avg_price": 400.0, "current_price": 410.0},
+                "SPY": {"quantity": True, "avg_price": 400.0, "current_price": 410.0},
                 "GLD": {"quantity": 5.0, "avg_price": "200", "current_price": 210.0},
             })
             portfolio = Portfolio(data_dir=tmpdir)
