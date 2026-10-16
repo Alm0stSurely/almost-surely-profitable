@@ -128,6 +128,34 @@ class TestBacktestCooldownManager:
         assert "Weekly trade cap" in reason
         assert "normal" in reason
 
+    def test_stop_loss_override_bypasses_weekly_cap(self):
+        """A position breaching its adaptive stop must exit even at weekly cap.
+
+        Regression test mirroring the live PositionCooldownManager fix
+        (stop-loss override reordered before the weekly trade cap check).
+        A cap that blocks risk exits contradicts the prompt language
+        ("except stop-loss overrides") and would force the simulation to
+        hold a breaching position.
+        """
+        mgr = BacktestCooldownManager(
+            config=CooldownConfig(max_trades_per_week=2, max_trades_normal_vol=2,
+                                  min_hold_days=5, stop_loss_threshold_pct=5.0)
+        )
+        # Fill the weekly cap with two trades in the same ISO week.
+        mgr.record_entry("X", datetime(2024, 1, 15, 9))
+        mgr.record_exit("X", datetime(2024, 1, 15, 10))
+        mgr.record_entry("Y", datetime(2024, 1, 15, 11))
+        mgr.record_exit("Y", datetime(2024, 1, 15, 12))
+        # New position, entered same week, now breaching its stop (-10 % <= -5 %),
+        # still inside the min-hold window (1 day < 5 days).
+        mgr.record_entry("AAPL", datetime(2024, 1, 16))
+        allowed, reason = mgr.can_sell("AAPL", datetime(2024, 1, 17), 90.0, 100.0)
+        assert allowed is True
+        assert "Stop-loss override" in reason
+        # The override is counted as a risk exit, not a restraint firing.
+        assert mgr.blocked_sells == 0
+        assert mgr.stop_loss_overrides == 1
+
     def test_weekly_trade_cap_blocks_sell(self):
         """Selling when weekly trade cap is reached should be blocked."""
         mgr = BacktestCooldownManager(
