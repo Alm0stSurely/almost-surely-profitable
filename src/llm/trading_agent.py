@@ -261,24 +261,78 @@ class TradingAgent:
         time.sleep(wait_time)
     
     def load_recent_decisions(self, days: int = 5) -> List[Dict]:
-        """Load recent trading decisions from history."""
+        """Load recent trading decisions from history.
+
+        Per-element robustness: a single malformed record (non-dict
+        element, missing or unparseable ``timestamp``) must not void the
+        n-1 valid siblings. The previous broad ``except`` around the whole
+        filter made one bad element drop the entire history from the LLM
+        context — anti-Lipschitz: the scope of the failure exceeded the
+        scope of the malformation. Malformed elements are now dropped with
+        one loud warning each, naming the record and the reason; the valid
+        recent tail is returned unchanged.
+
+        The load goes through the shared quarantine ingress (the same one
+        ``save_decision`` uses): the file feeds an append-then-overwrite
+        flow within the run, so an unparseable file is quarantined (bytes
+        preserved) rather than left in place for the next save to
+        silently overwrite, and non-standard JSON tokens that no repo
+        writer can emit are rejected at the parse boundary (PR #84
+        strict-reader convention).
+        """
         if not self.history_file.exists():
             return []
-        
-        try:
-            with open(self.history_file, 'r') as f:
-                all_decisions = json.load(f)
-            
-            # Filter to recent days
-            cutoff = datetime.now() - timedelta(days=days)
-            recent = [
-                d for d in all_decisions
-                if datetime.fromisoformat(d['timestamp']) > cutoff
-            ]
-            return recent[-5:]  # Last 5 decisions max
-        except Exception as e:
-            logger.error(f"Error loading decision history: {e}")
-            return []
+
+        if JSON_SAFE_AVAILABLE:
+            all_decisions = load_json_list_or_quarantine(
+                self.history_file, context="decision history"
+            )
+        else:
+            # Standalone fallback without the shared utils module: keep the
+            # previous raw read with its loud error log (dead in-repo).
+            all_decisions = []
+            try:
+                with open(self.history_file, 'r') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    all_decisions = data
+                else:
+                    logger.error(
+                        f"Decision history {self.history_file} has wrong shape "
+                        f"(expected list, got {type(data).__name__}); "
+                        f"no recent decisions loaded."
+                    )
+            except Exception as e:  # noqa: BLE001 -- standalone fallback, dead in-repo
+                logger.error(f"Error loading decision history: {e}")
+
+        cutoff = datetime.now() - timedelta(days=days)
+        recent = []
+        for index, d in enumerate(all_decisions):
+            if not isinstance(d, dict):
+                logger.warning(
+                    f"Decision history record #{index} dropped: not a mapping "
+                    f"(got {type(d).__name__})"
+                )
+                continue
+            ts = d.get('timestamp')
+            if ts is None:
+                logger.warning(
+                    f"Decision history record #{index} dropped: missing 'timestamp'"
+                )
+                continue
+            try:
+                parsed = datetime.fromisoformat(ts)
+                in_window = parsed > cutoff
+            except (TypeError, ValueError) as e:
+                logger.warning(
+                    f"Decision history record #{index} dropped: unusable "
+                    f"timestamp {ts!r} ({e})"
+                )
+                continue
+            if in_window:
+                recent.append(d)
+
+        return recent[-5:]  # Last 5 decisions max
     
     def save_decision(self, decision: Dict) -> None:
         """Save decision to history file.
