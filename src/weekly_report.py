@@ -4,7 +4,6 @@ Weekly report generator with performance metrics.
 Run every Friday after market close to generate weekly performance report.
 """
 
-import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,7 +18,7 @@ from portfolio.portfolio import Portfolio
 from reporting import ReportGenerator
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 from risk.performance_metrics import PerformanceMetrics, calculate_all_metrics
-from utils import _is_finite_number
+from utils import _is_finite_number, load_json_list_or_quarantine
 
 # Resolve paths relative to the repository root so the script is safe to run
 # from any working directory (e.g. via cron from the parent workspace).
@@ -189,11 +188,24 @@ def _load_week_trades_from_history(week_start_date, week_end_date, existing_trad
     history_file = DATA_DIR / "trades_history.json"
     if not history_file.exists():
         return []
-    try:
-        with open(history_file) as f:
-            history = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
+
+    # Route through the shared quarantine ingress. The writer of this ledger
+    # (Portfolio.save_trade) already loads through the same helper, so reader
+    # and writer share one trust model; and the ledger's trajectory ends in an
+    # append-then-overwrite rewrite, so a corrupt file left in place would be
+    # destroyed by the next save. The previous silent ``return []`` skipped
+    # the exact intraday trades this helper exists to surface (W40-2026
+    # class): a corrupt ledger must be loud, not quietly indistinguishable
+    # from an empty week.
+    history = load_json_list_or_quarantine(history_file, context="trade ledger")
+    if not history_file.exists():
+        # The helper quarantined the file (rename to .corrupt-*, bytes
+        # preserved, ERROR logged). Surface it in the report itself — the
+        # report is the artifact a human reads, and a trade list that silently
+        # misses intraday executions is the failure mode this helper was
+        # written to prevent.
+        print(f"  ⚠ Trade ledger {history_file.name} was corrupt and has been "
+              f"quarantined; intraday trades may be missing from this report.")
 
     def _key(date, ticker, action, price):
         try:
@@ -207,8 +219,21 @@ def _load_week_trades_from_history(week_start_date, week_end_date, existing_trad
         for t in existing_trades
     }
     extra = []
-    for trade in history:
+    for idx, trade in enumerate(history):
+        # Element guard wraps the whole element evaluation (PR #86 rule): a
+        # record that parses but is not a mapping, or carries a non-string
+        # timestamp, must drop loudly without voiding its siblings — never
+        # crash the report (old code died on ``trade.get`` outside any try).
+        if not isinstance(trade, dict):
+            print(f"  ⚠ Skipping malformed trade record at index {idx} in "
+                  f"{history_file.name} (expected dict, got "
+                  f"{type(trade).__name__})")
+            continue
         ts = trade.get('timestamp', '')
+        if not isinstance(ts, str):
+            print(f"  ⚠ Skipping trade record at index {idx} in "
+                  f"{history_file.name} (non-string timestamp {ts!r})")
+            continue
         date = ts[:10]
         if not date or not (week_start_date <= date <= week_end_date):
             continue
