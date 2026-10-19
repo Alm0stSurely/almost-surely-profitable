@@ -1,5 +1,4 @@
 """Behavioral analysis of LLM decision history for trading research."""
-import json
 import math
 import sys
 from collections import Counter, defaultdict
@@ -10,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from analysis.churn_analysis import match_round_trips
-from utils import load_valid_daily_results
+from utils import load_json_list_or_quarantine, load_valid_daily_results
 
 
 def _safe_cash_pct(cash, total):
@@ -108,11 +107,118 @@ def _format_cash_levels(daily_results):
     return lines
 
 
+def _load_analysis_histories():
+    """Load decision history + trade ledger through the shared quarantine ingress.
+
+    Both ledgers are append-then-overwrite files whose writers already load
+    through the same helper (``save_decision`` / ``save_trade``), so the
+    analysis reader shares one trust model with them: a corrupt file is
+    quarantined (bytes preserved, one ERROR log) instead of crashing the run,
+    being silently ingested as non-standard tokens no writer can emit (PR #84
+    strict hook), or sitting in place for the next save to overwrite. Records
+    that parse but violate the element contract drop loudly one-per-record —
+    one malformed record must not void n-1 valid siblings (anti-Lipschitz,
+    PR #64 doctrine).
+
+    Returns ``(decisions, trades, warnings)``; *warnings* are degradation
+    notes the caller must embed in the report artifact — the report is what a
+    human reads, and a silently degraded report is the failure mode this
+    hardening exists to prevent (PR #87 doctrine).
+    """
+    warnings = []
+
+    decisions_path = DATA_DIR / "decision_history.json"
+    decisions = []
+    if decisions_path.exists():
+        history = load_json_list_or_quarantine(
+            decisions_path, context="decision history")
+        if not decisions_path.exists():
+            # The helper quarantined the file (rename to .corrupt-*, bytes
+            # preserved, ERROR logged).
+            warnings.append(
+                f"⚠ Decision history {decisions_path.name} was corrupt and has "
+                "been quarantined; decision-based sections reflect an empty history."
+            )
+        dropped = 0
+        for idx, d in enumerate(history):
+            # Element guard wraps the whole element evaluation (PR #86 rule):
+            # every downstream section needs mapping access plus a naive,
+            # ISO-parseable timestamp — the monthly histogram slices it, the
+            # day-of-week section parses it, the churn header subtracts two
+            # of them (a tz-aware record would parse then detonate at the
+            # subtraction, one operation downstream of a successful parse).
+            if not isinstance(d, dict):
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{decisions_path.name} (expected dict, got "
+                      f"{type(d).__name__})")
+                dropped += 1
+                continue
+            ts = d.get("timestamp")
+            if not isinstance(ts, str):
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{decisions_path.name} (missing/non-string timestamp: "
+                      f"{ts!r})")
+                dropped += 1
+                continue
+            try:
+                parsed = datetime.fromisoformat(ts)
+            except ValueError:
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{decisions_path.name} (unparseable timestamp: {ts!r})")
+                dropped += 1
+                continue
+            if parsed.tzinfo is not None:
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{decisions_path.name} (timezone-aware timestamp in "
+                      f"naive-timestamp ledger: {ts!r})")
+                dropped += 1
+                continue
+            decisions.append(d)
+        if dropped:
+            warnings.append(
+                f"⚠ Dropped {dropped} malformed record(s) from decision history; "
+                "surviving records used."
+            )
+
+    trades_path = DATA_DIR / "trades_history.json"
+    trades = []
+    if trades_path.exists():
+        ledger = load_json_list_or_quarantine(
+            trades_path, context="trade ledger")
+        if not trades_path.exists():
+            warnings.append(
+                f"⚠ Trade ledger {trades_path.name} was corrupt and has been "
+                "quarantined; round-trip/churn sections reflect an empty ledger."
+            )
+        dropped = 0
+        for idx, t in enumerate(ledger):
+            # Contract required by match_round_trips: mapping access, a string
+            # ticker (used as a dict key), and an action key. Timestamps are
+            # handled by churn's own documented fallback (datetime.min).
+            if not isinstance(t, dict):
+                print(f"⚠ Dropping malformed trade record at index {idx} in "
+                      f"{trades_path.name} (expected dict, got "
+                      f"{type(t).__name__})")
+                dropped += 1
+                continue
+            if not isinstance(t.get("ticker"), str) or "action" not in t:
+                print(f"⚠ Dropping malformed trade record at index {idx} in "
+                      f"{trades_path.name} (missing string 'ticker' or "
+                      f"'action' key: {t!r})")
+                dropped += 1
+                continue
+            trades.append(t)
+        if dropped:
+            warnings.append(
+                f"⚠ Dropped {dropped} malformed record(s) from the trade "
+                "ledger; surviving records used."
+            )
+
+    return decisions, trades, warnings
+
+
 def main():
-    with open(DATA_DIR / "decision_history.json") as f:
-        decisions = json.load(f)
-    with open(DATA_DIR / "trades_history.json") as f:
-        trades = json.load(f)
+    decisions, trades, warnings = _load_analysis_histories()
 
     valid = [d for d in decisions if not d.get("error", False)]
     errors = [d for d in decisions if d.get("error", False)]
@@ -123,12 +229,19 @@ def main():
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 60,
         "",
+    ]
+    if warnings:
+        # The report is the artifact a human reads; degradation must be
+        # visible in it, not only on stderr (PR #87 doctrine).
+        lines.extend(warnings)
+        lines.append("")
+    lines.extend([
         "SAMPLE OVERVIEW",
         f"Total decisions: {len(decisions)}",
         f"Valid decisions: {len(valid)}",
         f"Errors: {len(errors)} ({len(errors)/max(len(decisions),1)*100:.1f}%)",
         "",
-    ]
+    ])
 
     # Error rate by month
     monthly = defaultdict(lambda: {"total": 0, "errors": 0})
@@ -195,9 +308,15 @@ def main():
     medium = [r for r in round_trips if 3 < r["hold_days"] <= 14]
     long = [r for r in round_trips if r["hold_days"] > 14]
 
-    first = datetime.fromisoformat(decisions[0]["timestamp"])
-    last = datetime.fromisoformat(decisions[-1]["timestamp"])
-    days = max((last - first).days, 1)
+    if decisions:
+        first = datetime.fromisoformat(decisions[0]["timestamp"])
+        last = datetime.fromisoformat(decisions[-1]["timestamp"])
+        days = max((last - first).days, 1)
+    else:
+        # Empty history is a legitimate state (fresh account); churn_analysis
+        # uses the same days_active = 1 convention for it. After element
+        # filtering the list can be empty even when the file held records.
+        days = 1
 
     lines.append("CHURN / ROUND-TRIP ANALYSIS")
     lines.append(f"Round trips: {len(round_trips)}")
