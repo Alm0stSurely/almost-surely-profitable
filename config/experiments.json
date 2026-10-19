@@ -1,0 +1,6 @@
+{
+  "midband_deployment": {
+    "mode": "shadow",
+    "_comment": "H4 experiment (docs/experiments/2026-10-16-prompt-midband-deployment.md). Phase 1: shadow mode logs the variant prompt's hypothetical decisions to data/shadow_decisions.json (gitignored runtime artifact). Phase 3 will flip to 'live' only if Phase 2 passes (n>=8 shadow buys, mean 5D forward return > 0, >=50% positive, DSR ~30% skill correlation). Any other value ('off', 'live') disables the shadow arm."
+  }
+}

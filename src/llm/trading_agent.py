@@ -53,6 +53,19 @@ try:
 except ImportError:
     DSR_MODULE_AVAILABLE = False
 
+# Import prompt-variant machinery (H4 shadow mode). Same dual-import style as
+# the utils block above: package context when run via daily_run, standalone
+# fallback when the module is executed directly.
+try:
+    from .prompt_variants import apply_midband_deployment_delta, MIDBAND_DEPLOYMENT_VARIANT
+    VARIANTS_AVAILABLE = True
+except ImportError:
+    try:
+        from llm.prompt_variants import apply_midband_deployment_delta, MIDBAND_DEPLOYMENT_VARIANT
+        VARIANTS_AVAILABLE = True
+    except ImportError:
+        VARIANTS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -644,7 +657,7 @@ class TradingAgent:
         
         return portfolio_returns.values
     
-    def call_llm(self, prompt: str, timeout: Optional[float] = None) -> Optional[str]:
+    def call_llm(self, prompt: str, timeout: Optional[float] = None, system_prompt: Optional[str] = None) -> Optional[str]:
         """
         Call the LLM API with exponential-backoff retries for transient errors.
 
@@ -660,6 +673,10 @@ class TradingAgent:
             prompt: The formatted prompt.
             timeout: Optional request timeout in seconds. Defaults to the agent's
                 configured timeout (constructor or LLM_TIMEOUT env var).
+            system_prompt: Optional system-prompt override. Defaults to the
+                module-level SYSTEM_PROMPT. The H4 shadow arm passes the
+                mid-band-deployment variant here so the SAME user prompt is
+                scored against a different prior; the live arm never sets it.
 
         Returns:
             LLM response text or None if all attempts fail.
@@ -682,7 +699,7 @@ class TradingAgent:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt if system_prompt is not None else SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
             ],
             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
@@ -938,6 +955,86 @@ class TradingAgent:
         # Save to history
         self.save_decision(decision)
         
+        return decision
+
+    def get_shadow_decision(
+        self,
+        market_data: Dict,
+        portfolio_summary: Dict,
+        cooldown_status: Optional[Dict] = None,
+        system_prompt: Optional[str] = None,
+    ) -> Dict:
+        """
+        Get a HYPOTHETICAL decision under a variant system prompt (H4 shadow arm).
+
+        Mirrors get_trading_decision but with two hard invariants:
+          - NEVER persists to decision_history.json — the live LLM's
+            recent-decision context must not be contaminated with
+            hypothetical decisions;
+          - NEVER mutates portfolio or cooldown state (it performs no
+            execution at all; the caller only logs the result).
+
+        Args:
+            market_data: Market indicators and correlations (same as live).
+            portfolio_summary: Current portfolio state (same as live).
+            cooldown_status: Optional position cooldown guardrail status.
+            system_prompt: Variant system prompt. Defaults to the H4
+                mid-band-deployment delta of SYSTEM_PROMPT. Must be a
+                full system prompt, not a diff.
+
+        Returns:
+            Decision dict with actions and metadata (same shape as the
+            live decision; an 'error' flag distinguishes failures).
+        """
+        if system_prompt is None:
+            if not VARIANTS_AVAILABLE:
+                return {
+                    "timestamp": datetime.now().isoformat(),
+                    "actions": [],
+                    "reasoning": "Shadow arm unavailable: prompt_variants module missing.",
+                    "error": True,
+                }
+            try:
+                system_prompt = apply_midband_deployment_delta(SYSTEM_PROMPT)
+            except ValueError as exc:
+                # Prompt drift: refuse to run a half-applied variant. Loud,
+                # logged, and returned as an error decision so the shadow
+                # log shows the gap instead of a silent missing day.
+                logger.error("Shadow arm aborted: %s", exc)
+                return {
+                    "timestamp": datetime.now().isoformat(),
+                    "actions": [],
+                    "reasoning": f"Variant prompt build failed: {exc}",
+                    "error": True,
+                }
+
+        # Same user prompt as the live arm: the experiment isolates the
+        # prior (system prompt), not the information set.
+        recent_decisions = self.load_recent_decisions(days=5)
+        prompt = self.build_prompt(market_data, portfolio_summary, recent_decisions, cooldown_status)
+
+        response = self.call_llm(prompt, system_prompt=system_prompt)
+
+        if response is None:
+            decision = {
+                "timestamp": datetime.now().isoformat(),
+                "actions": [],
+                "reasoning": "LLM API error (shadow arm).",
+                "error": True,
+            }
+        else:
+            parsed = self.parse_response(response)
+            decision = {
+                "timestamp": datetime.now().isoformat(),
+                "actions": parsed.get("actions", []),
+                "reasoning": parsed.get("reasoning", "No reasoning provided"),
+                "error": parsed.get("error", False),
+                "raw_response": response[:1000],
+            }
+
+        # Deliberately NO save_decision call — history contamination would
+        # change the live arm's future context and invalidate the experiment.
+
         return decision
 
 

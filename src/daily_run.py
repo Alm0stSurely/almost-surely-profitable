@@ -28,6 +28,12 @@ from data.fetch_market_data import (
 )
 from data.indicators import analyze_market_data
 from llm.trading_agent import TradingAgent
+from llm.shadow_decisions import (
+    DEFAULT_SHADOW_LOG_NAME,
+    load_shadow_config,
+    run_shadow_arm,
+    summarize_actions,
+)
 from portfolio.portfolio import Portfolio
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 from risk.performance_metrics import calculate_all_metrics, format_metrics_report
@@ -162,6 +168,52 @@ def backpopulate_cooldown_entries(cooldown_mgr: PositionCooldownManager, portfol
         else:
             # No trade history — use portfolio load time as fallback
             cooldown_mgr.entries[ticker] = datetime.now()
+
+
+def _maybe_run_shadow_arm(
+    *,
+    agent,
+    market_analysis: Dict,
+    portfolio_summary: Dict,
+    cooldown_status: Dict,
+    vol_regime: str,
+    live_decision: Dict,
+) -> None:
+    """Run the H4 shadow arm when enabled by config/experiments.json.
+
+    Best-effort by contract: the shadow arm observes, it never interferes.
+    Any failure here is logged and swallowed so the live pipeline is never
+    aborted by an experiment. The arm is strictly additive:
+      - no trades executed, no cooldown consumed,
+      - no decision_history write (see TradingAgent.get_shadow_decision),
+      - one append-only record in data/shadow_decisions.json per session.
+    """
+    try:
+        config_path = Path(REPO_ROOT) / "config" / "experiments.json"
+        config = load_shadow_config(config_path)
+        if not config.enabled:
+            return
+
+        log_path = Path(DATA_DIR) / DEFAULT_SHADOW_LOG_NAME
+        live_summary = summarize_actions(live_decision.get("actions", []))
+
+        print("\n[4b/7] Running H4 shadow arm (mid-band deployment variant, log-only)...")
+        result = run_shadow_arm(
+            agent=agent,
+            market_analysis=market_analysis,
+            portfolio_summary=portfolio_summary,
+            cooldown_status=cooldown_status,
+            vol_regime=vol_regime,
+            log_path=log_path,
+            live_actions_summary=live_summary,
+        )
+        if result.logged:
+            status = "ERROR" if result.error else "ok"
+            print(f"  ✓ Shadow decision logged ({status}): {result.record.get('live_actions_summary', '?')}")
+        else:
+            print("  ⚠ Shadow arm failed to log; pipeline continues (see logs)")
+    except Exception as e:
+        print(f"  ⚠ Shadow arm failed ({type(e).__name__}: {e}); pipeline continues")
 
 
 def _build_prices_df(market_data_raw: Dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -344,6 +396,20 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     
     print(f"\n  Reasoning: {decision['reasoning'][:200]}...")
     print(f"  Actions: {len(decision['actions'])}")
+
+    # Step 4b: H4 shadow arm — run the mid-band-deployment variant prompt in
+    # dry-run alongside the live decision and log the hypothetical outcome.
+    # Best-effort: never aborts the pipeline; skipped in dry-run so tests do
+    # not burn LLM API calls. See docs/experiments/2026-10-16-prompt-midband-deployment.md
+    if not dry_run:
+        _maybe_run_shadow_arm(
+            agent=agent,
+            market_analysis=market_analysis,
+            portfolio_summary=portfolio_summary,
+            cooldown_status=cooldown_status,
+            vol_regime=vol_regime,
+            live_decision=decision,
+        )
     
     # Step 5: Execute orders
     print("\n[5/7] Executing orders...")
