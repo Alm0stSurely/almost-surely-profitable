@@ -271,6 +271,27 @@ class TestMalformedTradeDrops:
         out = capsys.readouterr().out
         assert out.count("Dropping malformed trade record") == 2
 
+    def test_tz_aware_trade_timestamp_dropped_sibling_survives(self, dirs, capsys):
+        # Deferred from PR #88: a tz-aware trade timestamp parses fine and then
+        # detonates inside match_round_trips' naive/aware comparisons,
+        # voiding every round trip. The churn_analysis ingress validates the
+        # same contract; both callers of match_round_trips must.
+        data_dir, _, out_dir = dirs
+        tz_trade = {**GOOD_TRADE_BUY, "timestamp": "2026-10-13T21:00:00+02:00"}
+        _trades_file(
+            data_dir,
+            json.dumps([tz_trade, GOOD_TRADE_BUY, GOOD_TRADE_SELL]),
+        )
+        _decisions_file(data_dir, json.dumps([GOOD_DECISION]))
+
+        _run_main()
+
+        report = _artifact(out_dir)
+        assert "Round trips: 1" in report  # GLD buy->sell sibling survived
+        out = capsys.readouterr().out
+        assert out.count("Dropping malformed trade record") == 1
+        assert "timezone-aware timestamp" in out
+
 
 class TestDegenerateStates:
     """Legitimate states that crashed pre-fix wholesale."""

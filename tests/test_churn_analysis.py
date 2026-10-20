@@ -482,8 +482,9 @@ class TestMainIntegration:
         (tmp_path / "trades_history.json").write_text(json.dumps(trades))
         (tmp_path / "decision_history.json").write_text(json.dumps(decisions))
 
-        with patch("analysis.churn_analysis.load_trades", side_effect=lambda d="data": trades), \
-             patch("analysis.churn_analysis.load_decisions", side_effect=lambda d="data": decisions):
+        # main() routes through the ingress loaders, not the public wrappers.
+        with patch("analysis.churn_analysis._load_trades_ingress", side_effect=lambda d="data": (trades, [])), \
+             patch("analysis.churn_analysis._load_decisions_ingress", side_effect=lambda d="data": (decisions, [])):
             from analysis.churn_analysis import main
             main()
             captured = capsys.readouterr()

@@ -193,8 +193,13 @@ def _load_analysis_histories():
         dropped = 0
         for idx, t in enumerate(ledger):
             # Contract required by match_round_trips: mapping access, a string
-            # ticker (used as a dict key), and an action key. Timestamps are
-            # handled by churn's own documented fallback (datetime.min).
+            # ticker (used as a dict key), and an action key. Timestamps that
+            # are missing or unparseable take churn's documented fallback
+            # (datetime.min); timestamps that parse but carry tzinfo are
+            # dropped loudly — the FIFO matcher compares/subtracts against
+            # naive datetimes, so an aware record detonates one operation
+            # downstream and voids every round trip (PR #64 doctrine; the
+            # churn_analysis ingress validates the same contract).
             if not isinstance(t, dict):
                 print(f"⚠ Dropping malformed trade record at index {idx} in "
                       f"{trades_path.name} (expected dict, got "
@@ -207,6 +212,18 @@ def _load_analysis_histories():
                       f"'action' key: {t!r})")
                 dropped += 1
                 continue
+            raw_ts = t.get("timestamp")
+            if isinstance(raw_ts, str) and raw_ts:
+                try:
+                    parsed_ts = datetime.fromisoformat(raw_ts)
+                except ValueError:
+                    parsed_ts = None
+                if parsed_ts is not None and parsed_ts.tzinfo is not None:
+                    print(f"⚠ Dropping malformed trade record at index {idx} in "
+                          f"{trades_path.name} (timezone-aware timestamp in "
+                          f"naive-timestamp ledger: {raw_ts!r})")
+                    dropped += 1
+                    continue
             trades.append(t)
         if dropped:
             warnings.append(
