@@ -20,11 +20,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
-from utils import _is_finite_number
+from utils import _is_finite_number, load_json_list_or_quarantine
 
 
 # Accounting-reset boundary. On 2026-07-06 a test run reset the account to
@@ -76,22 +76,148 @@ def _safe_pct_str(value, fmt: str = ".1f", default: str = "n/a") -> str:
     return default
 
 
-def load_trades(data_dir: str = "data") -> List[Dict]:
-    """Load trade history from JSON."""
-    path = Path(data_dir) / "trades_history.json"
+def _load_ledger_records(path: Path, context: str) -> Tuple[List[Any], List[str]]:
+    """Load an append-then-overwrite ledger through the shared quarantine ingress.
+
+    Both ledgers are append-then-overwrite files whose writers already load
+    through the same helper (``save_decision`` / ``save_trade``), so this
+    reader shares one trust model with them: a corrupt file is quarantined
+    (bytes preserved, one ERROR log) instead of crashing the run, being
+    silently ingested as non-standard tokens no writer can emit (PR #84 strict
+    hook), or sitting in place for the next save to overwrite (PR #60).
+
+    Returns ``(records, warnings)``; *warnings* are degradation notes the
+    caller must surface in the report artifact — a silently degraded report is
+    the failure mode this hardening exists to prevent (PR #87 doctrine).
+    """
+    warnings: List[str] = []
     if not path.exists():
-        return []
-    with open(path) as f:
-        return json.load(f)
+        return [], warnings
+    records = load_json_list_or_quarantine(path, context=context)
+    if not path.exists():
+        # The helper quarantined the file (rename to .corrupt-*, bytes
+        # preserved, ERROR logged).
+        warnings.append(
+            f"⚠ {context} {path.name} was corrupt and has been quarantined; "
+            "analysis below reflects an empty history."
+        )
+    return records, warnings
+
+
+def _load_trades_ingress(data_dir: str = "data") -> Tuple[List[Dict], List[str]]:
+    """Load the trade ledger with record-level validation and loud drops.
+
+    Element contract (validated here because every consumer computes in the
+    naive-timestamp domain; the helper itself stays unguarded by design, PR
+    #88): mapping access, a string ``ticker`` (used as a dict key), an
+    ``action`` key (FIFO matcher subscripts it), and — when ``timestamp`` is
+    present and is a string that parses — a *naive* parse. A timezone-aware
+    timestamp parses fine and then detonates one operation downstream at the
+    first comparison/subtraction against the naive ``datetime.min`` fallback
+    siblings (``TypeError`` on offset-naive vs offset-aware), voiding every
+    round trip: one malformed element must not void n-1 valid ones
+    (anti-Lipschitz, PR #64 doctrine).
+
+    Missing, non-string, or unparseable timestamps are NOT dropped: they take
+    the documented ``datetime.min`` fallback in ``_parse_trade_timestamp``
+    (test-pinned; absence is not failure).
+    """
+    path = Path(data_dir) / "trades_history.json"
+    records, warnings = _load_ledger_records(path, "trade ledger")
+    trades: List[Dict] = []
+    dropped = 0
+    for idx, t in enumerate(records):
+        if not isinstance(t, dict):
+            print(f"⚠ Dropping malformed trade record at index {idx} in "
+                  f"{path.name} (expected dict, got {type(t).__name__})")
+            dropped += 1
+            continue
+        if not isinstance(t.get("ticker"), str) or "action" not in t:
+            print(f"⚠ Dropping malformed trade record at index {idx} in "
+                  f"{path.name} (missing string 'ticker' or 'action' key: {t!r})")
+            dropped += 1
+            continue
+        raw_ts = t.get("timestamp")
+        if isinstance(raw_ts, str) and raw_ts:
+            try:
+                parsed = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                parsed = None
+            if parsed is not None and parsed.tzinfo is not None:
+                print(f"⚠ Dropping malformed trade record at index {idx} in "
+                      f"{path.name} (timezone-aware timestamp in naive-timestamp "
+                      f"ledger: {raw_ts!r})")
+                dropped += 1
+                continue
+        trades.append(t)
+    if dropped:
+        warnings.append(
+            f"⚠ Dropped {dropped} malformed record(s) from the trade ledger; "
+            "surviving records used."
+        )
+    return trades, warnings
+
+
+def _load_decisions_ingress(data_dir: str = "data") -> Tuple[List[Dict], List[str]]:
+    """Load the decision history with record-level validation and loud drops.
+
+    Element contract: mapping access plus a naive, ISO-parseable string
+    ``timestamp``. Every consumer computes with it directly and outside any
+    try — ``d["timestamp"][:10]`` in the flip counter, and
+    ``datetime.fromisoformat(decisions[0]["timestamp"])`` /
+    ``(last - first).days`` in the date-range block — so a record that parses
+    but is timezone-aware detonates at the subtraction, and a record with a
+    missing/unparseable timestamp crashes the whole analysis on the FIRST
+    operation that touches it.
+    """
+    path = Path(data_dir) / "decision_history.json"
+    records, warnings = _load_ledger_records(path, "decision history")
+    decisions: List[Dict] = []
+    dropped = 0
+    for idx, d in enumerate(records):
+        if not isinstance(d, dict):
+            print(f"⚠ Dropping malformed decision record at index {idx} in "
+                  f"{path.name} (expected dict, got {type(d).__name__})")
+            dropped += 1
+            continue
+        ts = d.get("timestamp")
+        if not isinstance(ts, str):
+            print(f"⚠ Dropping malformed decision record at index {idx} in "
+                  f"{path.name} (missing/non-string timestamp: {ts!r})")
+            dropped += 1
+            continue
+        try:
+            parsed = datetime.fromisoformat(ts)
+        except ValueError:
+            print(f"⚠ Dropping malformed decision record at index {idx} in "
+                  f"{path.name} (unparseable timestamp: {ts!r})")
+            dropped += 1
+            continue
+        if parsed.tzinfo is not None:
+            print(f"⚠ Dropping malformed decision record at index {idx} in "
+                  f"{path.name} (timezone-aware timestamp in naive-timestamp "
+                  f"ledger: {ts!r})")
+            dropped += 1
+            continue
+        decisions.append(d)
+    if dropped:
+        warnings.append(
+            f"⚠ Dropped {dropped} malformed record(s) from decision history; "
+            "surviving records used."
+        )
+    return decisions, warnings
+
+
+def load_trades(data_dir: str = "data") -> List[Dict]:
+    """Load trade history from JSON (records that violate the element
+    contract are dropped loudly; a corrupt file is quarantined)."""
+    return _load_trades_ingress(data_dir)[0]
 
 
 def load_decisions(data_dir: str = "data") -> List[Dict]:
-    """Load decision history from JSON."""
-    path = Path(data_dir) / "decision_history.json"
-    if not path.exists():
-        return []
-    with open(path) as f:
-        return json.load(f)
+    """Load decision history from JSON (records that violate the element
+    contract are dropped loudly; a corrupt file is quarantined)."""
+    return _load_decisions_ingress(data_dir)[0]
 
 
 def load_ledger_realized_pnl(data_dir: str = "data") -> float:
@@ -222,15 +348,45 @@ def analyze_cohort(trades: List[Dict], cutoff: datetime) -> Tuple[Dict, Dict]:
     return pre_metrics, post_metrics
 
 
+def _iter_valid_actions(decision: Dict, index: int) -> List[Dict]:
+    """Return the valid ``actions`` items of one decision, dropping malformed
+    items loudly.
+
+    Sub-element contract consumed by the flip counter: each item needs mapping
+    access plus string ``action``/``ticker`` values. On old code a non-dict
+    item, a missing key (``KeyError``), or an unhashable ``ticker`` crashed
+    the entire analysis; a non-list ``actions`` payload crashed on iteration.
+    A malformed action item must not void n-1 valid siblings or the decision's
+    own timestamp-based metrics (anti-Lipschitz, PR #64 doctrine). An absent
+    ``actions`` key is a legitimate quiet path (``[]``).
+    """
+    raw = decision.get("actions")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        print(f"⚠ Dropping malformed 'actions' payload in decision record at "
+              f"index {index} (expected list, got {type(raw).__name__})")
+        return []
+    valid = []
+    for a in raw:
+        if not isinstance(a, dict) or not isinstance(a.get("action"), str) \
+                or not isinstance(a.get("ticker"), str):
+            print(f"⚠ Dropping malformed action item in decision record at "
+                  f"index {index} (expected dict with string 'action'/'ticker': {a!r})")
+            continue
+        valid.append(a)
+    return valid
+
+
 def analyze_churn(round_trips: List[RoundTrip], trades: List[Dict], decisions: List[Dict]) -> Dict:
     """Compute churn metrics."""
     metrics = _bucket_metrics(round_trips)
 
     # Action flips
     ticker_decisions = defaultdict(list)
-    for d in decisions:
+    for idx, d in enumerate(decisions):
         date = d["timestamp"][:10]
-        for a in d.get("actions", []):
+        for a in _iter_valid_actions(d, idx):
             if a["action"] != "hold":
                 ticker_decisions[a["ticker"]].append((date, a["action"]))
 
@@ -333,8 +489,15 @@ def reconcile_ledger_since_reset(trades: List[Dict], ledger_realized: float) -> 
 
 
 def main():
-    trades = load_trades()
-    decisions = load_decisions()
+    trades, trade_warnings = _load_trades_ingress()
+    decisions, decision_warnings = _load_decisions_ingress()
+    warnings = trade_warnings + decision_warnings
+    if warnings:
+        # The report is the artifact a human reads; degradation must be
+        # visible in it, not only on stderr (PR #87 doctrine).
+        for w in warnings:
+            print(w)
+        print()
     round_trips = match_round_trips(trades)
     metrics = analyze_churn(round_trips, trades, decisions)
     print_report(metrics)
