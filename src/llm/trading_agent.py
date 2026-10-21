@@ -799,17 +799,21 @@ class TradingAgent:
                 raise ValueError("'actions' must be a list")
             
             valid_actions, dropped = self._validate_actions(parsed["actions"])
-            
-            if not valid_actions:
-                raise ValueError(f"No valid actions in response ({len(dropped)} malformed)")
-            
+
             if dropped:
+                # Log every dropped action before any zero-survivor raise so
+                # the per-element loudness contract holds on the all-dropped
+                # path too — the exception summary alone would name only a
+                # count, not the defects.
                 logger.error(
                     f"Dropping {len(dropped)} malformed action(s), "
                     f"executing {len(valid_actions)} valid one(s)"
                 )
-                for action in dropped:
-                    logger.error(f"  dropped: {action!r}")
+                for action, reason in dropped:
+                    logger.error(f"  dropped: {action!r} (reason: {reason})")
+
+            if not valid_actions:
+                raise ValueError(f"No valid actions in response ({len(dropped)} malformed)")
             
             result = {k: v for k, v in parsed.items() if k != "actions"}
             result["actions"] = valid_actions
@@ -877,30 +881,49 @@ class TradingAgent:
         Per-action validation — one malformed action must not void the
         others (see :meth:`parse_response`). Accepted normalizations:
         action casing/whitespace (``"BUY"``, ``"Sell "``) and optional
-        ``pct`` (executor defaults a missing ``pct`` to 0). An action is
-        dropped when its ticker is missing/blank, its action is unknown,
-        or its ``pct`` is present but not a finite number.
+        ``pct`` on *hold* only. An action is dropped when its ticker is
+        missing/blank, its action is unknown, or its ``pct`` is missing
+        on a buy/sell — the executor's ``.get('pct', 0)`` default would
+        otherwise fabricate a 0% order on buy, and the ``pct if pct > 0
+        else None`` coercion silently promotes a missing pct to a FULL
+        position exit on sell — or its ``pct`` is present but not a
+        finite number.
+
+        *dropped* is a list of ``(action, reason)`` tuples so the loud
+        drop log can name the defect, not just the debris.
         """
         valid = []
         dropped = []
         for action in actions:
             if not isinstance(action, dict):
-                dropped.append(action)
+                dropped.append((action, "not a dict"))
                 continue
             ticker = action.get("ticker")
             raw_action = action.get("action")
             if not isinstance(ticker, str) or not ticker.strip():
-                dropped.append(action)
+                dropped.append((action, "missing/blank ticker"))
                 continue
             if not isinstance(raw_action, str):
-                dropped.append(action)
+                dropped.append((action, "missing/non-string action"))
                 continue
             normalized = raw_action.strip().lower()
             if normalized not in ("buy", "sell", "hold"):
-                dropped.append(action)
+                dropped.append((action, f"unknown action {normalized!r}"))
                 continue
-            if "pct" in action and not _is_finite_number(action["pct"]):
-                dropped.append(action)
+            if "pct" not in action:
+                if normalized == "hold":
+                    clean = dict(action)
+                    clean["action"] = normalized
+                    valid.append(clean)
+                    continue
+                reason = (
+                    f"missing pct on {normalized} "
+                    f"(executor would fabricate 0%/full-exit semantics)"
+                )
+                dropped.append((action, reason))
+                continue
+            if not _is_finite_number(action["pct"]):
+                dropped.append((action, "pct present but not a finite number"))
                 continue
             clean = dict(action)
             clean["action"] = normalized
