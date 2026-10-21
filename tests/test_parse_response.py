@@ -202,7 +202,14 @@ class TestParseResponseExtraction:
 
 
 class TestParseResponsePctSemantics:
-    """Missing pct keeps executor default (0); present pct must be finite."""
+    """pct is optional on hold only; present pct must be finite.
+
+    A buy/sell without pct used to pass validation and hit the executor's
+    ``.get('pct', 0)`` default: a silent 0% no-op buy, and — via the
+    ``pct if pct > 0 else None`` coercion — a FULL position exit on sell
+    recorded with the fabricated pct=0. Missing pct on a non-hold action
+    is malformation; the action drops loudly, siblings survive.
+    """
 
     def test_missing_pct_accepted(self, agent):
         response = json.dumps({"actions": [{"ticker": "SPY", "action": "hold"}]})
@@ -223,3 +230,59 @@ class TestParseResponsePctSemantics:
         result = agent.parse_response(response)
         assert result["actions"] == [{"ticker": "GLD", "action": "hold"}]
         assert "dropped 1 malformed" in result["reasoning"]
+
+    def test_buy_without_pct_dropped(self, agent):
+        response = json.dumps({
+            "actions": [
+                {"ticker": "SPY", "action": "buy"},
+                {"ticker": "GLD", "action": "buy", "pct": 10},
+            ],
+        })
+        result = agent.parse_response(response)
+        # Blast radius: the malformed buy is dropped, the valid sibling
+        # keeps its seat.
+        assert result["actions"] == [{"ticker": "GLD", "action": "buy", "pct": 10}]
+        assert "dropped 1 malformed" in result["reasoning"]
+
+    def test_sell_without_pct_dropped(self, agent):
+        # Pre-fix this survived validation and the executor coerced the
+        # missing pct into a FULL position exit — the widest possible
+        # blast radius from the narrowest possible malformation.
+        response = json.dumps({
+            "actions": [
+                {"ticker": "SPY", "action": "sell"},
+                {"ticker": "GLD", "action": "hold"},
+            ],
+        })
+        result = agent.parse_response(response)
+        assert result["actions"] == [{"ticker": "GLD", "action": "hold"}]
+        assert "dropped 1 malformed" in result["reasoning"]
+
+    def test_sell_without_pct_loud_reason(self, agent, caplog):
+        # Mechanism-targeting pin (PR #83 doctrine): the log record must
+        # name the defect, not just the debris.
+        response = json.dumps({"actions": [{"ticker": "SPY", "action": "sell"}]})
+        with caplog.at_level(logging.ERROR):
+            result = agent.parse_response(response)
+        assert result["error"] is True  # zero survivors → hold-all
+        per_action = [
+            r for r in caplog.records
+            if "dropped:" in r.getMessage() and "missing pct on sell" in r.getMessage()
+        ]
+        assert len(per_action) == 1
+
+    def test_buy_without_pct_loud_reason(self, agent, caplog):
+        response = json.dumps({
+            "actions": [
+                {"ticker": "MC.PA", "action": "buy"},
+                {"ticker": "SPY", "action": "sell", "pct": 100},
+            ],
+        })
+        with caplog.at_level(logging.ERROR):
+            result = agent.parse_response(response)
+        assert result["actions"] == [{"ticker": "SPY", "action": "sell", "pct": 100}]
+        per_action = [
+            r for r in caplog.records
+            if "dropped:" in r.getMessage() and "missing pct on buy" in r.getMessage()
+        ]
+        assert len(per_action) == 1
