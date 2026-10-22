@@ -25,16 +25,84 @@ from analysis.decision_analyzer import DecisionAnalyzer
 from data.fetch_market_data import fetch_historical_data
 from risk.cvar import calculate_portfolio_cvar
 from risk.performance_metrics import _has_non_finite, calculate_all_metrics
-from utils import _is_finite_number, load_valid_daily_results, load_valid_daily_results_limited
+from utils import (
+    _is_finite_number,
+    load_valid_daily_results,
+    load_valid_daily_results_limited,
+    reject_nonstandard_constant,
+)
 
 
 def load_portfolio_data():
-    """Load current portfolio state."""
-    try:
-        with open("data/portfolio_state.json") as f:
-            return json.load(f)
-    except FileNotFoundError:
+    """Load current portfolio state for the evaluation report.
+
+    Read-only research consumer of ``data/portfolio_state.json``, whose
+    writer pair is ``Portfolio.save_state`` / ``Portfolio.load_state``
+    (PR #85). The same refusal doctrine applies to the monetary base:
+    ``save_state`` writes ``cash``, ``total_realized_pnl``, and
+    ``positions`` unconditionally, so a missing or malformed value
+    always means a corrupted or hand-edited file — and rendering it
+    would fabricate numbers in the report artifact (the old
+    ``.get("total_value", 0)`` printed a confident €0.00 for a missing
+    key; a NaN token printed as ``€nan``; a missing
+    ``total_realized_pnl`` crashed the whole report with a KeyError far
+    from the cause). The reader therefore REFUSES, mirroring
+    ``Portfolio.load_state``'s messages; the report renders the refusal
+    in the artifact itself (PR #87 doctrine). This reader never
+    quarantines and never mutates: quarantining the live state file
+    from a research reader is an overreach (churn_analysis doctrine) —
+    the write path's own ingress handles corrupt bytes.
+
+    Failure tree, per the PR #81/#84 ingress doctrine:
+
+    - Absent file → ``None`` (the file makes no claim; honest).
+    - Unparseable bytes, or a non-standard JSON constant (``NaN`` /
+      ``Infinity`` tokens no writer can emit — PR #84 strict reader) →
+      the parse error propagates loud, file untouched.
+    - Valid JSON whose top level is not a mapping (``null``, a list, a
+      scalar) → ``ValueError`` (wrong shape; previously ``null`` was
+      silently indistinguishable from "no portfolio" and a list crashed
+      on ``.get``).
+    - ``cash`` non-finite / bool / string / negative, or
+      ``total_realized_pnl`` non-finite / bool / string → ``ValueError``
+      naming field, value, and file (the monetary base from which every
+      derived figure in the section flows — PR #81 doctrine).
+    - ``positions`` missing or not a mapping → ``ValueError`` (same
+      unconditional-writer argument).
+    """
+    path = Path("data/portfolio_state.json")
+    if not path.exists():
         return None
+    with open(path) as f:
+        state = json.load(f, parse_constant=reject_nonstandard_constant)
+    if not isinstance(state, dict):
+        raise ValueError(
+            f"Refusing to render portfolio state: top level is "
+            f"{type(state).__name__!r} (expected a mapping). Fix or "
+            f"quarantine {path} manually."
+        )
+    cash = state.get('cash')
+    if not (_is_finite_number(cash) and cash >= 0):
+        raise ValueError(
+            f"Refusing to render portfolio state: 'cash' is {cash!r} "
+            f"(expected a finite number >= 0). Fix or quarantine "
+            f"{path} manually."
+        )
+    realized_pnl = state.get('total_realized_pnl')
+    if not _is_finite_number(realized_pnl):
+        raise ValueError(
+            f"Refusing to render portfolio state: 'total_realized_pnl' "
+            f"is {realized_pnl!r} (expected a finite number). Fix or "
+            f"quarantine {path} manually."
+        )
+    positions = state.get('positions')
+    if not isinstance(positions, dict):
+        raise ValueError(
+            f"Refusing to render portfolio state: 'positions' is "
+            f"{positions!r} (expected a mapping). Fix or quarantine "
+            f"{path} manually."
+        )
+    return state
 
 
 def load_recent_results(days=30):
@@ -105,13 +173,31 @@ def generate_comprehensive_report():
     print("="*70)
     
     # 1. Portfolio Status
-    portfolio = load_portfolio_data()
-    if portfolio:
+    portfolio = None
+    portfolio_refusal = None
+    try:
+        portfolio = load_portfolio_data()
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        portfolio_refusal = f"{type(exc).__name__}: {exc}"
+    if portfolio_refusal is not None or portfolio is not None:
         print("\n📊 PORTFOLIO STATUS")
         print("-" * 40)
-        total_value = portfolio.get("total_value", 0)
-        cash = portfolio.get("cash", 0)
-        print(f"Total Value: €{total_value:,.2f}")
+    if portfolio_refusal is not None:
+        # The refusal is rendered IN the artifact (PR #87 doctrine): a
+        # stderr-only log would recreate the silent-failure-in-content
+        # class for anyone reading the saved report.
+        print(f"⚠ Refusing to render portfolio state: {portfolio_refusal}")
+    elif portfolio is not None:
+        # cash / total_realized_pnl / positions are validated at the
+        # loader ingress; only the display-only fields stay optional —
+        # absent or non-finite renders n/a, never a fabricated number
+        # (PR #74 omission-not-fabrication doctrine).
+        total_value = portfolio.get("total_value")
+        cash = portfolio.get("cash")
+        if _is_finite_number(total_value):
+            print(f"Total Value: €{total_value:,.2f}")
+        else:
+            print("Total Value: n/a")
         if total_value and math.isfinite(total_value) and math.isfinite(cash):
             print(f"Cash: €{cash:,.2f} ({cash / total_value * 100:.1f}%)")
         else:
@@ -214,10 +300,14 @@ def generate_comprehensive_report():
     print("SUMMARY")
     print("="*70)
     
-    if portfolio:
-        total_value = portfolio.get("total_value", 10000)
+    if portfolio is not None:
+        # Refused state renders its warning in the PORTFOLIO STATUS section
+        # above; here the derived return is honestly n/a rather than
+        # computed from a fabricated base (the old .get default of
+        # INITIAL_CAPITAL printed a confident +0.00% for a missing key).
+        total_value = portfolio.get("total_value")
         total_return = None
-        if math.isfinite(total_value):
+        if _is_finite_number(total_value):
             total_return = (total_value - 10000) / 10000 * 100
             print(f"Total Return: {total_return:+.2f}%")
         else:
@@ -234,6 +324,10 @@ def generate_comprehensive_report():
                     alpha = total_return - bench_pct
                     print(f"Alpha (vs Buy & Hold SPY) since {min(all_dates)}: {alpha:+.2f} pp")
                     print(f"  Strategy {total_return:+.2f}% | SPY {bench_pct:+.2f}%")
+    elif portfolio_refusal is not None:
+        # Refused state: the return is unknowable — say so in the
+        # artifact instead of omitting the line silently.
+        print("Total Return: n/a")
     
     print("\n✓ Evaluation complete.")
     print("="*70)
