@@ -66,6 +66,116 @@ class TestLoadPortfolioData:
         with pytest.raises(json.JSONDecodeError):
             load_portfolio_data()
 
+    def _write_state(self, tmp_path, text):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(exist_ok=True)
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            f.write(text)
+
+    def test_refuses_negative_cash(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": -100.0, "total_realized_pnl": 0.0, "positions": {},
+        }))
+        with pytest.raises(ValueError, match="'cash' is -100.0"):
+            load_portfolio_data()
+
+    def test_refuses_nan_cash_token(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(
+            tmp_path,
+            '{"cash": NaN, "total_realized_pnl": 0.0, "positions": {}}',
+        )
+        with pytest.raises(ValueError, match="non-standard JSON constant"):
+            load_portfolio_data()
+
+    def test_refuses_infinity_token_anywhere(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(
+            tmp_path,
+            '{"cash": 100.0, "total_realized_pnl": Infinity, "positions": {}}',
+        )
+        with pytest.raises(ValueError, match="non-standard JSON constant"):
+            load_portfolio_data()
+
+    def test_refuses_bool_cash(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": True, "total_realized_pnl": 0.0, "positions": {},
+        }))
+        with pytest.raises(ValueError, match="'cash' is True"):
+            load_portfolio_data()
+
+    def test_refuses_string_cash(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": "1000.0", "total_realized_pnl": 0.0, "positions": {},
+        }))
+        with pytest.raises(ValueError, match="'cash' is '1000.0'"):
+            load_portfolio_data()
+
+    def test_refuses_missing_cash(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "total_realized_pnl": 0.0, "positions": {},
+        }))
+        with pytest.raises(ValueError, match="'cash' is None"):
+            load_portfolio_data()
+
+    def test_refuses_non_finite_realized_pnl(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": 1000.0, "total_realized_pnl": "n/a", "positions": {},
+        }))
+        with pytest.raises(ValueError, match="'total_realized_pnl' is 'n/a'"):
+            load_portfolio_data()
+
+    def test_refuses_missing_realized_pnl(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": 1000.0, "positions": {},
+        }))
+        with pytest.raises(ValueError, match="'total_realized_pnl' is None"):
+            load_portfolio_data()
+
+    def test_refuses_null_top_level(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, "null")
+        with pytest.raises(ValueError, match="top level is 'NoneType'"):
+            load_portfolio_data()
+
+    def test_refuses_list_top_level(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, "[1, 2, 3]")
+        with pytest.raises(ValueError, match="top level is 'list'"):
+            load_portfolio_data()
+
+    def test_refuses_positions_not_mapping(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": 1000.0, "total_realized_pnl": 0.0, "positions": [],
+        }))
+        with pytest.raises(ValueError, match="'positions' is \\[\\]"):
+            load_portfolio_data()
+
+    def test_refuses_missing_positions(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": 1000.0, "total_realized_pnl": 0.0,
+        }))
+        with pytest.raises(ValueError, match="'positions' is None"):
+            load_portfolio_data()
+
+    def test_valid_old_format_without_total_value_passes(self, tmp_path, monkeypatch):
+        """total_value is display-only: absent key must not refuse."""
+        monkeypatch.chdir(tmp_path)
+        self._write_state(tmp_path, json.dumps({
+            "cash": 1000.0, "total_realized_pnl": 0.0, "positions": {},
+        }))
+        result = load_portfolio_data()
+        assert result["cash"] == 1000.0
+        assert "total_value" not in result
+
 
 class TestLoadRecentResults:
     """Tests for load_recent_results function."""
@@ -432,14 +542,49 @@ class TestNonFiniteGuards:
         assert "Cash: €0.00 (—)" in captured.out
         assert "Total Return: -100.00%" in captured.out
 
-    def test_nan_total_value_shows_na(self, tmp_path, monkeypatch, capsys):
-        """Non-finite total value should not produce NaN output."""
+    def test_nan_token_state_refused_and_rendered(self, tmp_path, monkeypatch, capsys):
+        """A NaN token (which no strict writer can emit) refuses the section.
+
+        Pinned pre-fix, this test encoded the lenient-reader contract:
+        json.load accepted the NaN token, the cash line was guarded, and
+        the section rendered from a partially corrupt file. Under the
+        PR #84/#85 ingress doctrine the token is corruption evidence —
+        the whole state is refused and the refusal is rendered in the
+        artifact (PR #87 doctrine). The display-level n/a path for an
+        absent/invalid DISPLAY field is pinned separately below.
+        """
+        monkeypatch.chdir(tmp_path)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        with open(data_dir / "portfolio_state.json", "w") as f:
+            f.write(
+                '{"cash": NaN, "total_value": 5000.0, '
+                '"total_realized_pnl": 0.0, "positions": {}}'
+            )
+
+        generate_comprehensive_report()
+        captured = capsys.readouterr()
+        assert "PORTFOLIO STATUS" in captured.out
+        assert "Refusing to render portfolio state" in captured.out
+        assert "Cash: €1,000.00" not in captured.out
+        assert "Total Return: n/a" in captured.out
+        assert "nan%" not in captured.out
+        assert "Evaluation complete" in captured.out
+
+    def test_missing_total_value_renders_na_not_zero(self, tmp_path, monkeypatch, capsys):
+        """Absent display field renders n/a — never a fabricated €0.00.
+
+        The monetary base (cash / total_realized_pnl / positions) is
+        valid here, so the section renders; only the display-only
+        total_value key is absent (an old-format file). The pre-fix
+        .get("total_value", 0) printed a confident €0.00 — PR #74
+        omission-not-fabrication doctrine.
+        """
         monkeypatch.chdir(tmp_path)
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         portfolio = {
             "cash": 1000.0,
-            "total_value": float("nan"),
             "total_realized_pnl": 0.0,
             "positions": {},
         }
@@ -448,9 +593,11 @@ class TestNonFiniteGuards:
 
         generate_comprehensive_report()
         captured = capsys.readouterr()
+        assert "Total Value: n/a" in captured.out
+        assert "Total Value: €0.00" not in captured.out
         assert "Cash: €1,000.00 (—)" in captured.out
-        assert "Total Return: n/a" in captured.out
-        assert "nan%" not in captured.out
+        assert "Realized P&L: €0.00" in captured.out
+        assert "Evaluation complete" in captured.out
 
     def test_nan_daily_returns_skip_risk_metrics(self, tmp_path, monkeypatch, capsys):
         """Non-finite daily returns should skip risk/volatility metrics."""
