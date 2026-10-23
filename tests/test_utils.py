@@ -83,6 +83,41 @@ def test_is_valid_daily_result_rejects_test_reasoning():
     assert is_valid_daily_result(data) is False
 
 
+def test_is_valid_daily_result_rejects_placeholder_word():
+    data = {
+        "date": "2026-07-20",
+        "dry_run": False,
+        "market_summary": {"assets_analyzed": 32},
+        "decision": {"reasoning": "This is a placeholder run, ignore."},
+    }
+    assert is_valid_daily_result(data) is False
+
+
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        "Deflated Sharpe Ratio mindset by avoiding multiple-testing bias",
+        "the Sharpe ratio test due to high turnover suggests skill",
+        "skepticism tests due to elevated regime uncertainty",
+        "the latest pullback looks like mean reversion",
+        "meta-labeling test (directional accuracy) is inconclusive",
+    ],
+)
+def test_is_valid_daily_result_accepts_legit_test_mentions(reasoning):
+    """Regression 2026-10-23: bare substring 'test' dropped 15/150 real runs.
+
+    Reasoning that merely *contains* 'test' inside legitimate words
+    (multiple-testing, latest, statistical tests) must not invalidate a run.
+    """
+    data = {
+        "date": "2026-07-20",
+        "dry_run": False,
+        "market_summary": {"assets_analyzed": 32},
+        "decision": {"reasoning": reasoning},
+    }
+    assert is_valid_daily_result(data) is True
+
+
 def test_is_valid_daily_result_rejects_too_few_assets():
     data = {
         "date": "2026-07-20",

@@ -21,32 +21,32 @@
 | Start of Week | €9746.24 |
 | End of Week | €9773.15 |
 | Weekly Return | +0.28% |
-| Trading Days | 4 |
+| Trading Days | 5 |
 
 ## Performance Metrics
 
 | Metric | Value | Interpretation |
 |--------|-------|----------------|
-| Sharpe Ratio | 19.48 | Good |
+| Sharpe Ratio | 4.83 | Good |
 | Sortino Ratio | n/a | n/a |
-| Max Drawdown | 0.00% | Low |
-| Volatility | 1.92% | Low |
+| Max Drawdown | -0.19% | Low |
+| Volatility | 3.19% | Low |
 
 ## Risk Metrics
 
 | Metric | Value |
 |--------|-------|
-| CVaR 95% | -0.02% |
-| VaR 95% | -0.04% |
-| Skewness | -1.31 |
-| Kurtosis | n/a |
+| CVaR 95% | 0.19% |
+| VaR 95% | 0.16% |
+| Skewness | -0.82 |
+| Kurtosis | -0.92 |
 
 ## Benchmark Cumulative Returns
 
 | Benchmark | Weekly Return | Alpha vs Portfolio |
 |-----------|---------------|---------------------|
 | SPY | -0.85% | +1.13% (Outperform) |
-| CAC.PA | -1.09% | +1.37% (Outperform) |
+| CAC.PA | -0.82% | +1.09% (Outperform) |
 | FEZ | -0.84% | +1.12% (Outperform) |
 
 ## Positions

@@ -2,6 +2,7 @@
 import json
 import logging
 import math
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,15 +18,24 @@ def is_valid_daily_result(data: Dict) -> bool:
 
     Filters out:
     - Dry-run results (explicit ``dry_run: true`` or ``_dry_run`` filename).
-    - Test/placeholder artifacts (e.g. portfolio reset to 10 000 EUR with no
-      positions and reasoning containing "HOLD for test").
+    - Test/placeholder artifacts (reasoning that is the literal placeholder
+      phrase "HOLD for test", or containing the word "placeholder").
     - Runs with too few assets analyzed (likely partial tests).
+
+    Note: the placeholder check must match the exact phrase or a whole
+    word. A bare substring ``"test"`` silently drops legitimate runs whose
+    reasoning mentions statistical tests ("Sharpe ratio test"),
+    "multiple-testing bias", or unrelated words containing "test"
+    ("latest"). As of 2026-10-23 that false positive excluded 15/150 real
+    daily results from every downstream analysis.
     """
     if data.get("dry_run", False):
         return False
 
     reasoning = (data.get("decision", {}).get("reasoning", "") or "").lower()
-    if "test" in reasoning or "placeholder" in reasoning:
+    if "hold for test" in reasoning:
+        return False
+    if re.search(r"\bplaceholder\b", reasoning):
         return False
 
     market_summary = data.get("market_summary")
