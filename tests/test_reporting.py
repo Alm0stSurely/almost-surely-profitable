@@ -544,3 +544,138 @@ class TestBenchmarkFetchFailureIsLoud:
             "Could not fetch benchmark SPY" in r.getMessage() and "ConnectionError" in r.getMessage()
             for r in caplog.records
         ), "benchmark fetch failure must be logged, not swallowed"
+
+
+class TestAnchorRefusalAndNullShapeDefense:
+    """PR #92 regression suite: periodic reports refuse to fabricate anchor
+    values and survive null-shaped ``portfolio_after`` / ``positions``.
+
+    The strict ingress validator (dry-run / reasoning / asset count) does not
+    validate the portfolio block, so a file with an explicit JSON ``null``
+    (or a missing key) passes and reaches the aggregation layer. Each test
+    below pins the post-fix contract: refusal renders as None (n/a
+    downstream), never as a fabricated number, and one malformed field
+    never costs the whole report.
+    """
+
+    @pytest.fixture
+    def week_dir(self, tmp_path):
+        """Two-day week: 2026-W06, Feb 2 (Mon) and Feb 3 (Tue)."""
+        values = {"2026-02-02": 10000.0, "2026-02-03": 10100.0}
+        for date, value in values.items():
+            data = {
+                "date": date,
+                "portfolio_after": {
+                    "total_value": value,
+                    "total_return_pct": (value / 10000.0 - 1) * 100,
+                    "positions": [],
+                },
+                "executed_trades": [],
+            }
+            (tmp_path / f"{date}.json").write_text(json.dumps(data))
+        return tmp_path
+
+    def test_missing_start_total_value_refuses(self, week_dir):
+        """A first day without total_value must not anchor the week at a
+        fabricated €10,000 (pre-fix: _safe_start_value fabricated the
+        default and measured the weekly return against fiction)."""
+        first = week_dir / "2026-02-02.json"
+        data = json.loads(first.read_text())
+        del data["portfolio_after"]["total_value"]
+        first.write_text(json.dumps(data))
+
+        report = ReportGenerator(results_dir=str(week_dir)).generate_weekly_report(2026, 6)
+        assert report["start_value"] is None
+        assert report["weekly_return_pct"] is None
+
+    def test_missing_end_total_value_refuses_not_negative_100(self, week_dir):
+        """A last day without total_value must not fabricate a -100% week
+        (pre-fix: .get('total_value', 0) → 0 → finite → end_value 0 →
+        weekly_return = -1.0 rendered as -100.00%)."""
+        last = week_dir / "2026-02-03.json"
+        data = json.loads(last.read_text())
+        del data["portfolio_after"]["total_value"]
+        last.write_text(json.dumps(data))
+
+        report = ReportGenerator(results_dir=str(week_dir)).generate_weekly_report(2026, 6)
+        assert report["end_value"] is None
+        assert report["weekly_return_pct"] is None
+
+    def test_null_portfolio_after_does_not_crash_weekly(self, week_dir):
+        """An explicit ``portfolio_after: null`` passes the ingress
+        validator; the report must render refusal, not die with
+        AttributeError far from the cause (pre-fix crash class)."""
+        first = week_dir / "2026-02-02.json"
+        data = json.loads(first.read_text())
+        data["portfolio_after"] = None
+        first.write_text(json.dumps(data))
+
+        report = ReportGenerator(results_dir=str(week_dir)).generate_weekly_report(2026, 6)
+        assert report["start_value"] is None
+        assert report["weekly_return_pct"] is None
+        # End anchor and best/worst selection still work from the valid day.
+        assert report["end_value"] == 10100.0
+
+    def test_null_portfolio_after_does_not_crash_monthly(self, week_dir, monkeypatch):
+        """Monthly aggregation gets the same null-shape defense."""
+        last = week_dir / "2026-02-03.json"
+        data = json.loads(last.read_text())
+        data["portfolio_after"] = None
+        last.write_text(json.dumps(data))
+        rg = ReportGenerator(results_dir=str(week_dir))
+        monkeypatch.setattr(rg, '_get_benchmark_return', lambda *_a, **_k: None)
+
+        report = rg.generate_monthly_report(2026, 2)
+        assert report["end_value"] is None
+        assert report["monthly_return_pct"] is None
+        assert report["start_value"] == 10000.0
+
+    def test_null_positions_treated_as_empty(self, week_dir, monkeypatch):
+        """``positions: null`` must render as an empty position set, not
+        TypeError on iteration/len (pre-fix crash class)."""
+        last = week_dir / "2026-02-03.json"
+        data = json.loads(last.read_text())
+        data["portfolio_after"]["positions"] = None
+        last.write_text(json.dumps(data))
+        rg = ReportGenerator(results_dir=str(week_dir))
+        monkeypatch.setattr(rg, '_get_benchmark_return', lambda *_a, **_k: None)
+
+        weekly = rg.generate_weekly_report(2026, 6)
+        assert weekly["final_positions"] == []
+        monthly = rg.generate_monthly_report(2026, 2)
+        assert monthly["final_positions_count"] == 0
+        assert monthly["best_position"] is None
+        assert monthly["worst_position"] is None
+
+    def test_garbage_position_elements_dropped(self, week_dir, monkeypatch):
+        """A positions list containing non-dict elements must not crash
+        best/worst selection; valid siblings survive (Lipschitz: blast
+        radius equals blast radius of the malformation)."""
+        last = week_dir / "2026-02-03.json"
+        data = json.loads(last.read_text())
+        data["portfolio_after"]["positions"] = [
+            {"ticker": "SPY", "quantity": 10, "market_value": 6060.0,
+             "unrealized_pnl_pct": 5.0},
+            "garbage",
+            42,
+        ]
+        last.write_text(json.dumps(data))
+
+        report = ReportGenerator(results_dir=str(week_dir)).generate_weekly_report(2026, 6)
+        assert [p["ticker"] for p in report["final_positions"]] == ["SPY"]
+
+    def test_single_observation_volatility_is_none(self, week_dir):
+        """One daily return (two-day week) has undefined sample std; the
+        report must say None, not a confident fabricated 0.00%
+        (pre-fix: NaN std coerced to 0.0)."""
+        report = ReportGenerator(results_dir=str(week_dir)).generate_weekly_report(2026, 6)
+        assert report["volatility"] is None
+
+    def test_healthy_week_unchanged(self, week_dir):
+        """Healthy-pin: two valid days still produce the real return and
+        the (still-undefined) single-observation volatility refusal."""
+        report = ReportGenerator(results_dir=str(week_dir)).generate_weekly_report(2026, 6)
+        assert report["start_value"] == 10000.0
+        assert report["end_value"] == 10100.0
+        assert report["weekly_return_pct"] == pytest.approx(1.0, abs=0.01)
+        assert report["volatility"] is None

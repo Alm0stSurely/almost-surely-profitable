@@ -15,16 +15,49 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _safe_start_value(value: Any, default: float = 10000.0) -> float:
-    """Return a finite, positive start value, falling back to *default*."""
+def _as_dict(value: Any) -> Dict:
+    """Return *value* if it is a dict, else {} (null-shape defense).
+
+    A daily result whose ``portfolio_after`` is explicitly ``null`` passes
+    the ingress validator (which checks dry-run / reasoning / asset count,
+    not this field). ``day.get('portfolio_after', {})`` returns None for an
+    explicit null — the default only covers a MISSING key — and the chained
+    ``.get`` then crashes the whole report maximally far from the one
+    malformed field. One field must not cost the entire period report.
+    """
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> List:
+    """Return *value* if it is a list, else [] (same null-shape defense)."""
+    return value if isinstance(value, list) else []
+
+
+def _start_anchor(day: Dict) -> Optional[float]:
+    """Return the finite positive ``total_value`` of a daily result, else None.
+
+    Refusal, not substitution: when the period's anchor is missing or
+    invalid the period return is undefined, and the report must say so
+    rather than measure against a fabricated €10,000. Mirrors the
+    weekly_report.py ``_safe_positive_scalar(..., default=None)``
+    convention (sanitize-to-default is only honest when the default is
+    indistinguishable from the truth).
+    """
+    value = _as_dict(day.get('portfolio_after')).get('total_value')
     if _is_finite_number(value) and value > 0:
         return float(value)
-    return default
+    return None
+
+
+def _end_value(day: Dict) -> Optional[float]:
+    """Return the finite ``total_value`` of a daily result, else None."""
+    value = _as_dict(day.get('portfolio_after')).get('total_value')
+    return float(value) if _is_finite_number(value) else None
 
 
 def _day_return_pct(day: Dict) -> Optional[float]:
     """Return the finite total_return_pct of a daily result, or None."""
-    value = day.get('portfolio_after', {}).get('total_return_pct')
+    value = _as_dict(day.get('portfolio_after')).get('total_return_pct')
     return float(value) if _is_finite_number(value) else None
 
 
@@ -43,7 +76,7 @@ def _best_worst_days(daily_results: List[Dict]) -> tuple:
 
 def _position_pnl_pct(position: Dict) -> Optional[float]:
     """Return the finite unrealized_pnl_pct of a position, or None."""
-    value = position.get('unrealized_pnl_pct')
+    value = _as_dict(position).get('unrealized_pnl_pct')
     return float(value) if _is_finite_number(value) else None
 
 
@@ -110,13 +143,14 @@ class ReportGenerator:
             logger.warning(f"No data found for week {year}-W{week:02d}")
             return {}
         
-        # Calculate metrics
-        raw_start_value = daily_results[0].get('portfolio_after', {}).get('total_value', 0)
-        start_value = _safe_start_value(raw_start_value)
-        raw_end_value = daily_results[-1].get('portfolio_after', {}).get('total_value', 0)
-        end_value = raw_end_value if _is_finite_number(raw_end_value) else None
+        # Calculate metrics. Anchors refuse rather than fabricate: an
+        # invalid start or end value makes the period return undefined
+        # (reported as n/a downstream), never measured against invented
+        # numbers (weekly_report.py convention).
+        start_value = _start_anchor(daily_results[0])
+        end_value = _end_value(daily_results[-1])
 
-        if end_value is None:
+        if start_value is None or end_value is None:
             weekly_return = None
         else:
             weekly_return = (end_value / start_value) - 1
@@ -127,24 +161,33 @@ class ReportGenerator:
             for day in daily_results
         )
 
-        # Get positions at end of week
-        final_positions = daily_results[-1].get('portfolio_after', {}).get('positions', [])
+        # Get positions at end of week (null-shape defended)
+        final_positions = _as_list(
+            _as_dict(daily_results[-1].get('portfolio_after')).get('positions')
+        )
 
         # Calculate daily returns
         daily_returns = []
         for i, day in enumerate(daily_results):
             if i == 0:
                 continue
-            prev_value = daily_results[i-1].get('portfolio_after', {}).get('total_value', 0)
-            curr_value = day.get('portfolio_after', {}).get('total_value', 0)
+            prev_value = _as_dict(daily_results[i-1].get('portfolio_after')).get('total_value')
+            curr_value = _as_dict(day.get('portfolio_after')).get('total_value')
             if _is_finite_number(prev_value) and prev_value > 0 and _is_finite_number(curr_value) and curr_value > 0:
                 daily_returns.append((curr_value / prev_value) - 1)
 
-        volatility = pd.Series(daily_returns).std() if daily_returns else 0
+        # Volatility of a single (or no) observation is undefined — report
+        # None, not a fabricated 0.0 (a confident "0.00%" for an
+        # unmeasurable quantity is a refusal-class violation).
+        if len(daily_returns) >= 2:
+            std = pd.Series(daily_returns).std()
+            volatility = float(std) if _is_finite_number(std) else None
+        else:
+            volatility = None
 
         # Find best/worst days
         best_day, worst_day = _best_worst_days(daily_results)
-        
+
         report = {
             "period": f"{year}-W{week:02d}",
             "period_type": "weekly",
@@ -155,14 +198,14 @@ class ReportGenerator:
             "weekly_return_pct": weekly_return * 100 if weekly_return is not None else None,
             "total_trades": total_trades,
             "num_trading_days": len(daily_results),
-            "volatility": volatility * 100 if _is_finite_number(volatility) else 0,
+            "volatility": volatility * 100 if volatility is not None else None,
             "best_day": {
                 "date": best_day.get('date'),
-                "return_pct": best_day.get('portfolio_after', {}).get('total_return_pct', 0)
+                "return_pct": _as_dict(best_day.get('portfolio_after')).get('total_return_pct', 0)
             },
             "worst_day": {
                 "date": worst_day.get('date'),
-                "return_pct": worst_day.get('portfolio_after', {}).get('total_return_pct', 0)
+                "return_pct": _as_dict(worst_day.get('portfolio_after')).get('total_return_pct', 0)
             },
             "final_positions": [
                 {
@@ -172,6 +215,7 @@ class ReportGenerator:
                     "unrealized_pnl_pct": p.get('unrealized_pnl_pct')
                 }
                 for p in final_positions
+                if isinstance(p, dict)
             ],
             "generated_at": datetime.now().isoformat()
         }
@@ -208,13 +252,12 @@ class ReportGenerator:
             logger.warning(f"No data found for {year}-{month:02d}")
             return {}
 
-        # Calculate metrics
-        raw_start_value = daily_results[0].get('portfolio_after', {}).get('total_value', 0)
-        start_value = _safe_start_value(raw_start_value)
-        raw_end_value = daily_results[-1].get('portfolio_after', {}).get('total_value', 0)
-        end_value = raw_end_value if _is_finite_number(raw_end_value) else None
+        # Calculate metrics. Same anchor-refusal convention as the weekly
+        # report: an invalid anchor makes the period return undefined.
+        start_value = _start_anchor(daily_results[0])
+        end_value = _end_value(daily_results[-1])
 
-        if end_value is None:
+        if start_value is None or end_value is None:
             monthly_return = None
         else:
             monthly_return = (end_value / start_value) - 1
@@ -240,7 +283,9 @@ class ReportGenerator:
             trades_by_ticker[ticker].append(trade)
 
         # Find best/worst positions
-        final_positions = daily_results[-1].get('portfolio_after', {}).get('positions', [])
+        final_positions = _as_list(
+            _as_dict(daily_results[-1].get('portfolio_after')).get('positions')
+        )
         best_position, worst_position = _best_worst_positions(final_positions)
 
         report = {

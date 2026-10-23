@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from data.fetch_market_data import fetch_current_prices, fetch_historical_data
 from portfolio.portfolio import Portfolio
-from reporting import ReportGenerator
+from reporting import ReportGenerator, _as_dict
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
 from risk.performance_metrics import PerformanceMetrics, calculate_all_metrics
 from utils import _is_finite_number, load_json_list_or_quarantine
@@ -34,8 +34,12 @@ def calculate_weekly_returns(week_results):
     dates = []
     returns = []
     for i in range(1, len(week_results)):
-        prev_value = week_results[i-1].get('portfolio_after', {}).get('total_value', 0)
-        curr_value = week_results[i].get('portfolio_after', {}).get('total_value', 0)
+        # Null-shape defense (PR #92 twin-site closure): an explicit
+        # ``portfolio_after: null`` passes the ingress validator; without
+        # the isinstance guard the chained .get crashes the whole weekly
+        # metrics path (AttributeError far from the one malformed file).
+        prev_value = _as_dict(week_results[i-1].get('portfolio_after')).get('total_value', 0)
+        curr_value = _as_dict(week_results[i].get('portfolio_after')).get('total_value', 0)
         # Guard against non-finite or non-positive previous values so a single
         # corrupt daily result cannot poison the whole week's return series.
         if _is_finite_number(prev_value) and _is_finite_number(curr_value) and prev_value > 0:
