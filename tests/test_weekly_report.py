@@ -122,6 +122,22 @@ class TestCalculateWeeklyReturns:
         assert len(result) == 0
         assert len(dates) == 0
 
+    def test_null_portfolio_after_does_not_crash(self):
+        """An explicit ``portfolio_after: null`` (admitted by the ingress
+        validator) must not crash the return series with AttributeError
+        (PR #92 twin-site closure): the malformed day is skipped, valid
+        siblings still contribute."""
+        week_results = [
+            {"portfolio_after": None},
+            {"portfolio_after": {"total_value": 10000.0}},
+            {"portfolio_after": {"total_value": 10100.0}}
+        ]
+        dates, result = calculate_weekly_returns(week_results)
+        assert len(result) == 1
+        assert result[0] == pytest.approx(0.01, abs=1e-6)
+        # Only the day-2 comparison survives; its date key is absent → None.
+        assert dates == [None]
+
 
 class TestFetchBenchmarkReturns:
     """Tests for fetch_benchmark_returns function."""
