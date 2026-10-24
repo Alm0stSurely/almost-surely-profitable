@@ -202,13 +202,20 @@ class TestParseResponseExtraction:
 
 
 class TestParseResponsePctSemantics:
-    """pct is optional on hold only; present pct must be finite.
+    """pct is optional on hold only; present pct must be finite and in (0, 100].
 
     A buy/sell without pct used to pass validation and hit the executor's
     ``.get('pct', 0)`` default: a silent 0% no-op buy, and — via the
     ``pct if pct > 0 else None`` coercion — a FULL position exit on sell
     recorded with the fabricated pct=0. Missing pct on a non-hold action
     is malformation; the action drops loudly, siblings survive.
+
+    Degenerate pct (present, finite, but <= 0 or > 100) survived the
+    finite check and rode the same conventions: sell pct=0/-5 was coerced
+    to a FULL exit (the portfolio layer would have rejected it — the
+    coercion bypasses that guard), buy pct=0 was a guaranteed loud
+    rejection two layers down, and pct>100 failed only downstream. The
+    chokepoint now owns the full (0, 100] executor contract.
     """
 
     def test_missing_pct_accepted(self, agent):
@@ -286,3 +293,85 @@ class TestParseResponsePctSemantics:
             if "dropped:" in r.getMessage() and "missing pct on buy" in r.getMessage()
         ]
         assert len(per_action) == 1
+
+    def test_sell_zero_pct_dropped(self, agent):
+        # Pre-fix this survived validation: 0 is finite, and the executor's
+        # ``pct if pct > 0 else None`` coercion rewrote the invalid 0% order
+        # into a FULL position exit (Portfolio.sell would have rejected 0
+        # itself — the coercion bypasses that guard).
+        response = json.dumps({
+            "actions": [
+                {"ticker": "SPY", "action": "sell", "pct": 0},
+                {"ticker": "GLD", "action": "hold"},
+            ],
+        })
+        result = agent.parse_response(response)
+        assert result["actions"] == [{"ticker": "GLD", "action": "hold"}]
+        assert "dropped 1 malformed" in result["reasoning"]
+
+    def test_sell_negative_pct_dropped(self, agent):
+        response = json.dumps({
+            "actions": [{"ticker": "SPY", "action": "sell", "pct": -5}],
+        })
+        result = agent.parse_response(response)
+        assert result["error"] is True  # single action, dropped
+
+    def test_sell_overflow_pct_dropped(self, agent):
+        # Downstream rejects >100 loudly, but the chokepoint owns the
+        # (0, 100] contract — the failure must not surface two layers away.
+        response = json.dumps({
+            "actions": [{"ticker": "SPY", "action": "sell", "pct": 150}],
+        })
+        result = agent.parse_response(response)
+        assert result["error"] is True
+
+    def test_buy_zero_pct_dropped(self, agent):
+        # Buy side fabricates nothing (Portfolio.buy loud-rejects 0), but the
+        # convention must be symmetric: the executor's sell coercion and the
+        # portfolio layer's (0, 100] contract agree at the chokepoint.
+        response = json.dumps({
+            "actions": [
+                {"ticker": "SPY", "action": "buy", "pct": 0},
+                {"ticker": "GLD", "action": "buy", "pct": 10},
+            ],
+        })
+        result = agent.parse_response(response)
+        assert result["actions"] == [{"ticker": "GLD", "action": "buy", "pct": 10}]
+        assert "dropped 1 malformed" in result["reasoning"]
+
+    def test_buy_negative_pct_dropped(self, agent):
+        response = json.dumps({
+            "actions": [{"ticker": "SPY", "action": "buy", "pct": -10}],
+        })
+        result = agent.parse_response(response)
+        assert result["error"] is True
+
+    def test_buy_overflow_pct_dropped(self, agent):
+        response = json.dumps({
+            "actions": [{"ticker": "SPY", "action": "buy", "pct": 250}],
+        })
+        result = agent.parse_response(response)
+        assert result["error"] is True
+
+    def test_degenerate_pct_loud_reason(self, agent, caplog):
+        # Mechanism pin (PR #83 doctrine): the log names the defect —
+        # the pct value and the (0, 100] bound, not just the debris.
+        response = json.dumps({
+            "actions": [{"ticker": "SPY", "action": "sell", "pct": 0}],
+        })
+        with caplog.at_level(logging.ERROR):
+            result = agent.parse_response(response)
+        assert result["error"] is True
+        per_action = [
+            r for r in caplog.records
+            if "dropped:" in r.getMessage() and "pct 0 outside (0, 100] on sell" in r.getMessage()
+        ]
+        assert len(per_action) == 1
+
+    def test_partial_sell_pct_50_accepted(self, agent):
+        # Bounded healthy pin: partial sells stay reachable on both sides.
+        response = json.dumps({
+            "actions": [{"ticker": "SPY", "action": "sell", "pct": 50}],
+        })
+        result = agent.parse_response(response)
+        assert result["actions"] == [{"ticker": "SPY", "action": "sell", "pct": 50}]
