@@ -887,7 +887,12 @@ class TradingAgent:
         otherwise fabricate a 0% order on buy, and the ``pct if pct > 0
         else None`` coercion silently promotes a missing pct to a FULL
         position exit on sell — or its ``pct`` is present but not a
-        finite number.
+        finite number, or is finite but outside the executor contract
+        ``(0, 100]``: a sell with ``pct <= 0`` passes the finite check
+        and the coercion then rewrites the invalid order into a FULL
+        exit (``Portfolio.sell`` would have rejected 0 itself — the
+        coercion bypasses that guard), while ``pct > 100`` is rejected
+        loudly but only downstream.
 
         *dropped* is a list of ``(action, reason)`` tuples so the loud
         drop log can name the defect, not just the debris.
@@ -924,6 +929,12 @@ class TradingAgent:
                 continue
             if not _is_finite_number(action["pct"]):
                 dropped.append((action, "pct present but not a finite number"))
+                continue
+            pct = action["pct"]
+            if not (0 < pct <= 100):
+                dropped.append(
+                    (action, f"pct {pct} outside (0, 100] on {normalized}")
+                )
                 continue
             clean = dict(action)
             clean["action"] = normalized
