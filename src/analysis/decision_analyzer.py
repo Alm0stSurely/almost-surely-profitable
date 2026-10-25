@@ -221,7 +221,8 @@ class DecisionAnalyzer:
             return return_pct
             
         except Exception as e:
-            # Silent fail - return NaN so the record is excluded
+            # Loud fail - return NaN so the record is excluded, but name the defect.
+            print(f"Warning: forward return calculation failed for {ticker} on {date}: {type(e).__name__}: {e}")
             return np.nan
 
     def _calculate_metrics(self, outcomes: Dict) -> Dict:
