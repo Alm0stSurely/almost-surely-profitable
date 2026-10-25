@@ -245,11 +245,40 @@ def test_forward_return_timezone_aware(mock_fetch, analyzer):
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
-def test_forward_return_exception_handling(mock_fetch, analyzer):
-    """Exceptions in fetch should return NaN silently."""
+def test_forward_return_exception_handling(mock_fetch, analyzer, capsys):
+    """Exceptions in fetch should return NaN with a loud warning naming the defect."""
     mock_fetch.side_effect = Exception("Network error")
     ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=5)
     assert np.isnan(ret)
+    captured = capsys.readouterr()
+    assert "forward return calculation failed" in captured.out
+    assert "SPY" in captured.out
+    assert "Network error" in captured.out
+
+
+@patch("analysis.decision_analyzer.fetch_historical_data")
+def test_forward_return_expected_degenerates_stay_quiet(mock_fetch, analyzer, capsys):
+    """Expected degenerate paths (missing ticker, empty df, <2 rows) return NaN quietly."""
+    # Missing ticker
+    mock_fetch.return_value = {}
+    ret = analyzer._get_forward_return("XXX", "2026-05-10", 100.0, days=5)
+    assert np.isnan(ret)
+
+    # Empty DataFrame
+    mock_fetch.return_value = {"SPY": pd.DataFrame()}
+    ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=5)
+    assert np.isnan(ret)
+
+    # <2 rows of future data
+    mock_fetch.return_value = {
+        "SPY": pd.DataFrame({"Close": [100]}, index=pd.to_datetime(["2026-05-10"]))
+    }
+    ret = analyzer._get_forward_return("SPY", "2026-05-10", 100.0, days=5)
+    assert np.isnan(ret)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 @patch("analysis.decision_analyzer.fetch_historical_data")
