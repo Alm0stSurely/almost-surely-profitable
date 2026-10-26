@@ -59,6 +59,7 @@ KEYWORD_CONCEPTS = {
     "trade cap": ["trade cap", "weekly trade", "weekly cap", "trade limit", "trades used", "trades remaining", "weekly trade cap"],
     "stop-loss": ["stop-loss", "stop loss", "stoploss"],
     "cooldown": ["cooldown", "cool-down", "holding period", "mandatory hold", "flip cooldown"],
+    "cash band": ["cash band", "regime band", "upper bound", "capital drag", "cash drag", "under-invested", "underinvested"],
 }
 
 

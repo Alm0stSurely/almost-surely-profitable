@@ -33,6 +33,7 @@ HIGHLIGHT_CONCEPTS = [
     "mean reversion",
     "momentum",
     "cash buffer",
+    "cash band",
     "drawdown",
     "stop-loss",
     "trade cap",

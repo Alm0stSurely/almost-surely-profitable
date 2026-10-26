@@ -95,6 +95,22 @@ class TestCountKeywordConcepts:
         counts = count_keyword_concepts(decisions, KEYWORD_CONCEPTS)
         assert counts["let winners run"] == 2
 
+    def test_cash_band_concept_variants(self):
+        """"cash band" concept tracks Rule-5 internalization (band/drag language).
+
+        The LLM rarely says "cash buffer" when acting on the deployment
+        mandate (2026-10-26 research session): it phrases the check as
+        "above the 30% upper bound", "capital drag", "under-invested".
+        Fragments below are drawn from real decision reasoning.
+        """
+        decisions = [
+            make_decision("Cash is slightly above the 30% upper bound for the NORMAL volatility regime, causing capital drag"),
+            make_decision("we are under-invested and should deploy into the best opportunity"),
+            make_decision("cash drag must be mitigated to avoid long-term underperformance"),
+        ]
+        counts = count_keyword_concepts(decisions, KEYWORD_CONCEPTS)
+        assert counts["cash band"] == 3
+
     def test_no_match(self):
         decisions = [make_decision("This decision has no relevant keywords.")]
         counts = count_keyword_concepts(decisions, KEYWORD_CONCEPTS)

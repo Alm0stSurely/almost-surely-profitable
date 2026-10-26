@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from analysis.keyword_trends import (
+    HIGHLIGHT_CONCEPTS,
     _safe_pct_str,
     _safe_signed_str,
     format_report,
@@ -15,6 +16,18 @@ from analysis.keyword_trends import (
     rolling_average,
 )
 from utils import _is_finite_number
+
+
+class TestHighlightConcepts:
+    def test_cash_band_is_highlighted(self):
+        """Rule-5 internalization concept must appear in the trend report.
+
+        The dashboard exists to surface guardrail internalization early;
+        "cash buffer" undercounts band/drag language (see 2026-10-26
+        research session), so "cash band" is a first-class highlight.
+        """
+        assert "cash band" in HIGHLIGHT_CONCEPTS
+        assert "cash buffer" in HIGHLIGHT_CONCEPTS
 
 
 class TestSafeFormatHelpers:
