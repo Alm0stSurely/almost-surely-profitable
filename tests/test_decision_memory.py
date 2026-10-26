@@ -80,6 +80,23 @@ def make_memory_file(tmp_path, records):
     return str(path)
 
 
+def make_memory_with_records(tmp_path, records):
+    """Build a DecisionMemory holding *records* without persisting them.
+
+    The ingress no longer admits non-finite values from disk: a file
+    containing a literal ``NaN`` / ``Infinity`` token is quarantined
+    whole-file by the strict read hook (PR #84 doctrine, pinned in
+    tests/test_decision_memory_ingress.py), and the save boundary rejects
+    non-finite records via ``allow_nan=False``
+    (TestStrictJsonPersistenceBoundary below). Aggregate-level non-finite
+    guards remain reachable in memory — e.g. via ``add_decision`` with a
+    computed outcome — which is the path these tests exercise.
+    """
+    mem = DecisionMemory(memory_file=str(tmp_path / "decision_memory.json"))
+    mem.decisions = records
+    return mem
+
+
 # ---------------------------------------------------------------------------
 # DecisionRecord
 # ---------------------------------------------------------------------------
@@ -145,13 +162,22 @@ class TestDecisionMemoryInit:
         mem = DecisionMemory(memory_file=str(path))
         assert mem.decisions == []
 
-    def test_invalid_json_graceful(self, tmp_path, capsys):
+    def test_invalid_json_quarantined_with_error_log(self, tmp_path, caplog):
+        """Garbage bytes quarantine the file (bytes preserved under a
+        ``.corrupt-<timestamp>`` name, one ERROR line) and start an honest
+        empty memory — the loud-failure direction established by the
+        shared ingress. The full contract (sibling survival, wrong-shape
+        quarantine, NaN/Infinity quarantine, evidence preservation) is
+        pinned comprehensively in tests/test_decision_memory_ingress.py."""
+        import logging
+
         path = tmp_path / "bad.json"
         path.write_text("not json")
-        mem = DecisionMemory(memory_file=str(path))
+        with caplog.at_level(logging.ERROR, logger="utils"):
+            mem = DecisionMemory(memory_file=str(path))
         assert mem.decisions == []
-        captured = capsys.readouterr()
-        assert "Warning" in captured.out
+        assert list(tmp_path.glob("bad.json.corrupt-*"))
+        assert not path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +789,19 @@ class TestEdgeCases:
 # ---------------------------------------------------------------------------
 
 class TestNonFiniteGuards:
+    """Aggregate guards must exclude non-finite values from every summary,
+    pattern analysis, lesson, and LLM-context line (PR #43).
+
+    PR #96 note: these fixtures originally persisted NaN/inf records
+    through plain ``json.dumps`` — the literal non-standard token is data
+    no writer can emit, and the strict ingress now quarantines such files
+    whole-file (PR #84 doctrine). Per the PR #74 rewrite doctrine the
+    tests were re-pointed at the in-memory injection seam
+    (``make_memory_with_records``), which is how non-finite values can
+    still legitimately arise (a computed outcome added via
+    ``add_decision``); the file-ingestion contract itself is pinned in
+    tests/test_decision_memory_ingress.py."""
+
     def test_summary_excludes_nan_pnl(self, tmp_path):
         today = datetime.now().strftime("%Y-%m-%d")
         records = [
@@ -770,8 +809,7 @@ class TestNonFiniteGuards:
             make_record(date=today, pnl_pct=5.0),
             make_record(date=today, pnl_pct=float("inf")),
         ]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         summary = mem.get_decision_summary(days=30)
         assert summary["completed_trades"] == 1
         assert summary["win_rate"] == 1.0
@@ -785,8 +823,7 @@ class TestNonFiniteGuards:
             make_record(date=today, pnl_pct=float("inf")),
             make_record(date=today, pnl_pct=float("-inf")),
         ]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         summary = mem.get_decision_summary(days=30)
         assert summary["completed_trades"] == 0
         assert summary["win_rate"] == 0
@@ -797,8 +834,7 @@ class TestNonFiniteGuards:
     def test_pattern_analysis_excludes_non_finite_pnl(self, tmp_path):
         records = [make_record(pnl_pct=float("nan")) for _ in range(5)]
         records += [make_record(pnl_pct=1.0) for _ in range(10)]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         analysis = mem.get_pattern_analysis()
         assert analysis["status"] == "ok"
         assert analysis["total_analyzed"] == 10
@@ -810,8 +846,7 @@ class TestNonFiniteGuards:
             make_record(rsi=50.0 + i, pnl_pct=-5.0 + i * 2.5)
             for i in range(10)
         ]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         analysis = mem.get_pattern_analysis()
         assert analysis["status"] == "ok"
         assert "rsi_correlation" in analysis
@@ -824,8 +859,7 @@ class TestNonFiniteGuards:
             make_record(bollinger_position=-1.0 + i * 0.2, pnl_pct=-5.0 + i * 2.5)
             for i in range(10)
         ]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         analysis = mem.get_pattern_analysis()
         assert analysis["status"] == "ok"
         assert "bollinger_correlation" in analysis
@@ -836,8 +870,7 @@ class TestNonFiniteGuards:
             make_record(date=today, pnl_pct=float("nan")),
             make_record(date=today, pnl_pct=float("nan")),
         ]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         lessons = mem.generate_lessons_learned()
         for lesson in lessons:
             assert "nan" not in lesson.lower()
@@ -849,8 +882,7 @@ class TestNonFiniteGuards:
             make_record(date=today, pnl_pct=float("nan")),
             make_record(date=today, pnl_pct=float("inf")),
         ]
-        path = make_memory_file(tmp_path, records)
-        mem = DecisionMemory(memory_file=path)
+        mem = make_memory_with_records(tmp_path, records)
         context = mem.get_memory_context_for_llm()
         assert "Win rate:" in context
         assert "Average P&L" in context

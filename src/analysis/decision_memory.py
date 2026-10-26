@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent / ".."))
 import numpy as np
 import pandas as pd
 
-from utils import _is_finite_number
+from utils import _is_finite_number, load_json_list_or_quarantine
 
 
 def _safe_value_str(value, symbol: str = "", fmt: str = ".2f", default: str = "n/a") -> str:
@@ -92,18 +92,76 @@ class DecisionMemory:
         self._load_memory()
     
     def _load_memory(self):
-        """Load existing decision memory from disk."""
-        if self.memory_file.exists():
-            try:
-                with open(self.memory_file) as f:
-                    data = json.load(f)
-                    self.decisions = [DecisionRecord.from_dict(d) for d in data]
-                print(f"Loaded {len(self.decisions)} decisions from memory")
-            except Exception as e:
-                print(f"Warning: Could not load decision memory: {e}")
-                self.decisions = []
-        else:
+        """Load existing decision memory from disk.
+
+        Routed through the shared quarantine ingress (PR #84/#87 doctrine):
+        an unparseable file, non-standard numeric tokens (``NaN`` /
+        ``Infinity`` — data no writer in this repository can emit, since
+        ``save_memory`` serializes with ``allow_nan=False``), or a
+        wrong-shaped top level is quarantined to ``.corrupt-<timestamp>``
+        (bytes preserved, one ERROR log) and the memory starts honestly
+        empty — the file makes no claim, so nothing is overridden.
+
+        A parseable list is validated per record before materialization:
+        one malformed element drops loudly with its index and reason while
+        valid siblings survive (anti-Lipschitz, PR #64). The pre-fix
+        catch-all wiped the *entire* memory on a single bad element —
+        ``DecisionRecord.from_dict`` raises on any missing required field
+        or unknown keyword, and the blanket ``except`` converted that into
+        an empty list, which the next ``save_memory()`` persisted,
+        destroying every valid record (PR #60 evidence-destruction class).
+
+        Element contract, validated against the domain consumers actually
+        compute in (PR #88): a mapping; a string ``date`` matching
+        ``%Y-%m-%d`` — ``get_decision_summary`` calls
+        ``datetime.strptime(d.date, "%Y-%m-%d")`` on every record outside
+        any try, so a date that is a valid string but not in this codomain
+        detonates the whole summary on the first record it touches; and
+        ``from_dict`` compatibility (all required fields present, no
+        unknown keys).
+        """
+        if not self.memory_file.exists():
             self.decisions = []
+            return
+
+        records = load_json_list_or_quarantine(
+            self.memory_file, context="decision memory"
+        )
+        decisions: List[DecisionRecord] = []
+        dropped = 0
+        for idx, d in enumerate(records):
+            if not isinstance(d, dict):
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{self.memory_file.name} (expected dict, got "
+                      f"{type(d).__name__})")
+                dropped += 1
+                continue
+            date = d.get("date")
+            if not isinstance(date, str):
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{self.memory_file.name} (missing/non-string date: "
+                      f"{date!r})")
+                dropped += 1
+                continue
+            try:
+                datetime.strptime(date, "%Y-%m-%d")
+            except ValueError:
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{self.memory_file.name} (date not in %Y-%m-%d "
+                      f"codomain: {date!r})")
+                dropped += 1
+                continue
+            try:
+                decisions.append(DecisionRecord.from_dict(d))
+            except TypeError as exc:
+                print(f"⚠ Dropping malformed decision record at index {idx} in "
+                      f"{self.memory_file.name} ({exc})")
+                dropped += 1
+        if dropped:
+            print(f"⚠ Dropped {dropped} malformed record(s) from decision "
+                  f"memory; surviving records used.")
+        self.decisions = decisions
+        print(f"Loaded {len(self.decisions)} decisions from memory")
     
     def save_memory(self):
         """Save decision memory to disk."""
