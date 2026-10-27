@@ -14,7 +14,6 @@ Outputs key metrics:
     - P&L by holding period bucket
 """
 
-import json
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
-from utils import _is_finite_number, load_json_list_or_quarantine
+from utils import _is_finite_number, load_json_dict_or_quarantine, load_json_list_or_quarantine
 
 
 # Accounting-reset boundary. On 2026-07-06 a test run reset the account to
@@ -225,12 +224,21 @@ def load_ledger_realized_pnl(data_dir: str = "data") -> float:
 
     Returns NaN when the ledger file or the value is missing/non-finite so
     callers can render ``n/a`` via the standard safe-formatting helpers.
+
+    The read routes through the shared quarantine ingress (PR #84/#87
+    doctrine): ``portfolio_state.json`` is written with
+    ``allow_nan=False`` by ``Portfolio.save_state``, so a file containing
+    NaN/Infinity tokens or unparseable bytes is corrupt by the writer's
+    own contract.  A bare ``json.load`` would ingest tokens silently
+    (poisoning aggregates downstream) or crash on garbage.  The
+    quarantine helper makes the failure loud (one ERROR log, bytes
+    preserved under ``.corrupt-*``) and returns an empty dict, which
+    this function's existing ``.get`` + finiteness guard maps to NaN.
     """
     path = Path(data_dir) / "portfolio_state.json"
     if not path.exists():
         return float("nan")
-    with open(path) as f:
-        state = json.load(f)
+    state = load_json_dict_or_quarantine(path, context="portfolio state")
     value = state.get("total_realized_pnl")
     return float(value) if _is_finite_number(value) else float("nan")
 
