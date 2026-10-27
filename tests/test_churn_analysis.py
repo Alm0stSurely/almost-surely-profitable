@@ -105,6 +105,50 @@ class TestLoadLedgerRealizedPnl:
         path.write_text(json.dumps({"total_realized_pnl": float("inf")}))
         assert math.isnan(load_ledger_realized_pnl(str(tmp_path)))
 
+    def test_nan_token_quarantined_returns_nan(self, tmp_path):
+        """A NaN token file is corrupt by the strict-writer contract.
+
+        The helper quarantines it (bytes preserved, ERROR logged) and
+        returns an empty dict; the .get + finiteness guard maps to NaN.
+        """
+        path = tmp_path / "portfolio_state.json"
+        # json.dumps with default allow_nan=True emits the literal NaN token
+        path.write_text('{"total_realized_pnl": NaN}')
+        result = load_ledger_realized_pnl(str(tmp_path))
+        assert math.isnan(result)
+        # File was quarantined, not left in place
+        assert not path.exists()
+        corrupt = list(tmp_path.glob("portfolio_state.json.corrupt-*"))
+        assert len(corrupt) == 1
+
+    def test_garbage_bytes_quarantined_returns_nan(self, tmp_path):
+        path = tmp_path / "portfolio_state.json"
+        path.write_text("not json at all {{{")
+        result = load_ledger_realized_pnl(str(tmp_path))
+        assert math.isnan(result)
+        assert not path.exists()
+        corrupt = list(tmp_path.glob("portfolio_state.json.corrupt-*"))
+        assert len(corrupt) == 1
+
+    def test_wrong_shape_list_quarantined_returns_nan(self, tmp_path):
+        path = tmp_path / "portfolio_state.json"
+        path.write_text(json.dumps([1, 2, 3]))
+        result = load_ledger_realized_pnl(str(tmp_path))
+        assert math.isnan(result)
+        assert not path.exists()
+        corrupt = list(tmp_path.glob("portfolio_state.json.corrupt-*"))
+        assert len(corrupt) == 1
+
+    def test_valid_file_unchanged(self, tmp_path):
+        """Healthy path: file is untouched, value returned normally."""
+        path = tmp_path / "portfolio_state.json"
+        path.write_text(json.dumps({"total_realized_pnl": 123.45, "cash": 5000.0}))
+        result = load_ledger_realized_pnl(str(tmp_path))
+        assert result == pytest.approx(123.45)
+        assert path.exists()
+        corrupt = list(tmp_path.glob("portfolio_state.json.corrupt-*"))
+        assert len(corrupt) == 0
+
 
 class TestLoadDecisions:
     def test_missing_file_returns_empty(self, tmp_path):
