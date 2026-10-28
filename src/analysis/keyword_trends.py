@@ -10,7 +10,6 @@ Usage:
 Output:
     Printed report and results/analysis/keyword_trends_YYYYMMDD.txt
 """
-import json
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -20,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from analysis.behavioral_analysis import KEYWORD_CONCEPTS, count_keyword_concepts
-from utils import _is_finite_number
+from utils import _is_finite_number, load_json_list_or_quarantine
 
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "results" / "analysis"
@@ -44,20 +43,55 @@ HIGHLIGHT_CONCEPTS = [
 
 
 def load_decisions(path=None):
-    """Load decisions from JSON."""
+    """Load decisions from JSON.
+
+    Read-only consumer of the decision history: a corrupt file — garbage
+    bytes, non-standard ``NaN``/``Infinity`` tokens that no strict writer
+    in the repo can emit, or a wrong-shaped top level — is quarantined
+    (bytes preserved under ``.corrupt-<timestamp>``, one ERROR log) and
+    the analysis proceeds on an honest empty start. Pre-fix the tokens
+    were silently ingested into the trend aggregates and every other
+    malformation crashed the run with no evidence preserved.
+    """
     if path is None:
         path = DATA_DIR / "decision_history.json"
-    with open(path) as f:
-        return json.load(f)
+    return load_json_list_or_quarantine(path, context="decision history")
 
 
 def group_by_iso_week(decisions):
-    """Group valid decisions by ISO calendar week."""
+    """Group valid decisions by ISO calendar week.
+
+    Element contract (malformation is fractal): each element must be a
+    mapping with an ISO-parseable string ``timestamp`` — the only field
+    this module's consumers touch outside any guard. One malformed
+    element is dropped loudly with its index and reason; valid siblings
+    survive, because a single bad record must not void the trend report
+    for the remaining n-1. ``error``-flagged records are an expected
+    degenerate input and keep their documented quiet skip. Unlike
+    ``churn_analysis``'s ingress, timezone-aware timestamps are accepted:
+    the only computation here is ``isocalendar()`` on each record in
+    isolation — no naive/aware arithmetic exists in this codomain, so a
+    tz-aware value parses, calendars, and never detonates downstream.
+    """
     weeks = defaultdict(list)
-    for d in decisions:
+    for idx, d in enumerate(decisions):
+        if not isinstance(d, dict):
+            print(f"⚠ Dropping malformed decision at index {idx} in "
+                  f"decision history (expected dict, got {type(d).__name__})")
+            continue
         if d.get("error", False):
             continue
-        dt = datetime.fromisoformat(d["timestamp"])
+        ts = d.get("timestamp")
+        if not isinstance(ts, str) or not ts:
+            print(f"⚠ Dropping malformed decision at index {idx} in "
+                  f"decision history (missing/empty timestamp: {ts!r})")
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+        except ValueError:
+            print(f"⚠ Dropping malformed decision at index {idx} in "
+                  f"decision history (unparseable timestamp: {ts!r})")
+            continue
         cal = dt.isocalendar()
         week = f"{cal.year}-W{cal.week:02d}"
         weeks[week].append(d)
