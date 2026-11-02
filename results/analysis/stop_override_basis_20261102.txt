@@ -1,0 +1,49 @@
+======================================================================
+STOP-OVERRIDE CONDITION BASIS AUDIT - DBA 2026-11-02
+======================================================================
+
+Question: does the stop-override condition RSI(14)<30 AND BB_pos<0
+flip when today's bar is included vs excluded?
+
+Policy text (SYSTEM_PROMPT stop-override clause (a)) does NOT
+specify the measurement basis. Pipeline context includes today's
+bar; the intraday monitor recomputes excluding today's bar.
+
+Indicators recomputed with the repo's own functions
+(src/data/indicators.py: calculate_rsi / calculate_bollinger_bands)
+for exact parity with the pipeline and the monitor.
+
+Ticker: DBA   Target date: 2026-11-02
+Excl.-basis anchor (last close before target): 2026-10-30
+Close on target date: 26.8000
+Excl.-basis lower Bollinger band at anchor: 26.9717
+
+Basis                            RSI(14)    BB_pos   cond holds?
+----------------------------------------------------------------
+incl. today (pipeline)             4.469     0.010         False
+excl. today (monitor)              4.678    -0.039          True
+
+Condition flip on basis alone: YES
+
+Cross-check vs live-quoted values:
+  live reasoning quotes DBA RSI 4.5, BB_pos 0.01 (incl. basis)
+  recomputed incl. basis: RSI 4.469, BB_pos 0.010
+  monitor (excl. basis, 17:45 UTC): RSI 4.68, BB_pos -0.077
+  recomputed excl. basis: RSI 4.678, BB_pos -0.039
+
+  SAN.PA incl. basis: RSI 85.65 (live quote 85.7), BB_pos 1.118 (live quote 1.12)
+
+  executed DBA sell @ 26.8000 (realized -27.79)
+  executed SAN.PA sell @ 80.3600 (realized +8.94)
+
+Implication:
+  The stop-override policy needs a basis clause. Candidate:
+  'RSI(14) and Bollinger bands are computed on daily closes
+  EXCLUDING the current (partial) bar, consistent with the
+  intraday monitor's governing basis.'
+  LOCKED while H4 midband_deployment is in shadow mode
+  (shared SYSTEM_PROMPT / user-prompt construction must not
+  change mid-experiment); route via a new variant or post-
+  experiment prompt revision.
+
+======================================================================
