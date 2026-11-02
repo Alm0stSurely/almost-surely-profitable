@@ -347,3 +347,170 @@ class TestPrintBacktestReportNonFiniteGuards:
         assert _fmt_pct(float("nan"), ".2f") == "n/a"
         assert _fmt_pct(None, ".2f") == "n/a"
         assert _fmt_pct(float("inf"), ".2f") == "n/a"
+
+
+class TestBacktestPriceLookupNonFiniteGuards:
+    """Regression tests: non-finite Close values must not enter price lookups.
+
+    A NaN price that reaches the strategy loop silently suppresses stop-loss
+    overrides (NaN comparisons are always False) and corrupts cooldown reason
+    strings.  The fix drops non-finite rows at the engine's price-ingestion
+    boundary with a loud log per dropped row.
+    """
+
+    def _make_engine(self):
+        return BacktestEngine(
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            tickers=["SPY"],
+        )
+
+    def _make_data_with_nan_close(self, nan_date="2024-01-05"):
+        dates = pd.date_range("2024-01-01", "2024-01-10", freq="B")
+        closes = [100.0, 101.0, 102.0, 103.0, np.nan, 105.0, 106.0, 107.0]
+        return {
+            "SPY": pd.DataFrame({
+                "Open": closes,
+                "High": [c + 0.5 if not np.isnan(c) else np.nan for c in closes],
+                "Low": [c - 0.5 if not np.isnan(c) else np.nan for c in closes],
+                "Close": closes,
+            }, index=dates[:len(closes)])
+        }
+
+    def test_nan_close_dropped_from_lookup(self, caplog):
+        import logging
+        engine = self._make_engine()
+        data = self._make_data_with_nan_close()
+        with caplog.at_level(logging.WARNING, logger="backtest.backtest"):
+            engine._precompute_price_lookups(data)
+        from datetime import datetime
+        val = engine._price_lookups["SPY"].get(datetime(2024, 1, 5).date())
+        assert val is None, f"NaN price leaked into lookup: {val}"
+        # Sibling rows survive
+        assert engine._price_lookups["SPY"][datetime(2024, 1, 4).date()] == 103.0
+        assert engine._price_lookups["SPY"][datetime(2024, 1, 8).date()] == 105.0
+
+    def test_inf_close_dropped_from_lookup(self, caplog):
+        import logging
+        engine = self._make_engine()
+        data = self._make_data_with_nan_close()
+        data["SPY"].loc[data["SPY"].index[4], "Close"] = float("inf")
+        with caplog.at_level(logging.WARNING, logger="backtest.backtest"):
+            engine._precompute_price_lookups(data)
+        from datetime import datetime
+        val = engine._price_lookups["SPY"].get(datetime(2024, 1, 5).date())
+        assert val is None, f"inf price leaked into lookup: {val}"
+
+    def test_all_finite_closes_unchanged(self, caplog):
+        import logging
+        engine = self._make_engine()
+        dates = pd.date_range("2024-01-01", "2024-01-05", freq="B")
+        data = {
+            "SPY": pd.DataFrame({
+                "Open": [100.0, 101.0, 102.0, 103.0, 104.0],
+                "High": [100.5, 101.5, 102.5, 103.5, 104.5],
+                "Low": [99.5, 100.5, 101.5, 102.5, 103.5],
+                "Close": [100.0, 101.0, 102.0, 103.0, 104.0],
+            }, index=dates)
+        }
+        with caplog.at_level(logging.WARNING, logger="backtest.backtest"):
+            engine._precompute_price_lookups(data)
+        # No warnings on healthy path
+        warnings = [r for r in caplog.records if "Non-finite" in r.message]
+        assert len(warnings) == 0, f"Unexpected warnings: {warnings}"
+        from datetime import datetime
+        assert len(engine._price_lookups["SPY"]) == 5
+        assert engine._price_lookups["SPY"][datetime(2024, 1, 1).date()] == 100.0
+
+    def test_loudness_per_dropped_row(self, caplog):
+        import logging
+        engine = self._make_engine()
+        data = self._make_data_with_nan_close()
+        # Add a second NaN
+        data["SPY"].loc[data["SPY"].index[2], "Close"] = float("nan")
+        with caplog.at_level(logging.WARNING, logger="backtest.backtest"):
+            engine._precompute_price_lookups(data)
+        warnings = [r for r in caplog.records if "Non-finite" in r.message]
+        assert len(warnings) == 2, f"Expected 2 warnings, got {len(warnings)}"
+        # Each warning names the ticker and the date
+        msgs = [r.message for r in warnings]
+        assert any("SPY" in m and "2024-01-03" in m for m in msgs)
+        assert any("SPY" in m and "2024-01-05" in m for m in msgs)
+
+
+class TestFetchMarketDataNonFiniteGuards:
+    """Regression tests: _fetch_single_ticker drops non-finite Close rows.
+
+    The scalar path (_fetch_single_price) already rejects non-finite values.
+    This pins the same contract for the bulk DataFrame path.
+    """
+
+    def _make_hist(self, closes):
+        import yfinance as yf  # noqa: F401
+        dates = pd.date_range("2024-01-01", periods=len(closes), freq="B")
+        return pd.DataFrame({
+            "Open": closes,
+            "High": [c + 0.5 if np.isfinite(c) else c for c in closes],
+            "Low": [c - 0.5 if np.isfinite(c) else c for c in closes],
+            "Close": closes,
+            "Volume": [1000] * len(closes),
+        }, index=dates)
+
+    def test_nan_close_rows_dropped(self, caplog):
+        import logging
+        from data.fetch_market_data import _fetch_single_ticker
+        hist = self._make_hist([100.0, np.nan, 102.0, 103.0])
+        mock_ticker = type("MockTicker", (), {
+            "history": lambda self, **kwargs: hist,
+        })()
+        with caplog.at_level(logging.WARNING, logger="data.fetch_market_data"):
+            with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+                ticker, result = _fetch_single_ticker("SPY", "1mo", "1d", None, None)
+        assert ticker == "SPY"
+        assert result is not None
+        assert len(result) == 3, f"Expected 3 rows, got {len(result)}"
+        assert not result["Close"].isna().any()
+        warnings = [r for r in caplog.records if "Non-finite" in r.message]
+        assert len(warnings) == 1
+
+    def test_all_nan_returns_none(self, caplog):
+        import logging
+        from data.fetch_market_data import _fetch_single_ticker
+        hist = self._make_hist([np.nan, np.nan, np.nan])
+        mock_ticker = type("MockTicker", (), {
+            "history": lambda self, **kwargs: hist,
+        })()
+        with caplog.at_level(logging.WARNING, logger="data.fetch_market_data"):
+            with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+                ticker, result = _fetch_single_ticker("SPY", "1mo", "1d", None, None)
+        assert result is None
+
+    def test_inf_close_rows_dropped(self, caplog):
+        import logging
+        from data.fetch_market_data import _fetch_single_ticker
+        hist = self._make_hist([100.0, float("inf"), 102.0])
+        mock_ticker = type("MockTicker", (), {
+            "history": lambda self, **kwargs: hist,
+        })()
+        with caplog.at_level(logging.WARNING, logger="data.fetch_market_data"):
+            with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+                ticker, result = _fetch_single_ticker("SPY", "1mo", "1d", None, None)
+        assert result is not None
+        assert len(result) == 2
+        warnings = [r for r in caplog.records if "Non-finite" in r.message]
+        assert len(warnings) == 1
+
+    def test_all_finite_unchanged(self, caplog):
+        import logging
+        from data.fetch_market_data import _fetch_single_ticker
+        hist = self._make_hist([100.0, 101.0, 102.0])
+        mock_ticker = type("MockTicker", (), {
+            "history": lambda self, **kwargs: hist,
+        })()
+        with caplog.at_level(logging.WARNING, logger="data.fetch_market_data"):
+            with patch("data.fetch_market_data.yf.Ticker", return_value=mock_ticker):
+                ticker, result = _fetch_single_ticker("SPY", "1mo", "1d", None, None)
+        assert result is not None
+        assert len(result) == 3
+        warnings = [r for r in caplog.records if "Non-finite" in r.message]
+        assert len(warnings) == 0

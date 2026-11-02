@@ -6,6 +6,7 @@ Reads asset universe from config/universe.json.
 import json
 import math
 import os
+import numpy as np
 import yfinance as yf
 import pandas as pd
 from pathlib import Path
@@ -66,7 +67,14 @@ ALL_TICKERS = get_all_tickers()
 
 
 def _fetch_single_ticker(ticker: str, period: str, interval: str, start: Optional[str], end: Optional[str]) -> tuple:
-    """Fetch data for a single ticker. Returns (ticker, DataFrame or None)."""
+    """Fetch data for a single ticker. Returns (ticker, DataFrame or None).
+
+    Rows with a non-finite Close (NaN, ±inf) are dropped at ingress with a loud
+    log per dropped row.  The scalar path (``_fetch_single_price``) already
+    rejects non-finite values; this extends the same contract to the bulk
+    DataFrame path so downstream consumers (backtest engine, indicators)
+    never see NaN prices.
+    """
     try:
         logger.info(f"Fetching data for {ticker}...")
         stock = yf.Ticker(ticker)
@@ -83,6 +91,23 @@ def _fetch_single_ticker(ticker: str, period: str, interval: str, start: Optiona
         # offset-naive vs offset-aware comparison errors in backtest
         if hist.index.tz is not None:
             hist.index = hist.index.tz_convert("UTC").tz_localize(None)
+
+        # Drop rows with non-finite Close — same ingress contract as
+        # _fetch_single_price (scalar path).
+        close = hist["Close"].astype(float)
+        mask = np.isfinite(close)
+        n_dropped = int((~mask).sum())
+        if n_dropped:
+            for bad_idx in close.index[~mask]:
+                logger.warning(
+                    "Non-finite Close for %s on %s: %r — dropping row",
+                    ticker, bad_idx.date(), close[bad_idx],
+                )
+            hist = hist.loc[mask]
+
+        if hist.empty:
+            logger.warning(f"No finite Close data for {ticker}")
+            return ticker, None
 
         logger.info(f"  {ticker}: {len(hist)} rows")
         return ticker, hist

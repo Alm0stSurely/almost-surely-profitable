@@ -307,14 +307,26 @@ class BacktestEngine:
         The original approach called strftime() on the entire DataFrame index
         for every ticker on every day -- O(n_tickers * n_days * n_rows) overall.
         Pre-computing a nested dict reduces _get_prices_for_date to O(n_tickers).
+        
+        Non-finite Close values (NaN, ±inf) are dropped at ingress with a loud
+        log per dropped row.  A NaN price that reaches the strategy loop can
+        silently suppress stop-loss overrides (NaN comparisons are always False)
+        and corrupt cooldown reason strings with "nan" — the same provenance
+        as the scalar guard in ``_fetch_single_price``.
         """
         self._price_lookups = {}
         for ticker, df in data.items():
-            # Build {date_obj: close_price} using vectorized index access
-            self._price_lookups[ticker] = {
-                idx.date(): float(row['Close'])
-                for idx, row in df.iterrows()
-            }
+            lookup = {}
+            for idx, row in df.iterrows():
+                raw = float(row["Close"])
+                if not np.isfinite(raw):
+                    logger.warning(
+                        "Non-finite Close for %s on %s: %r — dropping from price lookup",
+                        ticker, idx.date(), raw,
+                    )
+                    continue
+                lookup[idx.date()] = raw
+            self._price_lookups[ticker] = lookup
     
     def _get_prices_for_date(
         self,
