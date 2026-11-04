@@ -59,6 +59,17 @@ class TestDeflatedSharpeRatioInit:
         dsr = DeflatedSharpeRatio(n_trials=-5)
         assert dsr.n_trials == 1
 
+    def test_invalid_annualization_factor_raises(self):
+        """Non-finite or non-positive annualization_factor must raise ValueError."""
+        with pytest.raises(ValueError, match="annualization_factor"):
+            DeflatedSharpeRatio(annualization_factor=0)
+        with pytest.raises(ValueError, match="annualization_factor"):
+            DeflatedSharpeRatio(annualization_factor=-1)
+        with pytest.raises(ValueError, match="annualization_factor"):
+            DeflatedSharpeRatio(annualization_factor=float("nan"))
+        with pytest.raises(ValueError, match="annualization_factor"):
+            DeflatedSharpeRatio(annualization_factor=float("inf"))
+
 
 class TestSharpeRatioCalculation:
     """Tests for basic Sharpe ratio calculation."""
@@ -114,6 +125,50 @@ class TestSharpeRatioCalculation:
         returns = np.random.normal(0.001, 0.02, 252)
         metrics = dsr.calculate(returns, n_trials=50)
         assert metrics.n_trials == 50
+
+
+class TestNonFiniteReturns:
+    """Tests for non-finite return handling (Lipschitz doctrine)."""
+
+    def test_nan_returns_dropped(self):
+        """NaN returns should be dropped, not poison the result."""
+        np.random.seed(42)
+        returns = np.random.normal(0.001, 0.02, 252)
+        returns[10] = np.nan
+        returns[20] = np.nan
+        dsr = DeflatedSharpeRatio()
+        metrics = dsr.calculate(returns)
+        assert metrics.n_observations == 250
+        assert not math.isnan(metrics.sharpe_ratio)
+        assert not math.isnan(metrics.deflated_sharpe)
+        assert not math.isnan(metrics.p_value)
+
+    def test_inf_returns_dropped(self):
+        """±inf returns should be dropped, not poison the result."""
+        np.random.seed(42)
+        returns = np.random.normal(0.001, 0.02, 252)
+        returns[5] = np.inf
+        returns[6] = -np.inf
+        dsr = DeflatedSharpeRatio()
+        metrics = dsr.calculate(returns)
+        assert metrics.n_observations == 250
+        assert not math.isnan(metrics.sharpe_ratio)
+        assert not math.isnan(metrics.deflated_sharpe)
+        assert not math.isnan(metrics.p_value)
+
+    def test_all_nan_raises(self):
+        """All-NaN input should raise ValueError (no valid observations)."""
+        dsr = DeflatedSharpeRatio()
+        with pytest.raises(ValueError, match="At least 2 observations required"):
+            dsr.calculate(np.full(10, np.nan))
+
+    def test_single_valid_observation_raises(self):
+        """One valid observation among NaNs should raise ValueError."""
+        dsr = DeflatedSharpeRatio()
+        returns = np.full(10, np.nan)
+        returns[3] = 0.01
+        with pytest.raises(ValueError, match="At least 2 observations required"):
+            dsr.calculate(returns)
 
 
 class TestDeflatedSharpeAdjustment:
@@ -216,6 +271,88 @@ class TestPValueCalculation:
         metrics = dsr.calculate(returns)
         assert metrics.p_value <= 1.0
         assert metrics.p_value >= 0.0
+
+
+class TestVarianceFormulaDiscriminators:
+    """Hardcoded discriminators for the corrected variance formula.
+
+    The pre-fix implementation used (excess_kurtosis/4) = (kurtosis−3)/4
+    where Lo (2002) / Mertens (2002) / Lopez de Prado (2018) require
+    ((kurtosis−1)/4) with non-excess kurtosis.  For a two-point return
+    distribution (kurtosis = 1) the pre-fix factor collapses to 0, wiping
+    out the SR² term entirely; the corrected factor is (1−1)/4 = 0 … but
+    for kurtosis = 3 (Gaussian) the pre-fix factor is 0 while the correct
+    factor is (3−1)/4 = 0.5, which is the classic (1 + SR²/2)/n.
+    """
+
+    def test_two_point_distribution_p_value(self):
+        """Two-point returns (kurtosis=1) with n_trials=50.
+
+        Pre-fix:  p ≈ 0.000e+00  (spuriously significant)
+        Post-fix: p = 1.0         (correctly insignificant)
+
+        The pre-fix code fed the *annualized* SR (1.584) into the variance
+        formula with a collapsed kurtosis correction, producing a z-score
+        of ~30 and a Bonferroni-corrected p of 0.  The corrected formula
+        uses the per-period SR (0.0999) with the proper variance, yielding
+        z ≈ 1.58 and p ≈ 1.0 after multiple-testing correction.
+        """
+        m, s = 0.002, 0.02
+        returns = [m + s] * 126 + [m - s] * 126
+        dsr = DeflatedSharpeRatio(annualization_factor=252)
+        metrics = dsr.calculate(returns, n_trials=50)
+        # Post-fix: p_value must be high (insignificant) — pre-fix gave 0.0
+        assert metrics.p_value > 0.9
+        assert metrics.is_significant is False
+        # DSR must be materially lower than the annualized SR
+        assert metrics.deflated_sharpe < metrics.sharpe_ratio
+
+    def test_psr_discriminator(self):
+        """PSR with kurtosis=6, n=25.
+
+        Pre-fix:  0.948845  (excess_kurt/4 = 0.75)
+        Post-fix: 0.936867  ((kurt−1)/4 = 1.25)
+        """
+        psr = probabilistic_sharpe_ratio(
+            observed_sr=0.6, benchmark_sr=0.2, n_observations=25,
+            skewness=0.0, kurtosis=6.0
+        )
+        assert _approx(psr, 0.936867, abs_tol=1e-5)
+
+    def test_mtrl_discriminator(self):
+        """MTRL with target_sr=0.5, 95% confidence, Gaussian.
+
+        Pre-fix:  13   (adjustment = 1 + 0·0.5 + 0·0.25 = 1)
+        Post-fix: 14   (adjustment = 1 + 0·0.5 + 0.5·0.25 = 1.125)
+        """
+        n = minimum_track_record_length(
+            target_sharpe=0.5, confidence_level=0.95,
+            skewness=0.0, kurtosis=3.0
+        )
+        assert n == 14
+
+    def test_gaussian_variance_reduces_to_classic(self):
+        """For Gaussian returns the corrected factor must equal (1 + SR²/2)/n.
+
+        This is the anchor identity: with skew=0 and kurt=3 the Lo/Mertens
+        variance must reduce to the textbook form.
+        """
+        # Check _calculate_p_value indirectly via a single-trial calculation
+        np.random.seed(42)
+        returns = np.random.normal(0.001, 0.02, 252)
+        dsr = DeflatedSharpeRatio(n_trials=1)
+        metrics = dsr.calculate(returns)
+        # For a single trial, p = 2*(1 - Φ(|z|)) where z = SR_period / std_sr.
+        # With the corrected formula, std_sr² = (1 + SR²/2)/n.
+        # We verify by reconstructing z from the reported p_value.
+        p = metrics.p_value
+        z_implied = stats.norm.ppf(1 - p / 2)
+        n = metrics.n_observations
+        # SR_period = sharpe_ratio / sqrt(252)
+        sr_period = metrics.sharpe_ratio / math.sqrt(252.0)
+        var_implied = (sr_period / z_implied) ** 2
+        var_expected = (1 + 0.5 * sr_period**2) / n
+        assert _approx(var_implied, var_expected, rel_tol=0.05)
 
 
 class TestCompareStrategies:
@@ -375,6 +512,15 @@ class TestProbabilisticSharpeRatio:
         )
         assert psr > 0.95
 
+    def test_psr_non_finite_inputs_raise(self):
+        """NaN or inf inputs must raise ValueError."""
+        with pytest.raises(ValueError, match="observed_sr"):
+            probabilistic_sharpe_ratio(float("nan"), 0.5, 252)
+        with pytest.raises(ValueError, match="benchmark_sr"):
+            probabilistic_sharpe_ratio(1.0, float("inf"), 252)
+        with pytest.raises(ValueError, match="kurtosis"):
+            probabilistic_sharpe_ratio(1.0, 0.5, 252, kurtosis=float("nan"))
+
 
 class TestMinimumTrackRecordLength:
     """Tests for minimum track record length calculation."""
@@ -410,6 +556,18 @@ class TestMinimumTrackRecordLength:
         n_normal = minimum_track_record_length(target_sharpe=1.0, skewness=0.0)
         n_neg_skew = minimum_track_record_length(target_sharpe=1.0, skewness=-1.0)
         assert n_neg_skew >= n_normal
+
+    def test_zero_sharpe_raises(self):
+        """target_sharpe=0 must raise ValueError (division by SR²)."""
+        with pytest.raises(ValueError, match="non-zero"):
+            minimum_track_record_length(target_sharpe=0.0)
+
+    def test_non_finite_inputs_raise(self):
+        """NaN or inf inputs must raise ValueError."""
+        with pytest.raises(ValueError, match="target_sharpe"):
+            minimum_track_record_length(target_sharpe=float("nan"))
+        with pytest.raises(ValueError, match="confidence_level"):
+            minimum_track_record_length(target_sharpe=1.0, confidence_level=float("inf"))
 
 
 class TestEdgeCases:
