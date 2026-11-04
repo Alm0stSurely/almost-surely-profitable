@@ -278,12 +278,21 @@ def save_market_state(prices: Dict[str, float]):
 
 def check_stop_losses(
     current_prices: Dict[str, float],
-    portfolio: Portfolio
+    portfolio: Portfolio,
+    history: Dict = None,
 ) -> List[Dict]:
-    """Check if any positions have hit their stop-loss threshold."""
+    """Check if any positions have hit their stop-loss threshold.
+
+    When ``history`` is provided, records are appended to that shared dict
+    and persistence is the caller's responsibility (``check_movements``
+    loads/saves once per run). Standalone callers omit it and this function
+    owns the load/save cycle.
+    """
     alerts = []
-    history = load_alert_history()
-    
+    owns_history = history is None
+    if owns_history:
+        history = load_alert_history()
+
     if not CHECK_STOP_LOSSES:
         return alerts
     
@@ -318,21 +327,41 @@ def check_stop_losses(
                     'alert_reason': reason
                 })
                 record_alert(ticker, drawdown_pct, 'stop_loss_triggered', 'critical', history)
-    
-    save_alert_history(history)
+
+    if owns_history:
+        save_alert_history(history)
     return alerts
 
 
 def check_bollinger_breakouts(
     current_prices: Dict[str, float],
-    portfolio: Portfolio
+    portfolio: Portfolio,
+    history: Dict = None,
 ) -> List[Dict]:
-    """Check for Bollinger Band breakouts."""
+    """Check for Bollinger Band breakouts.
+
+    Bands are computed on the window EXCLUDING the most recent bar
+    ("excl.-barre" basis). The latest daily bar returned by the data feed is
+    the forming bar of the current session: its close tracks the live price,
+    so including it measures the price against a band inflated by itself and
+    dilutes the breakout margin exactly when the move is largest (observed
+    2026-10-29 AI.PA, 2026-11-02 DBA, 2026-11-04 AI.PA/IJR). The manual
+    excl.-barre basis used by the research sessions is the governing one.
+
+    When ``history`` is provided, records are appended to that shared dict
+    and persistence is the caller's responsibility (``check_movements``
+    loads/saves once per run). Standalone callers omit it and this function
+    owns the load/save cycle.
+    """
     alerts = []
-    
+
     if not CHECK_BOLLINGER:
         return alerts
-    
+
+    owns_history = history is None
+    if owns_history:
+        history = load_alert_history()
+
     # Import indicators here to avoid circular imports
     try:
         from data.indicators import calculate_bollinger_bands
@@ -340,21 +369,24 @@ def check_bollinger_breakouts(
         from data.fetch_market_data import fetch_historical_data
     except ImportError:
         return alerts
-    
-    history = load_alert_history()
-    
+
     for ticker in portfolio.positions.keys():
         current_price = current_prices.get(ticker)
         if not _is_finite_number(current_price):
             continue
 
         try:
-            # Fetch recent data for Bollinger calculation
-            df = fetch_historical_data([ticker], period='20d')
-            if not df or ticker not in df or len(df[ticker]) < 20:
+            # Fetch recent data for Bollinger calculation. The 3-month window
+            # leaves >= 20 completed bars after the forming bar is excluded.
+            df = fetch_historical_data([ticker], period='3mo')
+            if not df or ticker not in df or len(df[ticker]) < 21:
                 continue
 
-            upper, middle, lower = calculate_bollinger_bands(df[ticker]['Close'])
+            # Exclude the forming bar (last row): its close tracks the live
+            # price and would inflate the band with the very price being
+            # tested (self-inclusion dilution).
+            closes = df[ticker]['Close'].iloc[:-1]
+            upper, middle, lower = calculate_bollinger_bands(closes)
 
             if upper is None or lower is None:
                 continue
@@ -434,8 +466,9 @@ def check_bollinger_breakouts(
             # it replaces.
             print(f"Warning: Bollinger check failed for {ticker}: {type(e).__name__}: {e}")
             continue
-    
-    save_alert_history(history)
+
+    if owns_history:
+        save_alert_history(history)
     return alerts
 
 
@@ -448,8 +481,14 @@ def check_movements(
     alerts = []
     history = load_alert_history()
     
-    # Check stop-losses first (highest priority)
-    stop_alerts = check_stop_losses(current_prices, portfolio)
+    # Check stop-losses first (highest priority). The shared history dict is
+    # passed down so every alert class lands in one in-memory state; the
+    # single save at the end of this function persists them all. (Three
+    # independent load/save cycles previously raced: each nested save was
+    # overwritten by the outer check_movements save, so only
+    # position_movement alerts ever reached alert_history.json — observed
+    # 2026-10-30 through 2026-11-04.)
+    stop_alerts = check_stop_losses(current_prices, portfolio, history)
     alerts.extend(stop_alerts)
     
     # Track which tickers already have stop-loss alerts
@@ -587,10 +626,10 @@ def check_movements(
                         })
                         record_alert('PORTFOLIO', drawdown_pct, 'portfolio_drawdown', 'critical', history)
     
-    # Check Bollinger Band breakouts
-    bollinger_alerts = check_bollinger_breakouts(current_prices, portfolio)
+    # Check Bollinger Band breakouts (shared history — see stop-loss note)
+    bollinger_alerts = check_bollinger_breakouts(current_prices, portfolio, history)
     alerts.extend(bollinger_alerts)
-    
+
     save_alert_history(history)
     return alerts
 

@@ -6,6 +6,7 @@ Tests alert generation and threshold detection.
 import json
 import sys
 import tempfile
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
@@ -697,6 +698,168 @@ class TestLoudReadFallback:
 
         with patch("data.fetch_market_data.fetch_historical_data", return_value={}):
             alerts = monitor.check_bollinger_breakouts({'SPY': 125.0}, portfolio)
+
+        assert alerts == []
+        assert "Bollinger check failed" not in capsys.readouterr().out
+
+
+class TestSharedAlertHistoryPersistence:
+    """Regression: every alert class must reach alert_history.json.
+
+    Production observation 2026-10-30 → 2026-11-04: ``check_stop_losses`` and
+    ``check_bollinger_breakouts`` each ran their own load/save cycle nested
+    inside ``check_movements``, and the outer save overwrote the nested ones.
+    Only ``position_movement`` records (written by the outer dict) ever
+    persisted; Bollinger alerts re-firing as "First alert for this ticker"
+    on every run was the visible symptom. The fix shares one history dict
+    per run and saves once, at the end of ``check_movements``.
+    """
+
+    def _isolate(self, tmp_path, monkeypatch):
+        history_path = tmp_path / "data" / "alert_history.json"
+        history_path.parent.mkdir(exist_ok=True)
+        monkeypatch.setattr(monitor, "ALERT_HISTORY_PATH", history_path)
+        monkeypatch.setattr(monitor, "CHECK_BOLLINGER", True)
+        monkeypatch.setattr(monitor, "CHECK_STOP_LOSSES", True)
+        return history_path
+
+    def test_check_movements_persists_bollinger_and_stop_records(
+        self, tmp_path, monkeypatch
+    ):
+        """One check_movements run: stop-loss + Bollinger records must both
+        survive the single final save (previously the outer save clobbered
+        every nested record)."""
+        history_path = self._isolate(tmp_path, monkeypatch)
+
+        portfolio = Portfolio(data_dir=str(tmp_path / "data"))
+        portfolio.positions['DBA'] = Position(
+            ticker='DBA', quantity=10, avg_price=26.0, current_price=26.4
+        )
+        portfolio.positions['EEE'] = Position(
+            ticker='EEE', quantity=1, avg_price=100.0, current_price=94.0
+        )
+
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, \
+             patch("data.indicators.calculate_bollinger_bands") as mock_bands:
+            mock_fetch.return_value = {
+                "DBA": pd.DataFrame({"Close": [100.0] * 30})
+            }
+            mock_bands.return_value = (
+                _make_bollinger_series(25.0),
+                _make_bollinger_series(24.0),
+                _make_bollinger_series(23.0),
+            )
+
+            alerts = check_movements(
+                {'DBA': 26.4, 'EEE': 94.0},
+                {'DBA': 26.0, 'EEE': 100.0},
+                portfolio,
+            )
+
+        types = {a['type'] for a in alerts}
+        assert types == {'stop_loss_triggered', 'bollinger_breakout'}
+
+        with open(history_path) as f:
+            saved = json.load(f)
+        saved_types = Counter(a['type'] for a in saved['alerts'])
+        assert saved_types.get('bollinger_breakout_upper', 0) == 1
+        assert saved_types.get('stop_loss_triggered', 0) == 1
+
+    def test_shared_history_mode_does_not_write_file(
+        self, tmp_path, monkeypatch
+    ):
+        """When a history dict is passed in, the callee must not save — the
+        caller owns the single write."""
+        history_path = self._isolate(tmp_path, monkeypatch)
+
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        shared = {'alerts': [], 'last_reset': datetime.now().isoformat()}
+
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, \
+             patch("data.indicators.calculate_bollinger_bands") as mock_bands:
+            mock_fetch.return_value = {
+                "DBA": pd.DataFrame({"Close": [100.0] * 30})
+            }
+            mock_bands.return_value = (
+                _make_bollinger_series(25.0),
+                _make_bollinger_series(24.0),
+                _make_bollinger_series(23.0),
+            )
+            alerts = check_bollinger_breakouts(
+                {"DBA": 26.4}, portfolio, history=shared
+            )
+
+        assert len(alerts) == 1
+        assert len(shared['alerts']) == 1
+        assert shared['alerts'][0]['type'] == 'bollinger_breakout_upper'
+        assert not history_path.exists()
+
+    def test_standalone_mode_still_saves(self, tmp_path, monkeypatch):
+        """Backward compat: standalone callers (no history arg) keep owning
+        their load/save cycle."""
+        history_path = self._isolate(tmp_path, monkeypatch)
+
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, \
+             patch("data.indicators.calculate_bollinger_bands") as mock_bands:
+            mock_fetch.return_value = {
+                "DBA": pd.DataFrame({"Close": [100.0] * 30})
+            }
+            mock_bands.return_value = (
+                _make_bollinger_series(25.0),
+                _make_bollinger_series(24.0),
+                _make_bollinger_series(23.0),
+            )
+            alerts = check_bollinger_breakouts({"DBA": 26.4}, portfolio)
+
+        assert len(alerts) == 1
+        with open(history_path) as f:
+            saved = json.load(f)
+        assert any(a['type'] == 'bollinger_breakout_upper' for a in saved['alerts'])
+
+    def test_bollinger_excludes_forming_bar_from_band_window(
+        self, tmp_path, monkeypatch
+    ):
+        """The forming bar (last row, close == live price) must not enter the
+        band window: it inflates the band with the very price being tested
+        and dilutes the margin exactly when the move is largest (AI.PA
+        2026-10-29/11-04, IJR 2026-11-04)."""
+        self._isolate(tmp_path, monkeypatch)
+
+        closes = [100.0] * 20 + [104.0]  # last row = forming bar == live price
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, \
+             patch("data.indicators.calculate_bollinger_bands") as mock_bands:
+            mock_fetch.return_value = {"DBA": pd.DataFrame({"Close": closes})}
+            mock_bands.return_value = (
+                _make_bollinger_series(25.0, length=20),
+                _make_bollinger_series(24.0, length=20),
+                _make_bollinger_series(23.0, length=20),
+            )
+            alerts = check_bollinger_breakouts({"DBA": 104.0}, portfolio)
+
+        (prices_arg,) = mock_bands.call_args[0]
+        assert len(prices_arg) == 20
+        assert prices_arg.iloc[-1] == 100.0  # 104.0 forming bar excluded
+        assert len(alerts) == 1
+        assert alerts[0]['breakout_margin_pct'] == pytest.approx(
+            (104.0 - 25.0) / 25.0 * 100, abs=0.01
+        )
+
+    def test_short_history_below_21_bars_skips_quietly(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A 20-bar fetch is insufficient once the forming bar is excluded;
+        the ticker must skip as a normal absence (no crash log)."""
+        self._isolate(tmp_path, monkeypatch)
+
+        portfolio = _make_portfolio(tmp_path, ticker="DBA")
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch:
+            mock_fetch.return_value = {
+                "DBA": pd.DataFrame({"Close": [100.0] * 20})
+            }
+            alerts = check_bollinger_breakouts({"DBA": 104.0}, portfolio)
 
         assert alerts == []
         assert "Bollinger check failed" not in capsys.readouterr().out
