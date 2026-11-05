@@ -865,6 +865,163 @@ class TestSharedAlertHistoryPersistence:
         assert "Bollinger check failed" not in capsys.readouterr().out
 
 
+class TestSessionResetIdempotent:
+    """Regression: the market-open session reset must run once per day, not
+    once per call.
+
+    Production observation 2026-11-05 08:06 UTC: six alerts fired in one
+    ``check_movements`` run (2 position_movement + 4 Bollinger), but
+    ``data/alert_history.json`` contained exactly one record afterwards —
+    the last alert recorded (MC.PA Bollinger, movement_pct 1.168 = the
+    excl.-barre margin). Root cause: ``should_alert`` cleared
+    ``history['alerts']`` on EVERY call inside the 08:00-08:30 window; with
+    the shared-history / single-save flow (fix 32b79ba), each clear wiped the
+    records written by the previous alert classes, so the single final save
+    persisted only the run's last alert. The prior suite missed it because
+    the window gate is wall-clock dependent and test runs happened to fall
+    outside 08:00-08:30.
+    """
+
+    def _freeze(self, monkeypatch, frozen):
+        """Pin ``monitor.datetime.now()`` to ``frozen`` for the test."""
+
+        class _FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen
+
+        monkeypatch.setattr(monitor, "datetime", _FrozenDateTime)
+
+    def test_window_run_persists_all_alert_classes(self, tmp_path, monkeypatch):
+        """A full check_movements run inside the 08:00-08:30 window must
+        persist every alert class — pre-fix, each successive should_alert
+        call wiped the records of the previous ones and only the last alert
+        of the run survived the single final save."""
+        history_path = _isolate_alert_history(tmp_path, monkeypatch)
+        frozen = datetime(2026, 11, 5, 8, 6, 0)
+        self._freeze(monkeypatch, frozen)
+        # Seeded session from the previous day: the run must reset it once,
+        # then accumulate.
+        history_path.write_text(json.dumps({
+            'alerts': [{'ticker': 'STALE', 'type': 'position_movement',
+                        'movement_pct': 1.0, 'severity': 'medium',
+                        'timestamp': '2026-11-04T08:30:00'}],
+            'last_reset': '2026-11-04T08:06:00',
+        }))
+
+        portfolio = Portfolio(data_dir=str(tmp_path / "data"))
+        portfolio.positions['EEE'] = Position(
+            ticker='EEE', quantity=1, avg_price=100.0, current_price=94.0
+        )
+        portfolio.positions['DBA'] = Position(
+            ticker='DBA', quantity=10, avg_price=26.0, current_price=26.4
+        )
+
+        with patch("data.fetch_market_data.fetch_historical_data") as mock_fetch, \
+             patch("data.indicators.calculate_bollinger_bands") as mock_bands:
+            mock_fetch.return_value = {
+                "DBA": pd.DataFrame({"Close": [100.0] * 30})
+            }
+            mock_bands.return_value = (
+                _make_bollinger_series(25.0),
+                _make_bollinger_series(24.0),
+                _make_bollinger_series(23.0),
+            )
+            alerts = check_movements(
+                {'EEE': 94.0, 'DBA': 26.4},
+                {'EEE': 100.0, 'DBA': 26.0},
+                portfolio,
+            )
+
+        fired_types = {a['type'] for a in alerts}
+        assert 'stop_loss_triggered' in fired_types
+        assert 'bollinger_breakout' in fired_types
+
+        with open(history_path) as f:
+            saved = json.load(f)
+        saved_types = Counter(a['type'] for a in saved['alerts'])
+        # The discriminator: pre-fix, the Bollinger should_alert call (last)
+        # wiped the stop-loss record written earlier in the same run.
+        assert saved_types.get('stop_loss_triggered', 0) == 1
+        assert saved_types.get('bollinger_breakout_upper', 0) == 1
+        # The seeded stale record is gone (reset happened, exactly once).
+        assert saved_types.get('position_movement', 0) == 0
+        assert saved['last_reset'] == frozen.isoformat()
+
+    def test_second_call_in_window_does_not_clear(self, monkeypatch):
+        """After the day's reset, later calls in the window keep prior
+        records — the reset is once per session, not once per call."""
+        frozen = datetime(2026, 11, 5, 8, 15, 0)
+        self._freeze(monkeypatch, frozen)
+        shared = {
+            'alerts': [{'ticker': 'AAA', 'type': 'position_movement',
+                        'movement_pct': 2.5, 'severity': 'medium',
+                        'timestamp': '2026-11-05T08:06:01'}],
+            'last_reset': '2026-11-05T08:06:00',
+        }
+
+        flag, reason = monitor.should_alert('BBB', 3.0, 'position_movement', shared)
+
+        assert flag is True
+        assert reason == "New trading session"
+        assert [a['ticker'] for a in shared['alerts']] == ['AAA']
+
+    def test_reset_clears_previous_day_history(self, monkeypatch):
+        """A last_reset from a previous day is stale: the window reset must
+        still clear the history (the once-per-day gate must not disable the
+        reset itself)."""
+        frozen = datetime(2026, 11, 5, 8, 6, 0)
+        self._freeze(monkeypatch, frozen)
+        shared = {
+            'alerts': [{'ticker': 'AAA', 'type': 'position_movement',
+                        'movement_pct': 2.5, 'severity': 'medium',
+                        'timestamp': '2026-11-04T17:45:00'}],
+            'last_reset': '2026-11-04T08:06:00',
+        }
+
+        flag, reason = monitor.should_alert('AAA', 2.0, 'position_movement', shared)
+
+        assert flag is True
+        assert reason == "New trading session"
+        assert shared['alerts'] == []
+        assert shared['last_reset'] == frozen.isoformat()
+
+    @pytest.mark.parametrize("bad_last_reset", ["not-a-timestamp", 12345, None])
+    def test_malformed_last_reset_treated_as_needs_reset(self, monkeypatch, bad_last_reset):
+        """A missing/garbage last_reset must not crash the reset path and
+        must not be mistaken for 'already reset today'."""
+        frozen = datetime(2026, 11, 5, 8, 6, 0)
+        self._freeze(monkeypatch, frozen)
+        shared = {
+            'alerts': [{'ticker': 'AAA', 'type': 'position_movement',
+                        'movement_pct': 2.5, 'severity': 'medium',
+                        'timestamp': '2026-11-04T17:45:00'}],
+            'last_reset': bad_last_reset,
+        }
+
+        flag, reason = monitor.should_alert('AAA', 2.0, 'position_movement', shared)
+
+        assert flag is True
+        assert shared['alerts'] == []
+        assert shared['last_reset'] == frozen.isoformat()
+
+    def test_outside_window_no_reset(self, monkeypatch):
+        """Outside 08:00-08:30 the reset branch must not run at all — normal
+        cooldown dedup applies and the history is untouched."""
+        frozen = datetime(2026, 11, 5, 12, 0, 0)
+        self._freeze(monkeypatch, frozen)
+        prior = {'ticker': 'AAA', 'type': 'position_movement',
+                 'movement_pct': 2.5, 'severity': 'medium',
+                 'timestamp': '2026-11-05T10:00:00'}
+        shared = {'alerts': [prior], 'last_reset': '2026-11-05T08:06:00'}
+
+        flag, reason = monitor.should_alert('AAA', 2.0, 'position_movement', shared)
+
+        assert flag is False
+        assert "Within cooldown" in reason
+        assert shared['alerts'] == [prior]
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Running Intraday Monitor Tests")

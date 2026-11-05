@@ -142,12 +142,28 @@ def should_alert(ticker: str, movement_pct: float, alert_type: str, history: Dic
         (should_alert: bool, reason: str)
     """
     now = datetime.now()
-    
+
     # Check if market just opened (reset history at 08:00 UTC)
     if now.hour == 8 and now.minute < 30:
-        # Clear history at market open
-        history['alerts'] = []
-        history['last_reset'] = now.isoformat()
+        # Session reset — idempotent per calendar day, not per call. A
+        # per-call reset wiped every alert recorded earlier in the same run:
+        # check_movements shares one history dict across all alert classes
+        # and saves once at the end, so each successive should_alert call in
+        # the 08:00-08:30 window cleared the records of the previous ones and
+        # the final save persisted only the last alert of the run (observed
+        # 2026-11-05 08:06: six alerts fired, one persisted — MC.PA
+        # Bollinger, the last recorded).
+        last_reset_raw = history.get('last_reset', '')
+        try:
+            already_reset_today = (
+                bool(last_reset_raw)
+                and datetime.fromisoformat(last_reset_raw).date() == now.date()
+            )
+        except (ValueError, TypeError):
+            already_reset_today = False
+        if not already_reset_today:
+            history['alerts'] = []
+            history['last_reset'] = now.isoformat()
         return True, "New trading session"
     
     # Find previous alert for this ticker
