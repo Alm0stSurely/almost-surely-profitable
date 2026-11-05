@@ -171,13 +171,19 @@ def fetch_historical_data(
 
 
 def _fetch_single_price(ticker: str) -> tuple:
-    """Fetch current price for a single ticker. Returns (ticker, price or None).
+    """Fetch current price for a single ticker. Returns (ticker, price or None, last_bar_ts or None).
 
     A non-finite Close (NaN, ±inf) from yfinance is rejected at ingress and
     returned as None — same contract as an empty history or a fetch exception.
     ``Optional[float]`` means *unavailable* (None) or *valid finite scalar*;
     NaN is neither, and letting it through would force every consumer to guard
     individually instead of once at the boundary.
+
+    The third return element is the UTC timestamp (naive, ISO format) of the
+    last bar the price was read from. Consumers that need feed-freshness
+    checks (the intraday monitor) must use it: a price is only as trustworthy
+    as the bar behind it. The scalar ``fetch_current_prices`` drops it for
+    backward compatibility.
     """
     try:
         stock = yf.Ticker(ticker)
@@ -192,7 +198,7 @@ def _fetch_single_price(ticker: str) -> tuple:
 
         if hist.empty:
             logger.warning(f"No price data for {ticker} (may be delisted or not available)")
-            return ticker, None
+            return ticker, None, None
 
         current_price = float(hist["Close"].iloc[-1])
 
@@ -200,13 +206,59 @@ def _fetch_single_price(ticker: str) -> tuple:
             logger.warning(
                 f"Non-finite Close for {ticker}: {current_price!r} — treating as unavailable"
             )
-            return ticker, None
+            return ticker, None, None
 
-        return ticker, current_price
+        last_bar = hist.index[-1]
+        last_bar_ts = last_bar.isoformat()
+
+        return ticker, current_price, last_bar_ts
 
     except Exception as e:
         logger.warning(f"Could not fetch price for {ticker}: {e}")
-        return ticker, None
+        return ticker, None, None
+
+
+def fetch_current_quotes(
+    tickers: Optional[List[str]] = None,
+    max_workers: int = 1
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Fetch current quotes with feed timestamps for freshness checks.
+
+    Same fetch path as ``fetch_current_prices`` but preserves the UTC
+    timestamp of the last bar each price was read from:
+
+    Returns:
+        Dict mapping ticker to {"price": float|None, "last_bar_ts": str|None}.
+        ``price`` is None when the fetch failed or the Close was non-finite;
+        ``last_bar_ts`` is None in the same cases (a price without a bar
+        timestamp is treated as untrustworthy by the freshness guard).
+    """
+    if tickers is None:
+        tickers = get_all_tickers()
+
+    # Filter out empty or invalid tickers
+    tickers = [t.strip() for t in tickers if t and t.strip() and t.strip() != ".PA"]
+
+    raw_results: Dict[str, tuple] = {}
+
+    if max_workers > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ticker = {
+                executor.submit(_fetch_single_price, ticker): ticker
+                for ticker in tickers
+            }
+            for future in as_completed(future_to_ticker):
+                ticker, price, last_bar_ts = future.result()
+                raw_results[ticker] = (price, last_bar_ts)
+    else:
+        for ticker in tickers:
+            ticker, price, last_bar_ts = _fetch_single_price(ticker)
+            raw_results[ticker] = (price, last_bar_ts)
+
+    return {
+        ticker: {"price": price, "last_bar_ts": last_bar_ts}
+        for ticker, (price, last_bar_ts) in raw_results.items()
+    }
 
 
 def fetch_current_prices(
@@ -224,31 +276,8 @@ def fetch_current_prices(
     Returns:
         Dict mapping ticker to current price (or None if error)
     """
-    if tickers is None:
-        tickers = get_all_tickers()
-    
-    # Filter out empty or invalid tickers
-    tickers = [t.strip() for t in tickers if t and t.strip() and t.strip() != ".PA"]
-
-    results = {}
-
-    if max_workers > 1:
-        # Parallel execution with ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_ticker = {
-                executor.submit(_fetch_single_price, ticker): ticker
-                for ticker in tickers
-            }
-            for future in as_completed(future_to_ticker):
-                ticker, price = future.result()
-                results[ticker] = price
-    else:
-        # Sequential execution (original behavior)
-        for ticker in tickers:
-            ticker, price = _fetch_single_price(ticker)
-            results[ticker] = price
-
-    return results
+    quotes = fetch_current_quotes(tickers, max_workers=max_workers)
+    return {ticker: q["price"] for ticker, q in quotes.items()}
 
 
 def fetch_ticker_info(ticker: str) -> Dict:
