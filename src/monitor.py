@@ -15,13 +15,13 @@ import json
 import logging
 import math
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data.fetch_market_data import fetch_current_prices
+from data.fetch_market_data import fetch_current_prices, fetch_current_quotes
 from portfolio.portfolio import Portfolio
 from utils import load_json_dict_or_quarantine
 
@@ -290,6 +290,115 @@ def save_market_state(prices: Dict[str, float]):
 
     with open(MARKET_STATE_PATH, 'w') as f:
         json.dump(state, f, indent=2, allow_nan=False)
+
+
+# --- Feed freshness guard -------------------------------------------------
+#
+# Production incident 2026-11-05 (run 08:06 UTC): the yfinance Euronext feed
+# went stale overnight (Paris series frozen at the 2026-11-03 close) while the
+# US feed stayed healthy. The monitor treated stale closes as live prices,
+# fired three spurious POSITION_MOVEMENT alerts (+3.1 %/+3.3 %/-2.3 %), and
+# persisted the stale closes as ``previous_close`` references — poisoning the
+# 12:15 run with two-day-old deltas even after the feed recovered. A price is
+# only as trustworthy as the bar behind it, so every quote carries its last
+# bar's UTC timestamp and the monitor classifies each ticker as fresh/stale
+# before alerting or saving references.
+#
+# Session windows below are generous (DST-agnostic) bounds in UTC; a window
+# that is too wide only risks classifying a stale feed as fresh, never the
+# reverse. Holidays are NOT modelled: on a US holiday the US tickers are
+# flagged stale while Euronext is open — suppressing US alerts for one day is
+# acceptable and documented here.
+
+# (open_utc, close_utc) — generous bounds, winter and summer covered.
+_EURONEXT_SESSION = (dtime(7, 0), dtime(16, 30))
+_US_SESSION = (dtime(13, 0), dtime(21, 30))
+
+
+def _market_of(ticker: str) -> str:
+    """Classify a ticker into 'euronext' or 'us' for session arithmetic."""
+    if ticker.endswith('.PA') or ticker == '^FCHI':
+        return 'euronext'
+    return 'us'
+
+
+def _session_date_from_bar(last_bar_ts: Optional[str], market: str) -> Optional[date]:
+    """Map a bar's UTC timestamp to the trading session it belongs to.
+
+    yfinance stamps Euronext daily bars at 23:00 UTC of the *previous* day
+    (midnight CET of the session date), while intraday 1m bars are stamped
+    within the session itself. A bar at/after 22:30 UTC therefore belongs to
+    the next calendar day's session; earlier bars belong to their own date.
+    US bars (00:00 daily stamps or intraday) always map to their own date.
+    """
+    if not last_bar_ts:
+        return None
+    try:
+        ts = datetime.fromisoformat(last_bar_ts)
+    except (ValueError, TypeError):
+        return None
+    bar_date = ts.date()
+    if market == 'euronext' and ts.time() >= dtime(22, 30):
+        return bar_date + timedelta(days=1)
+    return bar_date
+
+
+def _expected_session_date(now: datetime, market: str) -> date:
+    """The session whose bar the feed must serve at time ``now``.
+
+    During a market's session window the forming bar of today counts as
+    fresh; outside it, the most recently completed session is required.
+    Weekends roll back to Friday.
+    """
+    open_utc, _ = (
+        _EURONEXT_SESSION if market == 'euronext' else _US_SESSION
+    )
+    d = now.date()
+    if d.weekday() < 5 and now.time() >= open_utc:
+        return d
+    while True:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            return d
+
+
+def is_feed_stale(last_bar_ts: Optional[str], ticker: str, now: datetime) -> bool:
+    """Return True when the ticker's last bar misses a required session.
+
+    A missing timestamp (fetch failure, non-finite close) is stale by
+    definition: the caller must not alert on it nor overwrite the saved
+    reference with it.
+    """
+    market = _market_of(ticker)
+    bar_session = _session_date_from_bar(last_bar_ts, market)
+    if bar_session is None:
+        return True
+    return bar_session < _expected_session_date(now, market)
+
+
+def split_fresh_and_stale(
+    quotes: Dict[str, Dict[str, Optional[str]]],
+    now: datetime,
+) -> Tuple[Dict[str, float], Set[str]]:
+    """Partition quotes into fresh prices and stale tickers.
+
+    Returns (fresh_prices, stale_tickers): fresh_prices maps ticker to a
+    finite price only; stale_tickers collects every ticker whose quote is
+    stale (old bar) or unusable (None price/timestamp, non-finite price).
+    """
+    fresh: Dict[str, float] = {}
+    stale: Set[str] = set()
+    for ticker, quote in quotes.items():
+        price = quote.get('price')
+        last_bar_ts = quote.get('last_bar_ts')
+        if not _is_finite_number(price) or is_feed_stale(last_bar_ts, ticker, now):
+            stale.add(ticker)
+            continue
+        fresh[ticker] = float(price)
+    return fresh, stale
+
+
+# ---------------------------------------------------------------------------
 
 
 def check_stop_losses(
@@ -761,18 +870,32 @@ def run_monitor():
         print("No positions to monitor.")
         return [], 0
     
-    # Fetch current prices
+    # Fetch current quotes with last-bar timestamps (freshness guard below)
     print(f"Fetching prices for {len(tickers_to_monitor)} tickers...")
-    current_prices = fetch_current_prices(tickers_to_monitor, max_workers=4)
-    
-    # Load reference prices
+    quotes = fetch_current_quotes(tickers_to_monitor, max_workers=4)
+
+    # Load reference prices BEFORE the freshness split: a stale quote must
+    # not overwrite the reference it cannot vouch for (incident 2026-11-05 —
+    # stale closes persisted as previous_close poisoned the next run).
     reference_prices = load_previous_close(portfolio)
-    
+
+    # Feed freshness guard: a price is only as trustworthy as the bar behind
+    # it. Stale tickers are excluded from alerts (movement, Bollinger,
+    # stop-loss) and keep their previous reference for the next run.
+    current_prices, stale_tickers = split_fresh_and_stale(quotes, datetime.now())
+    if stale_tickers:
+        print(
+            f"\n⚠️  STALE FEED — {len(stale_tickers)} ticker(s) excluded from "
+            f"alerts and reference update: {sorted(stale_tickers)}"
+        )
+
     # Check for movements
     alerts = check_movements(current_prices, reference_prices, portfolio)
-    
-    # Save current prices for next check
-    save_market_state(current_prices)
+
+    # Save current prices for next check: fresh prices win, stale tickers
+    # keep their previous reference instead of being dropped or overwritten.
+    prices_to_save = {**reference_prices, **current_prices}
+    save_market_state(prices_to_save)
     
     # Output results
     if alerts:
