@@ -1,6 +1,7 @@
 # Oversold-Extreme Predicate — Status and Doctrine
 
-**Status:** formalized 2026-11-05 (research session), after the first live
+**Status:** updated 2026-11-06 — second consecutive live completion
+(PDBC). Formalized 2026-11-05 (research session), after the first live
 completion of the predicate on a held position.
 **Scope:** interpretation of the stop-override predicate
 (RSI ≤ 30 AND below the lower Bollinger band) across the intraday monitor
@@ -31,6 +32,27 @@ Official close basis (3-month window, rolling manual, excl.-barre):
 
 Position state at completion: P&L **+5.10 %**, live price $18.74 vs stop
 $16.94 — ~10 % above the mechanical stop. **Action taken: none.**
+
+## Second live completion — PDBC, 2026-11-06 (evening pipeline, persisted)
+
+The predicate completed a **second consecutive day** on PDBC, confirming the
+first completion was not a one-bar accident:
+
+| Date | RSI14 excl. | BB_pos excl. | Close | P&L | Distance to stop |
+|------|-------------|--------------|-------|-----|------------------|
+| 2026-11-05 | 29.64 | −0.227 | $18.74 | +5.10 % | ~10 % |
+| 2026-11-06 | **22.04** | **−0.069** | $18.785 | +5.36 % | ~10.8 % |
+
+Values for 2026-11-06 re-verified live with the repo's own indicator
+functions (parity rule: `data.indicators.calculate_rsi/calculate_bollinger_bands`,
+3-month fetch, excl.-barre): RSI 22.04, BB lower $18.897 — match. The
+RSI leg *deepened* (29.64 → 22.04) while BB_pos crept back toward 0
+(−0.227 → −0.069): the price is stabilizing near the lower band after the
+washout leg, i.e. momentum exhaustion without a reversal.
+
+Action taken: **none** (zone 2 — far from stop, profitable position, and
+cap 4/3 exhausted). Two consecutive completions far from the stop still
+carry no portfolio action under doctrine §2.
 
 ## Doctrine
 
@@ -81,4 +103,9 @@ doubly non-actionable: no proximity, no budget.
 - **Trailing semantics:** if a position's predicate completes far from the
   stop and the price *then* grinds toward the stop, does the earlier
   completion carry any weight? Current doctrine: no — the predicate is
-  re-evaluated at the stop event with fresh values.
+  re-evaluated at the stop event with fresh values. *Update 2026-11-06:* a
+  predicate can persist across consecutive sessions (PDBC day 2) — when it
+  keeps re-completing on fresh values, the "earlier completion" question is
+  moot; the live re-evaluation at any future stop event will see a complete
+  predicate anyway. The open part of the question remains the *decay* case:
+  completion, then dissipation, then stop breach.
