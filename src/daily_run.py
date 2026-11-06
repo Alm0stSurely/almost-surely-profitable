@@ -256,6 +256,19 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     print("\n[2/7] Calculating technical indicators...")
     market_analysis = analyze_market_data(market_data_raw)
     print(f"  ✓ Analysis complete for {len(market_analysis['assets'])} assets")
+
+    # Attach raw OHLCV frames for the LLM prompt enrichment: the PORTFOLIO
+    # RISK METRICS and DEFLATED SHARPE RATIO ANALYSIS sections in
+    # TradingAgent.build_prompt read market_data['historical_prices'].
+    # Both prompt consumers coerce each frame via _coerce_close_series, so
+    # the OHLCV dict from fetch_historical_data is the correct producer
+    # shape. The saved daily result only extracts scalars from
+    # market_analysis, so these frames are never JSON-serialized.
+    market_analysis['historical_prices'] = {
+        ticker: df
+        for ticker, df in market_data_raw.items()
+        if isinstance(df, pd.DataFrame) and 'Close' in df.columns and not df.empty
+    }
     
     # Step 2.5: Market Regime Analysis
     print("\n[2.5/7] Analyzing market regime...")

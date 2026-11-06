@@ -37,21 +37,44 @@ try:
 except ImportError:
     JSON_SAFE_AVAILABLE = False
 
-# Import risk metrics module
+# Import risk metrics module. Dual-import style (same as the variants block
+# below): relative import works in package context, absolute fallback works
+# on the top-level path used by `python src/daily_run.py` and the test suite
+# (sys.path pointing at src/). Without the fallback both enrichment flags
+# stayed permanently False in production and the PORTFOLIO RISK METRICS
+# prompt section never fired.
 try:
     from ..risk import calculate_portfolio_risk_metrics, get_risk_summary_for_llm
     RISK_MODULE_AVAILABLE = True
 except ImportError:
-    RISK_MODULE_AVAILABLE = False
+    try:
+        from risk import calculate_portfolio_risk_metrics, get_risk_summary_for_llm
+        RISK_MODULE_AVAILABLE = True
+    except ImportError:
+        RISK_MODULE_AVAILABLE = False
 
-# Import Deflated Sharpe Ratio module
-try:
-    import numpy as np
+# Import Deflated Sharpe Ratio module. The import is LAZY (see
+# _load_deflated_sharpe below): an eager `from backtest.deflated_sharpe
+# import ...` at module level circles back through backtest/__init__ ->
+# backtest.backtest -> llm.trading_agent (partially initialized at that
+# point) and raises ImportError, which permanently disabled the DSR prompt
+# section in production. numpy is available unconditionally elsewhere in
+# this module's runtime, so only the class import can fail.
+def _load_deflated_sharpe():
+    """Return the DeflatedSharpeRatio class, or None if unavailable.
 
-    from ..backtest.deflated_sharpe import DeflatedSharpeRatio
-    DSR_MODULE_AVAILABLE = True
-except ImportError:
-    DSR_MODULE_AVAILABLE = False
+    Dual-import style: relative import for package context, absolute
+    fallback for the top-level path used by `python src/daily_run.py`.
+    """
+    try:
+        from ..backtest.deflated_sharpe import DeflatedSharpeRatio
+        return DeflatedSharpeRatio
+    except ImportError:
+        try:
+            from backtest.deflated_sharpe import DeflatedSharpeRatio
+            return DeflatedSharpeRatio
+        except ImportError:
+            return None
 
 # Import prompt-variant machinery (H4 shadow mode). Same dual-import style as
 # the utils block above: package context when run via daily_run, standalone
@@ -77,6 +100,34 @@ def _is_finite_number(value) -> bool:
         return math.isfinite(float(value))
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+def _coerce_close_series(price_data) -> Optional[pd.Series]:
+    """Normalize one entry of a historical_prices dict to a Close-price Series.
+
+    Accepts either shape the producers have on hand:
+      - pd.Series: used as-is
+      - pd.DataFrame with a 'Close' column: that column
+    Non-finite values are dropped. Returns None for any other shape so
+    callers skip the asset instead of laundering zeros into portfolio-level
+    metrics (the risk-metrics consumer builds a DataFrame of returns per
+    ticker; a dict of OHLCV frames would silently produce all-zero metrics
+    because the ticker labels never match the MultiIndex columns).
+    """
+    import pandas as pd
+
+    if isinstance(price_data, pd.Series):
+        series = price_data
+    elif isinstance(price_data, pd.DataFrame) and "Close" in price_data.columns:
+        series = price_data["Close"]
+    else:
+        return None
+    series = pd.to_numeric(series, errors="coerce")
+    # dropna alone leaves inf in place (to_numeric coerces unparseable
+    # values, not infinities), and an inf close price would poison every
+    # downstream pct_change — drop all non-finite values.
+    series = series.replace([np.inf, -np.inf], np.nan).dropna()
+    return series if len(series) > 0 else None
 
 
 def _safe_format(value, spec: str = ".2f", fallback: str = "n/a") -> str:
@@ -489,7 +540,12 @@ class TradingAgent:
         # Risk metrics (if available)
         if RISK_MODULE_AVAILABLE and 'historical_prices' in market_data:
             try:
-                prices_dict = market_data['historical_prices']
+                raw_prices = market_data['historical_prices']
+                prices_dict = {}
+                for ticker, data in raw_prices.items():
+                    series = _coerce_close_series(data)
+                    if series is not None:
+                        prices_dict[ticker] = series
                 weights = {pos['ticker']: pos['market_value'] for pos in positions}
                 risk_metrics = calculate_portfolio_risk_metrics(prices_dict, weights)
                 prompt_parts.append("\n\n=== PORTFOLIO RISK METRICS ===")
@@ -498,16 +554,22 @@ class TradingAgent:
                 logger.warning(f"Could not calculate risk metrics: {e}")
         
         # Deflated Sharpe Ratio analysis
-        if DSR_MODULE_AVAILABLE and 'historical_prices' in market_data:
+        dsr_cls = _load_deflated_sharpe()
+        if dsr_cls is not None and 'historical_prices' in market_data:
             try:
-                prices_dict = market_data['historical_prices']
+                raw_prices = market_data['historical_prices']
+                prices_dict = {}
+                for ticker, data in raw_prices.items():
+                    series = _coerce_close_series(data)
+                    if series is not None:
+                        prices_dict[ticker] = series
                 weights = {pos['ticker']: pos['market_value'] for pos in positions}
                 
                 # Calculate portfolio returns
                 portfolio_returns = self._calculate_portfolio_returns(prices_dict, weights)
                 
                 if len(portfolio_returns) >= 30:  # Need sufficient data
-                    dsr_calc = DeflatedSharpeRatio(n_trials=10)  # Assume 10 strategies tested
+                    dsr_calc = dsr_cls(n_trials=10)  # Assume 10 strategies tested
                     dsr_metrics = dsr_calc.calculate(portfolio_returns)
                     
                     prompt_parts.append("\n\n=== DEFLATED SHARPE RATIO ANALYSIS ===")
@@ -614,35 +676,38 @@ class TradingAgent:
     
     def _calculate_portfolio_returns(
         self,
-        prices_dict: Dict[str, pd.DataFrame],
+        prices_dict: Dict[str, object],
         weights: Dict[str, float]
     ) -> np.ndarray:
         """
         Calculate portfolio returns from individual asset prices and weights.
-        
+
         Args:
-            prices_dict: Dict of ticker -> DataFrame with price data
+            prices_dict: Dict of ticker -> price data; each entry may be a
+                Close-price Series or an OHLCV DataFrame (coerced via
+                _coerce_close_series so both prompt consumers accept the
+                same historical_prices dict)
             weights: Dict of ticker -> weight in portfolio
-        
+
         Returns:
             Array of portfolio daily returns
         """
         import pandas as pd
-        
+
         # Normalize weights to sum to 1
         total_weight = sum(weights.values())
         if total_weight == 0:
             return np.array([])
-        
+
         normalized_weights = {k: v / total_weight for k, v in weights.items()}
-        
+
         # Calculate returns for each asset
         returns_df = pd.DataFrame()
         for ticker, prices in prices_dict.items():
             if ticker in normalized_weights and normalized_weights[ticker] > 0:
-                if 'Close' in prices.columns:
-                    returns = prices['Close'].pct_change().dropna()
-                    returns_df[ticker] = returns
+                series = _coerce_close_series(prices)
+                if series is not None:
+                    returns_df[ticker] = series.pct_change().dropna()
         
         if returns_df.empty:
             return np.array([])
