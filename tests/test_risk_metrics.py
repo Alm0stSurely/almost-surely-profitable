@@ -358,6 +358,54 @@ def test_calculate_portfolio_risk_metrics_short_series():
     assert metrics.calmar_ratio == 0.0
 
 
+def test_calculate_portfolio_risk_metrics_misaligned_calendars():
+    """Mixed calendars (e.g. US vs EUR holidays) must not launder tail metrics.
+
+    The portfolio return series is built on the outer-joined index, so any
+    date where one held ticker lacks a return is NaN. Before the joint-valid
+    drop, every tail metric (VaR/CVaR/downside vol/Sortino/drawdowns) silently
+    collapsed to the 0.0 non-finite sentinel while std/skew/kurtosis skipped
+    the NaN rows — reading as "no tail risk" in the LLM prompt. Metrics must
+    instead be computed on the joint-valid subset, consistent with each other.
+    """
+    np.random.seed(42)
+    dates = pd.date_range("2024-01-01", periods=252, freq="B")
+    us_closed = pd.to_datetime(["2024-01-15", "2024-02-19", "2024-05-27"])
+    eur_closed = pd.DatetimeIndex(["2024-05-01", "2024-11-01"]).intersection(dates)
+
+    returns1 = np.random.normal(0.0005, 0.02, len(dates.difference(us_closed)))
+    returns2 = np.random.normal(0.0003, 0.015, len(dates.difference(eur_closed)))
+    prices1 = pd.Series(100 * (1 + returns1).cumprod(), index=dates.difference(us_closed))
+    prices2 = pd.Series(100 * (1 + returns2).cumprod(), index=dates.difference(eur_closed))
+    # Universe ticker not held in the portfolio whose extra dates must not
+    # extend the portfolio series.
+    extra_dates = dates.union(pd.to_datetime(["2024-07-04"]))
+    prices3 = pd.Series(100 * (1 + np.random.normal(0.0004, 0.01, len(extra_dates))).cumprod(),
+                        index=extra_dates)
+
+    metrics = calculate_portfolio_risk_metrics(
+        {"US": prices1, "EU": prices2, "UNIVERSE": prices3},
+        weights={"US": 0.6, "EU": 0.4},
+    )
+
+    # Joint-valid reference series
+    r1 = prices1.pct_change().dropna().rename("US")
+    r2 = prices2.pct_change().dropna().rename("EU")
+    aligned = pd.concat([r1, r2], axis=1, join="inner").dropna()
+    port = aligned["US"] * 0.6 + aligned["EU"] * 0.4
+
+    assert len(port) >= 30
+    # The whole point: tail metrics must not collapse to 0 while vol is positive.
+    assert metrics.var_95 < 0
+    assert metrics.cvar_95 <= metrics.var_95
+    assert metrics.downside_volatility > 0
+    assert metrics.sortino_ratio != 0.0
+    assert metrics.max_drawdown < 0
+    # Volatility (already skipna before the fix) must match the joint-valid
+    # subset exactly, proving all metrics now share one consistent basis.
+    assert _approx(metrics.volatility, port.std() * np.sqrt(252), rel_tol=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # LLM summary formatting
 # ---------------------------------------------------------------------------

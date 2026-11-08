@@ -298,6 +298,15 @@ def calculate_portfolio_risk_metrics(
         for ticker, weight in normalized_weights.items():
             if ticker in returns_df.columns:
                 portfolio_returns += returns_df[ticker] * weight
+
+        # Keep only the joint-valid subset. The outer join above leaves NaN on
+        # dates where any held ticker lacks a return (e.g. US vs EUR holiday
+        # calendars, differing history lengths). Without this drop, every tail
+        # metric (VaR/CVaR/downside vol/Sortino/drawdowns) silently collapses
+        # to the 0.0 non-finite sentinel while std/skew/kurtosis skip the NaN
+        # rows — an internally inconsistent block that reads as "no tail risk"
+        # in the LLM prompt. Blast radius stays at the malformed rows.
+        portfolio_returns = portfolio_returns[np.isfinite(portfolio_returns)]
     else:
         # Equal weighted if no weights provided
         returns_df = pd.DataFrame(returns_dict)
