@@ -9,7 +9,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -76,6 +76,50 @@ def _safe_value_str(value, spec: str = ".2f", prefix: str = "€", fallback: str
     if not _is_finite_number(value):
         return fallback
     return f"{prefix}{format(value, spec)}"
+
+
+def _date_aligned_portfolio_series(
+    assets: Dict[str, dict],
+    position_returns: Dict[str, np.ndarray],
+    portfolio_weights: Dict[str, float],
+) -> Optional[pd.Series]:
+    """Weighted portfolio return series aligned on the joint trading calendar.
+
+    The 'returns' producer (analyze_market_data) emits per-ticker returns as
+    a date-stripped dropna() list, so pairing those lists positionally pairs
+    day-i of one ticker with day-i of another even when the calendars diverge
+    (NYSE vs Euronext holidays in a mixed US/EUR book) — silently wrong
+    VaR/CVaR/tail and Sharpe/beta numbers reaching the LLM prompt. When every
+    held ticker has its indicator dataframe (the production contract), rebuild
+    each series WITH its DatetimeIndex, inner-join on dates valid for ALL
+    tickers, and weight-sum — the joint-valid doctrine already used by
+    calculate_portfolio_risk_metrics (2026-11-08) and
+    calculate_correlation_matrix (2026-07-03).
+
+    Returns the raw (cash-scaled) weighted portfolio series. Returns None
+    when any held ticker lacks a usable dataframe (legacy date-less contract,
+    e.g. unit-test mocks) so the caller falls back to the legacy positional
+    path. An empty Series means the calendars share no valid dates.
+    """
+    if not position_returns:
+        return None
+    frames = {}
+    for ticker in position_returns:
+        asset = assets.get(ticker) or {}
+        df = asset.get("dataframe")
+        if (
+            not isinstance(df, pd.DataFrame)
+            or "Daily_Return" not in df.columns
+            or df.empty
+            or not isinstance(df.index, pd.DatetimeIndex)
+        ):
+            return None
+        frames[ticker] = df["Daily_Return"].replace([np.inf, -np.inf], np.nan)
+    # pd.DataFrame(dict-of-Series) aligns on the UNION of indexes; dropna()
+    # then keeps only the dates valid for every ticker (inner join).
+    joined = pd.DataFrame(frames).dropna()
+    weights = pd.Series({t: portfolio_weights.get(t, 0.0) for t in joined.columns})
+    return joined.mul(weights, axis=1).sum(axis=1)
 
 
 def setup_directories():
@@ -363,15 +407,37 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
                     position['market_value'], total_value
                 )
     
+    # Date-aligned portfolio series — see the helper docstring. Computed once
+    # here and reused by the tail-risk (3.5) and performance (6.5) steps below.
+    aligned_series = _date_aligned_portfolio_series(
+        market_analysis['assets'], position_returns, portfolio_weights
+    )
+
     if position_returns and len(position_returns) > 0:
-        cvar_result = calculate_portfolio_cvar(position_returns, portfolio_weights)
-        
-        # Align returns for tail risk analysis (same min length)
-        min_len = min(len(r) for r in position_returns.values())
-        aligned_portfolio_returns = np.zeros(min_len)
-        for ticker, returns in position_returns.items():
-            weight = portfolio_weights.get(ticker, 0.0)
-            aligned_portfolio_returns += returns[-min_len:] * weight
+        if aligned_series is not None and len(aligned_series) > 0:
+            aligned_values = aligned_series.to_numpy(dtype=float)
+            # calculate_portfolio_cvar normalizes weights internally; the
+            # aligned series is already weight-summed, so divide by the
+            # invested fraction to preserve the legacy normalized-book
+            # semantics on correctly date-paired rows.
+            invested = float(sum(portfolio_weights.get(t, 0.0) for t in position_returns))
+            cvar_input = aligned_values / invested if invested > 0 else aligned_values
+            cvar_result = calculate_portfolio_cvar(
+                {'portfolio': cvar_input}, {'portfolio': 1.0}
+            )
+            # Tail risk keeps the legacy raw (cash-scaled) weighting.
+            aligned_portfolio_returns = aligned_values
+        else:
+            cvar_result = calculate_portfolio_cvar(position_returns, portfolio_weights)
+
+            # Legacy positional alignment (same min length); kept as the
+            # fallback for the date-less 'returns' contract (test mocks and
+            # any producer that omits the dataframe).
+            min_len = min(len(r) for r in position_returns.values())
+            aligned_portfolio_returns = np.zeros(min_len)
+            for ticker, returns in position_returns.items():
+                weight = portfolio_weights.get(ticker, 0.0)
+                aligned_portfolio_returns += returns[-min_len:] * weight
         
         tail_risk = tail_risk_analysis(
             aligned_portfolio_returns,
@@ -551,22 +617,44 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         spy_returns = position_returns['SPY']
     elif 'SPY' in market_analysis['assets'] and 'returns' in market_analysis['assets']['SPY']:
         spy_returns = np.array(market_analysis['assets']['SPY']['returns'])
-    
+
     # Calculate portfolio returns from position returns
-    portfolio_returns_list = []
+    portfolio_returns = None
     if position_returns:
-        # Align all return series to same length
-        min_len = min(len(r) for r in position_returns.values())
-        for i in range(min_len):
-            daily_return = sum(
-                position_returns[t][-min_len:][i] * portfolio_weights.get(t, 0)
-                for t in position_returns
-            )
-            portfolio_returns_list.append(daily_return)
-    
+        if aligned_series is not None and len(aligned_series) > 0:
+            # Date-aligned path (see _date_aligned_portfolio_series): the
+            # portfolio series is the raw weighted sum on the joint calendar.
+            portfolio_returns = aligned_series.to_numpy(dtype=float)
+            spy_frame = market_analysis['assets'].get('SPY', {}).get('dataframe')
+            if (
+                isinstance(spy_frame, pd.DataFrame)
+                and 'Daily_Return' in spy_frame.columns
+                and isinstance(spy_frame.index, pd.DatetimeIndex)
+            ):
+                spy_series = spy_frame['Daily_Return'].replace([np.inf, -np.inf], np.nan)
+                # Pairwise-valid doctrine (2026-11-08): keep only dates where
+                # BOTH series have finite values so every beta/alpha/
+                # information-ratio row is a true same-day pairing.
+                spy_aligned = spy_series.reindex(aligned_series.index)
+                spy_values = spy_aligned.to_numpy(dtype=float)
+                valid = np.isfinite(spy_values)
+                portfolio_returns = portfolio_returns[valid]
+                spy_returns = spy_values[valid]
+        else:
+            # Align all return series to same length
+            min_len = min(len(r) for r in position_returns.values())
+            portfolio_returns_list = []
+            for i in range(min_len):
+                daily_return = sum(
+                    position_returns[t][-min_len:][i] * portfolio_weights.get(t, 0)
+                    for t in position_returns
+                )
+                portfolio_returns_list.append(daily_return)
+            if portfolio_returns_list:
+                portfolio_returns = np.array(portfolio_returns_list)
+
     performance_metrics = None
-    if portfolio_returns_list:
-        portfolio_returns = np.array(portfolio_returns_list)
+    if portfolio_returns is not None and len(portfolio_returns) > 0:
         perf_metrics = calculate_all_metrics(
             portfolio_returns,
             benchmark_returns=spy_returns,
