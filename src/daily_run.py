@@ -36,7 +36,13 @@ from llm.shadow_decisions import (
 )
 from portfolio.portfolio import Portfolio
 from risk.cvar import calculate_portfolio_cvar, tail_risk_analysis
-from risk.performance_metrics import calculate_all_metrics, format_metrics_report
+from risk.performance_metrics import (
+    calculate_all_metrics,
+    calculate_beta_alpha,
+    calculate_information_ratio,
+    calculate_treynor_ratio,
+    format_metrics_report,
+)
 from risk.position_cooldown import CooldownConfig, PositionCooldownManager
 from utils import _is_finite_number, dump_json_safe
 
@@ -120,6 +126,152 @@ def _date_aligned_portfolio_series(
     joined = pd.DataFrame(frames).dropna()
     weights = pd.Series({t: portfolio_weights.get(t, 0.0) for t in joined.columns})
     return joined.mul(weights, axis=1).sum(axis=1)
+
+
+def _load_strategy_value_series(results_dir: Path) -> Optional[pd.Series]:
+    """Since-inception end-of-day strategy value series from the daily result JSONs.
+
+    Every results/daily/<date>.json carries portfolio_after.total_value — the
+    end-of-day mark of the book. Relative performance metrics (beta/alpha vs
+    SPY) need a return series long enough to satisfy the n>=30 guards in
+    risk.performance_metrics, and the nightly 30-calendar-day fetch window
+    only yields ~22 trading days — which kept every relative metric silently
+    None since inception (2026-11-10). The persisted daily values reach back
+    to 2026-02-17 (~190 sessions), so the guards are satisfiable here.
+
+    Read-only and loud: unparseable files are reported and left byte-intact
+    (quarantine is for ledgers this pipeline rewrites; history is evidence).
+    Duplicate dates resolve to the record with the later timestamp (reruns).
+
+    Returns a date-indexed Series sorted ascending, or None when fewer than
+    two usable marks exist.
+    """
+    records: Dict[str, tuple] = {}  # date -> (timestamp str, total_value)
+    skipped = []
+    for path in sorted(results_dir.glob("*.json")):
+        if path.name.endswith("_dry_run.json"):
+            continue
+        try:
+            with open(path) as f:
+                record = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            skipped.append(f"{path.name}: unparseable ({exc})")
+            continue
+        date_str = record.get("date")
+        total_value = (record.get("portfolio_after") or {}).get("total_value")
+        if (
+            not isinstance(date_str, str)
+            or not _is_finite_number(total_value)
+            or total_value <= 0
+        ):
+            skipped.append(f"{path.name}: missing date or non-finite total_value")
+            continue
+        ts = str(record.get("timestamp") or "")
+        prev = records.get(date_str)
+        if prev is None or ts >= prev[0]:
+            records[date_str] = (ts, float(total_value))
+    if skipped:
+        shown = "; ".join(skipped[:3])
+        more = f"; ... (+{len(skipped) - 3} more)" if len(skipped) > 3 else ""
+        print(f"  ⚠ strategy value series: skipped {len(skipped)} file(s): {shown}{more}")
+    if len(records) < 2:
+        return None
+    series = pd.Series(
+        {pd.Timestamp(d): v for d, (_, v) in records.items()}
+    ).sort_index()
+    series.index = pd.DatetimeIndex(series.index).tz_localize(None).normalize()
+    return series
+
+
+def _relative_metrics_since_inception(
+    strategy_values: Optional[pd.Series],
+    risk_free_rate: float = 0.02,
+) -> Dict[str, Optional[float]]:
+    """Beta/alpha/Treynor/information-ratio/tracking-error vs SPY on the
+    since-inception window.
+
+    The nightly fetch window (30 calendar days ≈ 22 sessions) can never
+    satisfy the n>=30 guards in calculate_beta_alpha /
+    calculate_information_ratio, so the 6.5 relative block was dead in
+    production: beta/alpha/treynor/information_ratio/tracking_error persisted
+    as null in every daily JSON since inception. This helper computes them on
+    the since-inception value series instead — the window a human would use.
+    Absolute metrics deliberately stay on the nightly window (regime
+    continuity of the Sharpe/CVaR time series); only the relative ones move.
+
+    Returns the five relative-metric keys plus 'relative_metrics_window_days'
+    (the joint SPY/strategy sample size actually used). Every metric is None
+    when the window cannot define it — the same None contract
+    calculate_all_metrics already used, so downstream consumers are
+    unaffected by the switch.
+    """
+    none_result = {
+        "beta": None,
+        "alpha": None,
+        "treynor_ratio": None,
+        "information_ratio": None,
+        "tracking_error": None,
+        "relative_metrics_window_days": None,
+    }
+    if strategy_values is None or len(strategy_values) < 2:
+        return none_result
+    strategy_returns = strategy_values.pct_change().dropna()
+    if len(strategy_returns) < 30:
+        print(
+            f"  ⚠ relative metrics: only {len(strategy_returns)} sessions since "
+            f"inception (< 30) — beta/alpha undefined"
+        )
+        return {**none_result, "relative_metrics_window_days": int(len(strategy_returns))}
+
+    inception = strategy_values.index.min()
+    span_days = (pd.Timestamp.now().normalize() - inception).days + 10
+    try:
+        spy_raw = fetch_historical_data(["SPY"], period=f"{span_days}d")
+    except Exception as exc:
+        print(f"  ⚠ relative metrics: SPY history fetch failed ({exc})")
+        return none_result
+    spy_frame = spy_raw.get("SPY") if spy_raw else None
+    if (
+        not isinstance(spy_frame, pd.DataFrame)
+        or "Close" not in spy_frame.columns
+        or spy_frame.empty
+        or not isinstance(spy_frame.index, pd.DatetimeIndex)
+    ):
+        print("  ⚠ relative metrics: SPY history unavailable/missing Close — beta/alpha undefined")
+        return none_result
+
+    spy_close = spy_frame["Close"].replace([np.inf, -np.inf], np.nan)
+    spy_returns = spy_close.pct_change()
+    spy_returns.index = pd.DatetimeIndex(spy_returns.index).tz_localize(None).normalize()
+    # Joint calendar (2026-07-03 doctrine): same-date pairings only.
+    joint = pd.DataFrame({
+        "strategy": strategy_returns,
+        "spy": spy_returns.reindex(strategy_returns.index),
+    }).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(joint) < 30:
+        print(
+            f"  ⚠ relative metrics: joint SPY/strategy window has {len(joint)} "
+            f"sessions (< 30) — beta/alpha undefined"
+        )
+        return {**none_result, "relative_metrics_window_days": int(len(joint))}
+
+    port = joint["strategy"].to_numpy(dtype=float)
+    bench = joint["spy"].to_numpy(dtype=float)
+    beta, alpha = calculate_beta_alpha(port, bench, risk_free_rate)
+    treynor = (
+        calculate_treynor_ratio(port, beta, risk_free_rate)
+        if beta is not None
+        else None
+    )
+    info_ratio, tracking_err = calculate_information_ratio(port, bench)
+    return {
+        "beta": beta,
+        "alpha": alpha,
+        "treynor_ratio": treynor,
+        "information_ratio": info_ratio,
+        "tracking_error": tracking_err,
+        "relative_metrics_window_days": int(len(joint)),
+    }
 
 
 def setup_directories():
@@ -610,13 +762,6 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     
     # Step 6.5: Calculating performance metrics (Sharpe, Beta, Alpha)
     print("\n[6.5/7] Calculating performance metrics...")
-    
-    # Get SPY as benchmark for Beta/Alpha calculation
-    spy_returns = None
-    if 'SPY' in position_returns:
-        spy_returns = position_returns['SPY']
-    elif 'SPY' in market_analysis['assets'] and 'returns' in market_analysis['assets']['SPY']:
-        spy_returns = np.array(market_analysis['assets']['SPY']['returns'])
 
     # Calculate portfolio returns from position returns
     portfolio_returns = None
@@ -624,22 +769,12 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         if aligned_series is not None and len(aligned_series) > 0:
             # Date-aligned path (see _date_aligned_portfolio_series): the
             # portfolio series is the raw weighted sum on the joint calendar.
+            # The previous SPY pairwise mask only existed to pair rows for
+            # beta/alpha; relative metrics now run on the since-inception
+            # window (see _relative_metrics_since_inception), so the absolute
+            # metrics keep the FULL joint series — consistent with the 3.5
+            # risk block.
             portfolio_returns = aligned_series.to_numpy(dtype=float)
-            spy_frame = market_analysis['assets'].get('SPY', {}).get('dataframe')
-            if (
-                isinstance(spy_frame, pd.DataFrame)
-                and 'Daily_Return' in spy_frame.columns
-                and isinstance(spy_frame.index, pd.DatetimeIndex)
-            ):
-                spy_series = spy_frame['Daily_Return'].replace([np.inf, -np.inf], np.nan)
-                # Pairwise-valid doctrine (2026-11-08): keep only dates where
-                # BOTH series have finite values so every beta/alpha/
-                # information-ratio row is a true same-day pairing.
-                spy_aligned = spy_series.reindex(aligned_series.index)
-                spy_values = spy_aligned.to_numpy(dtype=float)
-                valid = np.isfinite(spy_values)
-                portfolio_returns = portfolio_returns[valid]
-                spy_returns = spy_values[valid]
         else:
             # Align all return series to same length
             min_len = min(len(r) for r in position_returns.values())
@@ -655,12 +790,16 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
 
     performance_metrics = None
     if portfolio_returns is not None and len(portfolio_returns) > 0:
+        # Absolute metrics on the nightly window. benchmark_returns is None:
+        # the 30-calendar-day fetch yields ~22 sessions, which can never
+        # satisfy the n>=30 guards of the relative estimators — feeding SPY
+        # here produced beta=None silently every single day since inception.
+        # The relative metrics are computed below on the since-inception
+        # window, where the guards are actually satisfiable.
         perf_metrics = calculate_all_metrics(
-            portfolio_returns,
-            benchmark_returns=spy_returns,
-            risk_free_rate=0.02
+            portfolio_returns, benchmark_returns=None, risk_free_rate=0.02
         )
-        
+
         performance_metrics = {
             'sharpe_ratio': perf_metrics.sharpe_ratio,
             'sortino_ratio': perf_metrics.sortino_ratio,
@@ -674,11 +813,22 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
             'max_drawdown': perf_metrics.max_drawdown,
             'annualized_return': perf_metrics.annualized_return
         }
-        
+
+        # Relative metrics (beta/alpha/Treynor/IR/tracking-error vs SPY) on
+        # the since-inception window — the only window where the n>=30
+        # estimator guards can be satisfied in production.
+        relative = _relative_metrics_since_inception(
+            _load_strategy_value_series(DAILY_RESULTS_DIR), risk_free_rate=0.02
+        )
+        performance_metrics.update(relative)
+
         print(f"  Sharpe Ratio: {_safe_value_str(perf_metrics.sharpe_ratio, '.2f', prefix='', fallback='n/a')}")
-        if perf_metrics.beta is not None:
-            print(f"  Beta (vs SPY): {_safe_value_str(perf_metrics.beta, '.2f', prefix='', fallback='n/a')}")
-            print(f"  Alpha: {_safe_pct_str(perf_metrics.alpha)}")
+        if performance_metrics['beta'] is not None:
+            print(f"  Beta (vs SPY, since inception): {_safe_value_str(performance_metrics['beta'], '.2f', prefix='', fallback='n/a')}")
+            print(f"  Alpha: {_safe_pct_str(performance_metrics['alpha'])}")
+            print(f"  Information Ratio: {_safe_value_str(performance_metrics['information_ratio'], '.2f', prefix='', fallback='n/a')}")
+            print(f"  Tracking Error: {_safe_pct_str(performance_metrics['tracking_error'])}")
+            print(f"  Relative-metrics window: {performance_metrics['relative_metrics_window_days']} sessions")
         print(f"  Volatility: {_safe_pct_str(perf_metrics.volatility)}")
     
     # Step 7: Log results

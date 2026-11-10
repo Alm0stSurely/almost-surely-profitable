@@ -114,7 +114,7 @@ def _run_pipeline(tmp_path, monkeypatch, market_analysis, market_data, positions
     risk numbers are asserted end-to-end.  Returns (mock_agent, calc_mock).
     """
     results_dir = tmp_path / "results" / "daily"
-    results_dir.mkdir(parents=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     monkeypatch.chdir(tmp_path)
@@ -368,8 +368,13 @@ class TestDateAlignedRiskReachesLLM:
         )
         assert risk_metrics["cvar_95"] == pytest.approx(legacy_cvar.cvar_95, abs=1e-12)
 
-    def test_performance_metrics_receive_date_paired_benchmark(self, tmp_path, monkeypatch):
-        """Benchmark masking: SPY not held, misses one joint-calendar day."""
+    def test_performance_metrics_use_full_joint_series_no_benchmark(self, tmp_path, monkeypatch):
+        """Relative metrics moved off the nightly window (2026-11-10): the
+        ~22-session fetch can never satisfy the estimators' n>=30 guards, so
+        calculate_all_metrics must receive NO benchmark here, and the
+        absolute metrics must keep the FULL joint series — the SPY pairwise
+        mask that used to drop SPY-missing days only existed for beta/alpha
+        pairing and is gone with them."""
         weights = {"TLT": 0.45, "MC.PA": 0.45}
         positions = [
             {"ticker": "TLT", "quantity": 45.0, "avg_price": 100.0,
@@ -399,14 +404,10 @@ class TestDateAlignedRiskReachesLLM:
         expected_aligned, joint_index = _expected_aligned(
             {"TLT": TLT_FRAME, "MC.PA": PA_FRAME}, weights
         )
-        # SPY misses one day of the joint calendar -> pairwise-valid mask drops it.
+        # SPY misses one day of the joint calendar — with the benchmark gone
+        # from this path, that day must STAY in the absolute-metrics series
+        # (full joint calendar, consistent with the 3.5 risk block).
         assert SPY_BENCH_MISSING in joint_index
-        spy_series = SPY_BENCH_FRAME["Daily_Return"].reindex(joint_index)
-        valid = np.isfinite(spy_series.to_numpy(dtype=float))
-        expected_portfolio = expected_aligned[valid]
-        expected_benchmark = spy_series.to_numpy(dtype=float)[valid]
-
-        assert len(expected_portfolio) == len(joint_index) - 1
-        np.testing.assert_allclose(portfolio_arg, expected_portfolio)
-        np.testing.assert_allclose(benchmark_arg, expected_benchmark)
-        assert np.isfinite(benchmark_arg).all()
+        assert benchmark_arg is None
+        np.testing.assert_allclose(portfolio_arg, expected_aligned)
+        assert len(portfolio_arg) == len(joint_index)
