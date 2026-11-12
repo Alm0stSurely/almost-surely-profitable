@@ -1,0 +1,32 @@
+======================================================================
+CASH LEVEL vs NEXT-DAY ALPHA CORRELATION
+Generated: 2026-11-12 22:32:30
+======================================================================
+
+Valid daily results: 159
+Paired observations (day J -> alpha J+1): 97
+
+Alpha is the daily strategy return minus the live equal-weight
+benchmark return, in percentage points.
+
+Mean cash share (J)     : 29.7%
+Mean next-day alpha     : +0.01 pp
+Pearson r               : +0.042
+Spearman rho            : +0.076
+
+----------------------------------------------------------------------
+Binned by cash share on day J:
+Band        Days   Mean alpha J+1   Win vs bench
+----------------------------------------------------------------------
+< 15%          0              n/a            n/a
+15-30%        72           -0.02 pp         48.6%
+30-50%        19           +0.10 pp         52.6%
+>= 50%         6           -0.01 pp         50.0%
+
+Interpretation:
+- Negative correlation -> high cash forfeits next-day upside
+  (cash drag is costly). Tighten redeploy language in prompt.
+- Positive correlation -> cash cushions next-day drawdowns
+  (defensive ballast). Current cash target may be justified.
+- |r| < 0.1 -> cash level does not predict next-day alpha;
+  the drag shows up at longer horizons or only on rally days.

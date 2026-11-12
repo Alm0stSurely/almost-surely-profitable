@@ -4,6 +4,23 @@ Leçons apprises du projet de trading LLM-powered.
 
 ---
 
+## 2026-11-12 — Conflit cash-band vs budget hebdo épuisé (tension de design, pas un bug)
+
+**Contexte** : GLD sorti par stop-loss le jeudi 12/11 à 14:35 UTC (3e trade de la semaine → cap hebdo 3/3 épuisé). Le pipeline du soir (21:07 UTC) trouve cash = 37.9% > bande haute NORMAL 30% → mandat de déploiement du cash, mais le cap interdit tout trade discrétionnaire. Le LLM a explicitement reconnu le conflit et décidé HOLD ×8. 21e "cap-binding day" du projet (cash_drag_20261112.txt).
+
+**Erreur** : Pas une erreur d'exécution — une tension de design non résolue : une sortie stop (mécanique, souhaitable) peut consommer le dernier slot et bloquer le mandat de déploiement du cash jusqu'au reset hebdo (lundi). Le cash reste >30% pendant 1-4 jours sans action possible. Le compte-rendu du 11/11 avait promis ce log ; il n'avait pas encore été fait.
+
+**Cause** : Deux guardrails de même priorité dans le prompt, sans clause d'arbitrage : (1) "déployer le cash au-dessus de la bande haute", (2) "cap hebdo 3/3 strict". La sortie stop est autorisée en override mais consomme quand même un slot.
+
+**Fix** : Aucun pour l'instant — documenté et observé. L'expérience H4/shadow (midband_deployment) en cours interdit toute modification du SYSTEM_PROMPT (prompt A/B hygiene, règle 5). Réévaluation après adjudication de l'expérience. Candidats d'arbitrage envisagés pour plus tard : slot d'urgence de rééquilibrage cash, ou exemption des sorties stop du compte cap (mais attention à l'asymétrie : exempté du cap = incitation à sur-trader les stops).
+
+**Règle** :
+- Ne jamais modifier les règles de priorité du prompt pendant un A/B en cours ; logger le conflit ici et attendre l'adjudication
+- Quand deux guardrails produisent un conflit, produire un artefact mesurable (cash_drag_report distingue déjà "drag days" vs "cap-binding days") avant toute patch
+- Métrique de suivi : jours "cap-binding" consécutifs avec cash > bande haute
+
+---
+
 ## 2026-09-28 — Prompt-literal assertions must not span line breaks
 
 **Contexte** : Ajout d'une clause anti-drift au STOP-OVERRIDE POLICY dans le literal `SYSTEM_PROMPT` (texte wrappé sur plusieurs lignes avec indentation), plus une assertion `assert "<phrase complète>" in SYSTEM_PROMPT` dans `test_system_prompt_exists`.
