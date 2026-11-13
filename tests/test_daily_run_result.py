@@ -46,7 +46,10 @@ def _patch_pipeline(tmp_path, monkeypatch, fixed_date: datetime, include_risk_me
 
     monkeypatch.chdir(tmp_path)
 
-    dates = pd.date_range("2026-07-01", periods=3, freq="B")
+    # Bars end ON the pinned clock date so the feed-freshness gate sees a
+    # healthy feed (last bar's session == the session required at now); the
+    # persistence semantics under test here assume a normal decision path.
+    dates = pd.date_range("2026-07-10", periods=3, freq="B")
     mock_market_data = {
         "SPY": pd.DataFrame({"Close": [100.0, 101.0, 102.0]}, index=dates)
     }

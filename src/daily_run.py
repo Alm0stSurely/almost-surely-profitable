@@ -27,6 +27,7 @@ from data.fetch_market_data import (
     fetch_historical_data,
 )
 from data.indicators import analyze_market_data
+from data.feed_freshness import classify_daily_frames
 from llm.trading_agent import TradingAgent
 from llm.shadow_decisions import (
     DEFAULT_SHADOW_LOG_NAME,
@@ -465,7 +466,23 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         for ticker, df in market_data_raw.items()
         if isinstance(df, pd.DataFrame) and 'Close' in df.columns and not df.empty
     }
-    
+
+    # Step 2a: Feed freshness classification (shared with the intraday
+    # monitor via data.feed_freshness). A stale or missing feed must not
+    # reach the decision layer: the 2026-11-05 incident taught that a price
+    # is only as trustworthy as the bar behind it, and the morning sessions
+    # of 2026-11-09..13 showed the pattern recurring ("possibly delisted"
+    # fetch errors freezing the Paris universe). The monitor guarded itself
+    # in November 2026; this gate closes the pipeline side of the gap —
+    # "le guard protège le monitor, pas le pipeline". Note the stale detail
+    # stays OUT of market_analysis on purpose: the LLM prompt is under A/B
+    # hygiene (H4 rule 5), so the gate acts on the decision layer only.
+    stale_feed = classify_daily_frames(ALL_TICKERS, market_data_raw, datetime.now())
+    if stale_feed:
+        print(f"  ⚠ STALE FEED: {len(stale_feed)} ticker(s) missing or stale:")
+        for ticker, reason in sorted(stale_feed.items()):
+            print(f"      {ticker}: {reason}")
+
     # Step 2.5: Market Regime Analysis
     print("\n[2.5/7] Analyzing market regime...")
     try:
@@ -537,7 +554,20 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         print(f"  Active entries: {', '.join(cooldown_status['active_entries'].keys())}")
     
     portfolio.print_summary()
-    
+
+    # Stale-feed gate (see Step 2a): a trade is an action on a position, and
+    # a position whose feed is stale or missing makes any action on it
+    # uninformed — including a "stop breach" computed on a frozen close,
+    # which is precisely the false signal the 2026-11-05 incident produced.
+    # Non-position stale tickers banner above but never gate: the decision
+    # does not act on them. Marks themselves stay protected the monitor's
+    # way — fetch-level None prices are already skipped by
+    # Portfolio.update_prices, so stale references are never overwritten.
+    stale_gate_tickers = sorted(set(stale_feed) & set(portfolio.positions.keys()))
+    if stale_gate_tickers:
+        print(f"\n  ⛔ STALE-FEED GATE: held position(s) {', '.join(stale_gate_tickers)}")
+        print("     have a stale or missing feed — forcing HOLD (LLM not consulted).")
+
     # Calculate portfolio risk metrics (CVaR)
     print("\n[3.5/7] Calculating risk metrics (CVaR)...")
     portfolio_summary = portfolio.get_summary()
@@ -617,13 +647,28 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         }
     
     # Step 4: Get LLM decision
-    print("\n[4/7] Getting trading decision from LLM...")
-    agent = TradingAgent(history_file=str(DATA_DIR / "decision_history.json"))
-    # portfolio_summary already contains current prices and the risk_metrics we
-    # just computed; do not re-fetch it here or the LLM will lose the CVaR/VaR
-    # context.
-    
-    decision = agent.get_trading_decision(market_analysis, portfolio_summary, cooldown_status=cooldown_status)
+    if stale_gate_tickers:
+        # Forced HOLD: stale prices must not influence ANY action, so the
+        # LLM is not consulted at all (rather than asked and overruled).
+        decision = {
+            'reasoning': (
+                f"STALE FEED — forced HOLD: the feed for held position(s) "
+                f"{', '.join(stale_gate_tickers)} is stale or missing, so any "
+                f"action would be decided on prices that miss required trading "
+                f"sessions (feed-freshness gate, incident doctrine 2026-11-05)."
+            ),
+            'actions': [],
+            'error': False,
+        }
+        print("\n[4/7] Trading decision: SKIPPED — stale-feed gate (forced HOLD)")
+    else:
+        print("\n[4/7] Getting trading decision from LLM...")
+        agent = TradingAgent(history_file=str(DATA_DIR / "decision_history.json"))
+        # portfolio_summary already contains current prices and the risk_metrics we
+        # just computed; do not re-fetch it here or the LLM will lose the CVaR/VaR
+        # context.
+
+        decision = agent.get_trading_decision(market_analysis, portfolio_summary, cooldown_status=cooldown_status)
     
     print(f"\n  Reasoning: {decision['reasoning'][:200]}...")
     print(f"  Actions: {len(decision['actions'])}")
@@ -631,8 +676,10 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     # Step 4b: H4 shadow arm — run the mid-band-deployment variant prompt in
     # dry-run alongside the live decision and log the hypothetical outcome.
     # Best-effort: never aborts the pipeline; skipped in dry-run so tests do
-    # not burn LLM API calls. See docs/experiments/2026-10-16-prompt-midband-deployment.md
-    if not dry_run:
+    # not burn LLM API calls; skipped when the stale-feed gate forced HOLD —
+    # a hypothetical logged on poisoned prices would pollute the experiment.
+    # See docs/experiments/2026-10-16-prompt-midband-deployment.md
+    if not dry_run and not stale_gate_tickers:
         _maybe_run_shadow_arm(
             agent=agent,
             market_analysis=market_analysis,
@@ -840,6 +887,11 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         'date': datetime.now().strftime('%Y-%m-%d'),
         'timestamp': datetime.now().isoformat(),
         'dry_run': dry_run,
+        'stale_feed': {
+            'stale_tickers': stale_feed,
+            'gate_active': bool(stale_gate_tickers),
+            'gate_tickers': stale_gate_tickers,
+        },
         'market_summary': {
             'assets_analyzed': len(market_analysis['assets']),
             'analysis_date': market_analysis['analysis_date']
