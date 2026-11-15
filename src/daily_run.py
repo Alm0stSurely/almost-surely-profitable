@@ -24,10 +24,11 @@ from benchmark import LiveEqualWeightBenchmark
 from data.fetch_market_data import (
     ALL_TICKERS,
     fetch_current_prices,
+    fetch_current_quotes,
     fetch_historical_data,
 )
 from data.indicators import analyze_market_data
-from data.feed_freshness import classify_daily_frames
+from data.feed_freshness import classify_daily_frames, split_fresh_and_stale
 from llm.trading_agent import TradingAgent
 from llm.shadow_decisions import (
     DEFAULT_SHADOW_LOG_NAME,
@@ -430,6 +431,34 @@ def _build_prices_df(market_data_raw: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(close_series)
 
 
+def _refresh_position_marks(portfolio, now: datetime) -> dict[str, float]:
+    """Update position marks from current quotes, freshness-classified.
+
+    Through the quote freshness classifier, not the bare-price helper: a
+    stale-but-served close (the 2026-11-05 incident shape) is finite and
+    positive, passes every guard in ``Portfolio.update_prices``, and would
+    be persisted by the caller's ``save_state()`` as the position's mark —
+    poisoning tomorrow's deltas, weights, and stop checks with a frozen
+    reference, exactly the way the monitor incident poisoned its next run.
+    The ``is_feed_stale`` contract is explicit: the caller must not
+    overwrite the saved reference with a stale bar. Fresh prices win;
+    stale tickers keep their last fresh mark (monitor doctrine,
+    monitor.py:807-810). The decision-side gate (Step 2a) classifies daily
+    frames; this guards the persistence side.
+
+    Returns the fresh-price mapping actually applied, so the caller's
+    execution step prices orders from the same classified feed (a stale
+    close must not price an order either).
+    """
+    quotes = fetch_current_quotes(list(portfolio.positions.keys()), max_workers=4)
+    fresh_prices, stale_tickers = split_fresh_and_stale(quotes, now)
+    if stale_tickers:
+        print(f"  ⚠ STALE QUOTE: {len(stale_tickers)} position(s) keeping "
+              f"their last fresh mark: {sorted(stale_tickers)}")
+    portfolio.update_prices(fresh_prices)
+    return fresh_prices
+
+
 def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     """
     Execute the complete daily trading pipeline.
@@ -522,9 +551,10 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     print("\n[3/7] Loading portfolio...")
     portfolio = Portfolio(data_dir=str(DATA_DIR))
     
-    # Update current prices in portfolio
-    current_prices = fetch_current_prices(list(portfolio.positions.keys()), max_workers=4)
-    portfolio.update_prices(current_prices)
+    # Update current prices in portfolio (freshness-classified; see helper).
+    # The returned fresh-price mapping also feeds the Step-5 execution
+    # pricing, so an order can never be priced from a stale close.
+    current_prices = _refresh_position_marks(portfolio, datetime.now())
     # In dry-run mode we still mark positions to market for the current
     # decision, but we must not persist the updated state to disk.
     if not dry_run:
