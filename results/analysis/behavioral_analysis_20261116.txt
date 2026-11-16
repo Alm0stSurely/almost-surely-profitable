@@ -1,0 +1,89 @@
+============================================================
+BEHAVIORAL ANALYSIS OF LLM DECISIONS
+Generated: 2026-11-16 22:33:11
+============================================================
+
+SAMPLE OVERVIEW
+Total decisions: 158
+Valid decisions: 150
+Errors: 8 (5.1%)
+
+ERROR RATE EVOLUTION
+2026-03:   1/  1 errors (100.0%)
+2026-04:   0/ 26 errors (  0.0%)
+2026-05:   4/ 14 errors ( 28.6%)
+2026-06:   3/ 15 errors ( 20.0%)
+2026-07:   0/ 24 errors (  0.0%)
+2026-08:   0/ 23 errors (  0.0%)
+2026-09:   0/ 22 errors (  0.0%)
+2026-10:   0/ 22 errors (  0.0%)
+2026-11:   0/ 11 errors (  0.0%)
+
+ERROR RATE BY DAY OF WEEK
+Monday    :   4/ 28 errors ( 14.3%)
+Tuesday   :   1/ 26 errors (  3.8%)
+Wednesday :   0/ 24 errors (  0.0%)
+Thursday  :   1/ 34 errors (  2.9%)
+Friday    :   2/ 36 errors (  5.6%)
+Saturday  :   0/  2 errors (  0.0%)
+Sunday    :   0/  8 errors (  0.0%)
+
+ACTION DISTRIBUTION
+Total actions: 1019 (6.8 per decision)
+hold  :  952 ( 93.4% of actions)
+buy   :   51 (  5.0% of actions)
+sell  :   16 (  1.6% of actions)
+
+BEHAVIORAL KEYWORD FREQUENCY
+regime              :  119 ( 79.3%)
+drawdown            :  107 ( 71.3%)
+stop-loss           :  107 ( 71.3%)
+loss aversion       :   93 ( 62.0%)
+momentum            :   92 ( 61.3%)
+mean reversion      :   88 ( 58.7%)
+CVaR                :   84 ( 56.0%)
+tail risk           :   62 ( 41.3%)
+deflated sharpe     :   62 ( 41.3%)
+overbought          :   61 ( 40.7%)
+oversold            :   59 ( 39.3%)
+cash band           :   59 ( 39.3%)
+diversification     :   56 ( 37.3%)
+correlation         :   55 ( 36.7%)
+trade cap           :   49 ( 32.7%)
+cash buffer         :   46 ( 30.7%)
+cooldown            :   30 ( 20.0%)
+let winners run     :   21 ( 14.0%)
+
+CASH LEVELS (recent 20 daily results)
+Date           Cash %  Positions   Total Return  Trades
+2026-10-20       30.2          9          -2.29       2
+2026-10-21       30.1          9          -2.10       0
+2026-10-22       30.1          9          -2.08       0
+2026-10-23       30.2          9          -2.27       0
+2026-10-26       25.6         10          -1.98       1
+2026-10-27       25.5         10          -1.84       0
+2026-10-28       25.6         10          -2.03       0
+2026-10-29       28.2         10          -1.60       0
+2026-10-30       29.2         10          -1.85       0
+2026-11-02       34.8          8          -1.75       2
+2026-11-03       27.8          9          -1.72       1
+2026-11-04       27.5          9          -0.71       0
+2026-11-05       27.9          9          -1.86       0
+2026-11-06       34.6          8          -2.25       0
+2026-11-09       20.6          9          -1.53       1
+2026-11-10       24.7          9          -2.11       0
+2026-11-11       24.7          9          -1.92       0
+2026-11-12       37.9          8          -2.50       0
+2026-11-13       37.9          8          -2.67       0
+2026-11-16       21.5         10          -3.17       2
+
+CHURN / ROUND-TRIP ANALYSIS
+Round trips: 44
+Win rate: 29.5%
+Avg hold period: 53.1 days
+Short holds (≤3d): 4, win rate 0.0%
+Medium holds (4-14d): 13, win rate 15.4%
+Long holds (>14d): 27, win rate 40.7%
+Annualized turnover: 219 trades/year
+
+============================================================
