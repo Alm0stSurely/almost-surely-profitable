@@ -251,6 +251,10 @@ def _patch_pipeline(tmp_path, monkeypatch, market_data, position_tickers,
         "fetch_historical_data": MagicMock(return_value=market_data),
         "analyze_market_data": MagicMock(return_value=market_analysis),
         "fetch_current_prices": MagicMock(return_value={}),
+        # Step 3 now fetches QUOTES (price + last_bar_ts) and classifies
+        # them; default to nothing served so the mock portfolio's (empty)
+        # mark update is a no-op unless a test injects quotes.
+        "fetch_current_quotes": MagicMock(return_value={}),
         "Portfolio": MagicMock(return_value=mock_portfolio),
         "TradingAgent": MagicMock(return_value=mock_agent),
         "PositionCooldownManager": MagicMock(return_value=mock_cooldown_mgr),
@@ -266,11 +270,16 @@ def _patch_pipeline(tmp_path, monkeypatch, market_data, position_tickers,
 
     import daily_run
     for name, value in patches.items():
+        if name == "fetch_current_quotes" and not hasattr(daily_run, name):
+            # Pre-fix pipeline: the quote path does not exist (Step 3 used
+            # fetch_current_prices); skip so the original gate tests keep
+            # passing on old code (PR #84 lazy-contract doctrine).
+            continue
         monkeypatch.setattr(daily_run, name, value)
 
     mock_shadow = MagicMock()
     monkeypatch.setattr(daily_run, "run_shadow_arm", mock_shadow)
-    return mock_agent, mock_shadow, results_dir
+    return mock_agent, mock_shadow, results_dir, mock_portfolio
 
 
 def _load_result(results_dir):
@@ -286,7 +295,7 @@ class TestStaleFeedGate:
     }
 
     def test_fresh_feed_asks_llm_and_no_gate(self, tmp_path, monkeypatch):
-        mock_agent, mock_shadow, results_dir = _patch_pipeline(
+        mock_agent, _shadow, results_dir, _pf = _patch_pipeline(
             tmp_path, monkeypatch, dict(self.FRESH_FRIDAY), ["SPY"]
         )
         run_daily_pipeline(dry_run=True)
@@ -298,7 +307,7 @@ class TestStaleFeedGate:
     def test_stale_position_frame_forces_hold_and_skips_llm(self, tmp_path, monkeypatch):
         market_data = dict(self.FRESH_FRIDAY)
         market_data["SPY"] = _frame("2026-11-11 05:00")  # session Wed, run is Fri
-        mock_agent, mock_shadow, results_dir = _patch_pipeline(
+        mock_agent, mock_shadow, results_dir, _pf = _patch_pipeline(
             tmp_path, monkeypatch, market_data, ["SPY"]
         )
         run_daily_pipeline(dry_run=True)
@@ -314,7 +323,7 @@ class TestStaleFeedGate:
     def test_missing_position_frame_forces_hold(self, tmp_path, monkeypatch):
         # The live incident signature: "possibly delisted" -> no frame at all.
         market_data = {"AI.PA": self.FRESH_FRIDAY["AI.PA"]}  # SPY absent
-        mock_agent, _, results_dir = _patch_pipeline(
+        mock_agent, _, results_dir, _pf = _patch_pipeline(
             tmp_path, monkeypatch, market_data, ["SPY"],
             expected_tickers=["SPY", "AI.PA"],
         )
@@ -330,7 +339,7 @@ class TestStaleFeedGate:
             "SPY": self.FRESH_FRIDAY["SPY"],
             "AI.PA": _frame("2026-11-11 23:00"),  # frozen since Wed close
         }
-        mock_agent, _, results_dir = _patch_pipeline(
+        mock_agent, _, results_dir, _pf = _patch_pipeline(
             tmp_path, monkeypatch, market_data, ["AI.PA"]
         )
         run_daily_pipeline(dry_run=True)
@@ -344,7 +353,7 @@ class TestStaleFeedGate:
             "SPY": self.FRESH_FRIDAY["SPY"],
             "AI.PA": _frame("2026-11-11 23:00"),  # stale but NOT held
         }
-        mock_agent, mock_shadow, results_dir = _patch_pipeline(
+        mock_agent, _shadow, results_dir, _pf = _patch_pipeline(
             tmp_path, monkeypatch, market_data, ["SPY"]
         )
         run_daily_pipeline(dry_run=True)
@@ -356,10 +365,183 @@ class TestStaleFeedGate:
 
     def test_gate_skips_shadow_arm_in_live_run(self, tmp_path, monkeypatch):
         market_data = {"SPY": _frame("2026-11-11 05:00")}
-        _, mock_shadow, results_dir = _patch_pipeline(
+        _, mock_shadow, results_dir, _pf = _patch_pipeline(
             tmp_path, monkeypatch, market_data, ["SPY"]
         )
         run_daily_pipeline(dry_run=False)
         assert mock_shadow.call_count == 0
         result = _load_result(results_dir)
         assert result["stale_feed"]["gate_active"] is True
+
+
+# --- Persistence guard: Step-3 mark refresh is freshness-classified --------
+
+class TestStaleQuoteMarkPersistence:
+    """The decision-side gate (TestStaleFeedGate) protects the DECISION; this
+    class pins the PERSISTENCE side. Pre-fix, Step 3 fetched bare prices via
+    ``fetch_current_prices`` (which discards ``last_bar_ts``) and passed them
+    to ``Portfolio.update_prices`` — a stale-but-served close (finite,
+    positive) was persisted by ``save_state()`` as the position's mark,
+    poisoning tomorrow's deltas with a frozen reference (monitor incident
+    doctrine, 2026-11-05). Post-fix, ``_refresh_position_marks`` classifies
+    quotes through the shared ``split_fresh_and_stale``: fresh prices win,
+    stale tickers keep their last fresh mark, one loud banner per run.
+
+    The helper is imported lazily per test (PR #84 doctrine) so the
+    discriminators fail individually under a targeted
+    ``git stash push src/daily_run.py``.
+    """
+
+    NOW = datetime(2026, 11, 13, 21, 0, 0)  # Friday, canonical run time
+    ENTRY = 379.56
+    STALE_CLOSE = 356.93
+    FRESH_CLOSE = 100.02
+
+    def _portfolio(self, tmp_path):
+        from portfolio.portfolio import Portfolio
+
+        pf = Portfolio(data_dir=str(tmp_path))
+        pf.cash = 5000.0
+        pf.buy("AI.PA", pct_of_cash=20.0, current_price=self.ENTRY)
+        pf.buy("SPY", pct_of_cash=20.0, current_price=99.50)
+        return pf
+
+    def test_stale_quote_does_not_overwrite_mark(self, tmp_path, monkeypatch, capsys):
+        from daily_run import _refresh_position_marks
+
+        pf = self._portfolio(tmp_path)
+        stale_quotes = {
+            "AI.PA": {"price": self.STALE_CLOSE, "last_bar_ts": "2026-11-11 14:30:00"},
+        }
+        monkeypatch.setattr(
+            "daily_run.fetch_current_quotes", lambda tickers, max_workers=1: stale_quotes
+        )
+
+        _refresh_position_marks(pf, self.NOW)
+        out = capsys.readouterr().out
+
+        # Mechanism pin: the stale close never reached update_prices.
+        assert pf.positions["AI.PA"].current_price == self.ENTRY
+        # Loudness pin: the run names the protected position.
+        assert "STALE QUOTE" in out
+        assert "AI.PA" in out
+        # Blast-radius pin: the healthy sibling's state is untouched.
+        assert pf.positions["SPY"].current_price == 99.50
+
+    def test_fresh_quote_updates_mark(self, tmp_path, monkeypatch, capsys):
+        from daily_run import _refresh_position_marks
+
+        pf = self._portfolio(tmp_path)
+        fresh_quotes = {
+            "SPY": {"price": self.FRESH_CLOSE, "last_bar_ts": "2026-11-13 20:59:00"},
+        }
+        monkeypatch.setattr(
+            "daily_run.fetch_current_quotes", lambda tickers, max_workers=1: fresh_quotes
+        )
+
+        _refresh_position_marks(pf, self.NOW)
+
+        assert pf.positions["SPY"].current_price == self.FRESH_CLOSE
+        # Bounded healthy pin: an all-fresh run stays quiet.
+        assert "STALE QUOTE" not in capsys.readouterr().out
+
+    def test_mixed_quotes_drop_only_stale_sibling(self, tmp_path, monkeypatch):
+        """Lipschitz pin: one stale quote must not void the fresh sibling's
+        mark update — per-element drop, valid siblings survive."""
+        from daily_run import _refresh_position_marks
+
+        pf = self._portfolio(tmp_path)
+        mixed_quotes = {
+            "AI.PA": {"price": self.STALE_CLOSE, "last_bar_ts": "2026-11-11 14:30:00"},
+            "SPY": {"price": self.FRESH_CLOSE, "last_bar_ts": "2026-11-13 20:59:00"},
+        }
+        monkeypatch.setattr(
+            "daily_run.fetch_current_quotes", lambda tickers, max_workers=1: mixed_quotes
+        )
+
+        _refresh_position_marks(pf, self.NOW)
+
+        assert pf.positions["AI.PA"].current_price == self.ENTRY
+        assert pf.positions["SPY"].current_price == self.FRESH_CLOSE
+
+    def test_unusable_quote_dropped_loudly(self, tmp_path, monkeypatch, capsys):
+        """A None price (fetch failure) is stale by definition — the mark
+        must keep its last fresh value, and the run must say so."""
+        from daily_run import _refresh_position_marks
+
+        pf = self._portfolio(tmp_path)
+        failed_quotes = {"AI.PA": {"price": None, "last_bar_ts": None}}
+        monkeypatch.setattr(
+            "daily_run.fetch_current_quotes", lambda tickers, max_workers=1: failed_quotes
+        )
+
+        _refresh_position_marks(pf, self.NOW)
+
+        assert pf.positions["AI.PA"].current_price == self.ENTRY
+        assert "AI.PA" in capsys.readouterr().out
+
+    def test_persisted_state_after_guard_is_honest(self, tmp_path, monkeypatch):
+        """End-to-end pin through save_state/load_state: the persisted mark
+        for the stale ticker is the LAST FRESH mark, not the stale close."""
+        from daily_run import _refresh_position_marks
+        from portfolio.portfolio import Portfolio
+
+        pf = self._portfolio(tmp_path)
+        mixed_quotes = {
+            "AI.PA": {"price": self.STALE_CLOSE, "last_bar_ts": "2026-11-11 14:30:00"},
+            "SPY": {"price": self.FRESH_CLOSE, "last_bar_ts": "2026-11-13 20:59:00"},
+        }
+        monkeypatch.setattr(
+            "daily_run.fetch_current_quotes", lambda tickers, max_workers=1: mixed_quotes
+        )
+
+        _refresh_position_marks(pf, self.NOW)
+        pf.save_state()
+
+        reloaded = Portfolio(data_dir=str(tmp_path))
+        assert reloaded.positions["AI.PA"].current_price == self.ENTRY
+        assert reloaded.positions["SPY"].current_price == self.FRESH_CLOSE
+
+
+class TestStaleQuoteGuardIntegration:
+    """Pipeline-level pins: Step 3 now consumes QUOTES (not bare prices), and
+    the daily-frame gate is unaffected by the quote-path change."""
+
+    def test_fresh_quotes_reach_mark_update_in_pipeline(self, tmp_path, monkeypatch):
+        market_data = {
+            "SPY": _frame("2026-11-13 05:00"),
+            "AI.PA": _frame("2026-11-12 23:00"),
+        }
+        _agent, _, results_dir, mock_portfolio = _patch_pipeline(
+            tmp_path, monkeypatch, market_data, ["SPY"]
+        )
+        fresh_quotes = {
+            "SPY": {"price": 101.5, "last_bar_ts": "2026-11-13 20:59:00"},
+        }
+        import daily_run
+
+        monkeypatch.setattr(daily_run, "fetch_current_quotes", MagicMock(return_value=fresh_quotes))
+        run_daily_pipeline(dry_run=True)
+        mock_portfolio.update_prices.assert_called_once_with({"SPY": 101.5})
+        result = _load_result(results_dir)
+        assert result["stale_feed"]["gate_active"] is False
+
+    def test_stale_quotes_kept_out_of_mark_update_in_pipeline(self, tmp_path, monkeypatch):
+        market_data = {
+            "SPY": _frame("2026-11-13 05:00"),
+            "AI.PA": _frame("2026-11-12 23:00"),
+        }
+        mock_agent, _, _res_dir, mock_portfolio = _patch_pipeline(
+            tmp_path, monkeypatch, market_data, ["SPY"]
+        )
+        stale_quotes = {
+            "SPY": {"price": 95.0, "last_bar_ts": "2026-11-11 14:30:00"},
+        }
+        import daily_run
+
+        monkeypatch.setattr(daily_run, "fetch_current_quotes", MagicMock(return_value=stale_quotes))
+        run_daily_pipeline(dry_run=True)
+        # The stale close never reached the mark update...
+        mock_portfolio.update_prices.assert_called_once_with({})
+        # ...and the daily-frame gate still fired the LLM (frame fresh).
+        assert mock_agent.get_trading_decision.call_count == 1
