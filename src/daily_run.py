@@ -47,6 +47,7 @@ from risk.performance_metrics import (
 )
 from risk.position_cooldown import CooldownConfig, PositionCooldownManager
 from utils import _is_finite_number, dump_json_safe
+from utils.outage import assess_outage, write_outage_status
 
 # Resolve all paths relative to the repository root so the script is safe to run
 # from any working directory (e.g. via cron from the parent workspace).
@@ -912,7 +913,14 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     print("\n[7/7] Logging results...")
     
     portfolio_after_summary = portfolio.get_summary() if not dry_run else portfolio_summary
-    
+
+    # LLM outage escalation: count consecutive live-arm error days before
+    # persisting today's result, so the daily JSON itself carries the state.
+    # today_error is passed in memory because today's file does not exist yet.
+    llm_outage = assess_outage(
+        DAILY_RESULTS_DIR, today_error=bool(decision.get("error", False))
+    )
+
     result = {
         'date': datetime.now().strftime('%Y-%m-%d'),
         'timestamp': datetime.now().isoformat(),
@@ -946,7 +954,8 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         'cooldown': {
             'status': cooldown_mgr.get_status() if not dry_run else None,
             'blocked_count': len([t for t in executed_trades if t.get('status') == 'blocked_by_cooldown'])
-        }
+        },
+        'llm_outage': llm_outage,
     }
     
     # Save to daily results
@@ -963,6 +972,29 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         with open(result_file, 'w') as f:
             dump_json_safe(result, f, indent=2, default=str)
         print(f"  ✓ Results saved to {result_file}")
+
+    # Persist the outage status to a single pollable artifact and escalate
+    # loudly once the consecutive-error streak reaches the threshold. The
+    # exit code stays 0 (the pipeline itself completed; the fallback hold
+    # was applied) — the alert is carried by the status file and the banner.
+    try:
+        status_path = write_outage_status(llm_outage, DAILY_RESULTS_DIR.parent)
+        if llm_outage["alert"]:
+            print("")
+            print("!" * 70)
+            print(
+                f"LLM OUTAGE ALERT: {llm_outage['consecutive_error_days']} consecutive "
+                f"error days (threshold {llm_outage['threshold']})."
+            )
+            print(
+                "The portfolio has been running on the fail-open hold-all "
+                "fallback — no LLM risk assessment is being performed."
+            )
+            print(f"Outage dates: {', '.join(llm_outage['streak_dates'])}")
+            print(f"Status file: {status_path}")
+            print("!" * 70)
+    except Exception as exc:  # pragma: no cover - defensive, never blocks the run
+        print(f"  ⚠ Could not persist LLM outage status: {exc}")
     
     # Final summary
     print("\n" + "="*70)
