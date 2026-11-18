@@ -27,6 +27,7 @@ data/cache/
 
 # Results with sensitive params
 results/daily/*.json
+results/llm_outage_status.json
 hyperparams/optimized/
 
 # OS
