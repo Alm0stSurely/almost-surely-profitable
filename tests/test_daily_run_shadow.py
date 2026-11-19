@@ -216,3 +216,118 @@ class TestShadowArmWiring:
         # The daily result file was still written.
         result_files = list((tmp_path / "results" / "daily").glob("*.json"))
         assert len(result_files) == 1
+
+
+class TestShadowArmStatusBlock:
+    """The daily JSON carries an informational ``shadow_arm`` block.
+
+    Deferred item from 2026-11-17: a shadow-arm-only outage (Venice 402 on
+    2026-11-17, both arms on 2026-11-18) was invisible in the daily artifact
+    — it lived only inside data/shadow_decisions.json. The block makes the
+    state visible next to llm_outage. Contract: informational only, never
+    counted toward the live-arm streak.
+    """
+
+    @staticmethod
+    def _read_result(tmp_path):
+        result_files = list((tmp_path / "results" / "daily").glob("*.json"))
+        assert len(result_files) == 1
+        with open(result_files[0]) as fh:
+            return json.load(fh)
+
+    def test_shadow_ok_records_full_status(self, tmp_path, monkeypatch, fixed_date):
+        _patch_pipeline(tmp_path, monkeypatch, fixed_date, experiments_config=SHADOW_ENABLED)
+        import daily_run
+        from llm.shadow_decisions import ShadowArmResult
+
+        monkeypatch.setattr(
+            daily_run,
+            "run_shadow_arm",
+            MagicMock(return_value=ShadowArmResult(logged=True, error=False, record={})),
+        )
+
+        run_daily_pipeline()
+
+        result = self._read_result(tmp_path)
+        assert result["shadow_arm"] == {
+            "enabled": True,
+            "ran": True,
+            "logged": True,
+            "error": False,
+        }
+
+    def test_shadow_error_visible_but_does_not_escalate_live_streak(
+        self, tmp_path, monkeypatch, fixed_date
+    ):
+        # Live decision healthy + shadow arm in error: the shadow error must
+        # be visible in shadow_arm, and llm_outage must stay OK — a broken
+        # experiment must never escalate pipeline state.
+        _patch_pipeline(tmp_path, monkeypatch, fixed_date, experiments_config=SHADOW_ENABLED)
+        import daily_run
+        from llm.shadow_decisions import ShadowArmResult
+
+        monkeypatch.setattr(
+            daily_run,
+            "run_shadow_arm",
+            MagicMock(return_value=ShadowArmResult(logged=True, error=True, record={})),
+        )
+
+        run_daily_pipeline()
+
+        result = self._read_result(tmp_path)
+        assert result["shadow_arm"]["error"] is True
+        assert result["shadow_arm"]["logged"] is True
+        assert result["llm_outage"]["state"] == "OK"
+        assert result["llm_outage"]["consecutive_error_days"] == 0
+
+    def test_shadow_exception_records_reason_and_pipeline_continues(
+        self, tmp_path, monkeypatch, fixed_date
+    ):
+        _patch_pipeline(tmp_path, monkeypatch, fixed_date, experiments_config=SHADOW_ENABLED)
+        import daily_run
+
+        def _boom(**kwargs):
+            raise RuntimeError("shadow backend down")
+
+        monkeypatch.setattr(daily_run, "run_shadow_arm", _boom)
+
+        run_daily_pipeline()
+
+        result = self._read_result(tmp_path)
+        assert result["shadow_arm"]["error"] is True
+        assert result["shadow_arm"]["ran"] is False
+        assert "RuntimeError" in result["shadow_arm"]["reason"]
+        # Live side unaffected.
+        assert result["llm_outage"]["state"] == "OK"
+        assert result["decision"]["error"] is False
+
+    def test_shadow_disabled_records_enabled_false(self, tmp_path, monkeypatch, fixed_date):
+        _patch_pipeline(tmp_path, monkeypatch, fixed_date, experiments_config=None)
+        import daily_run
+
+        mock_shadow = MagicMock()
+        monkeypatch.setattr(daily_run, "run_shadow_arm", mock_shadow)
+
+        run_daily_pipeline()
+
+        result = self._read_result(tmp_path)
+        assert result["shadow_arm"] == {"enabled": False, "ran": False}
+        assert mock_shadow.call_count == 0
+
+    def test_shadow_skipped_in_dry_run_records_none(self, tmp_path, monkeypatch, fixed_date):
+        _patch_pipeline(tmp_path, monkeypatch, fixed_date, experiments_config=SHADOW_ENABLED)
+        import daily_run
+
+        mock_shadow = MagicMock()
+        monkeypatch.setattr(daily_run, "run_shadow_arm", mock_shadow)
+
+        run_daily_pipeline(dry_run=True)
+
+        # Dry-run results are named *_dry_run.json — separate file contract.
+        result_files = list((tmp_path / "results" / "daily").glob("*.json"))
+        assert len(result_files) == 1
+        assert result_files[0].name.endswith("_dry_run.json")
+        with open(result_files[0]) as fh:
+            result = json.load(fh)
+        assert result["shadow_arm"] is None
+        assert mock_shadow.call_count == 0

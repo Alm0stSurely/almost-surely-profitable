@@ -377,21 +377,28 @@ def _maybe_run_shadow_arm(
     cooldown_status: Dict,
     vol_regime: str,
     live_decision: Dict,
-) -> None:
+) -> Dict:
     """Run the H4 shadow arm when enabled by config/experiments.json.
 
     Best-effort by contract: the shadow arm observes, it never interferes.
-    Any failure here is logged and swallowed so the live pipeline is never
-    aborted by an experiment. The arm is strictly additive:
+    Any failure here is captured into the returned status dict so the live
+    pipeline is never aborted by an experiment. The arm is strictly additive:
       - no trades executed, no cooldown consumed,
       - no decision_history write (see TradingAgent.get_shadow_decision),
       - one append-only record in data/shadow_decisions.json per session.
+
+    Returns a small status dict that lands in the daily result's
+    ``shadow_arm`` block. The status is informational only: a shadow-arm
+    error is surfaced for visibility (2026-11-17/18 showed a two-day shadow
+    outage that was only visible by opening the shadow log) but must never
+    count toward the live-arm outage streak in ``llm_outage`` — a broken
+    experiment must not escalate pipeline state.
     """
     try:
         config_path = Path(REPO_ROOT) / "config" / "experiments.json"
         config = load_shadow_config(config_path)
         if not config.enabled:
-            return
+            return {"enabled": False, "ran": False}
 
         log_path = Path(DATA_DIR) / DEFAULT_SHADOW_LOG_NAME
         live_summary = summarize_actions(live_decision.get("actions", []))
@@ -409,10 +416,22 @@ def _maybe_run_shadow_arm(
         if result.logged:
             status = "ERROR" if result.error else "ok"
             print(f"  ✓ Shadow decision logged ({status}): {result.record.get('live_actions_summary', '?')}")
-        else:
-            print("  ⚠ Shadow arm failed to log; pipeline continues (see logs)")
+            return {
+                "enabled": True,
+                "ran": True,
+                "logged": True,
+                "error": bool(result.error),
+            }
+        print("  ⚠ Shadow arm failed to log; pipeline continues (see logs)")
+        return {"enabled": True, "ran": True, "logged": False, "error": True}
     except Exception as e:
         print(f"  ⚠ Shadow arm failed ({type(e).__name__}: {e}); pipeline continues")
+        return {
+            "enabled": True,
+            "ran": False,
+            "error": True,
+            "reason": f"{type(e).__name__}: {e}",
+        }
 
 
 def _build_prices_df(market_data_raw: Dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -710,8 +729,9 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     # not burn LLM API calls; skipped when the stale-feed gate forced HOLD —
     # a hypothetical logged on poisoned prices would pollute the experiment.
     # See docs/experiments/2026-10-16-prompt-midband-deployment.md
+    shadow_arm_status: Optional[Dict] = None
     if not dry_run and not stale_gate_tickers:
-        _maybe_run_shadow_arm(
+        shadow_arm_status = _maybe_run_shadow_arm(
             agent=agent,
             market_analysis=market_analysis,
             portfolio_summary=portfolio_summary,
@@ -956,6 +976,10 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
             'blocked_count': len([t for t in executed_trades if t.get('status') == 'blocked_by_cooldown'])
         },
         'llm_outage': llm_outage,
+        # Informational shadow-arm outcome. Deliberately separate from
+        # llm_outage: a broken experiment is visible here but must never
+        # escalate the live-arm outage streak.
+        'shadow_arm': shadow_arm_status,
     }
     
     # Save to daily results
