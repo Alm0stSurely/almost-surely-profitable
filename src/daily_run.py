@@ -30,6 +30,7 @@ from data.fetch_market_data import (
 from data.indicators import analyze_market_data
 from data.feed_freshness import classify_daily_frames, split_fresh_and_stale
 from llm.trading_agent import TradingAgent
+from mechanical_fallback import run_mechanical_rulebook
 from llm.shadow_decisions import (
     DEFAULT_SHADOW_LOG_NAME,
     load_shadow_config,
@@ -723,6 +724,63 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
     print(f"\n  Reasoning: {decision['reasoning'][:200]}...")
     print(f"  Actions: {len(decision['actions'])}")
 
+    # Step 4a: Mechanical fallback rulebook (declared policy 2026-11-19,
+    # executed on the 4th consecutive LLM error day 2026-11-20). The
+    # fail-open hold-all skips every pipeline-side risk check; the intraday
+    # monitor proved on 2026-11-20 that a breaching position (SPY, then
+    # IJR past its stop zone) can sit unmanaged all evening. The rulebook
+    # closes only what is already breached (MF-1, same adaptive threshold
+    # as the cooldown stop-loss override) and flags what it refuses to
+    # execute (MF-3 cash-band mandate). It never buys, and it stays
+    # subordinate to the stale-feed gate: a frozen close must never
+    # trigger an exit (2026-11-05 doctrine).
+    mechanical_fallback: Optional[Dict] = None
+    if decision.get('error') and not stale_gate_tickers:
+        adaptive_stop = cooldown_status.get('adaptive_stop_loss')
+        total_value = portfolio_summary.get('total_value')
+        cash = portfolio_summary.get('cash')
+        cash_pct = None
+        if _is_finite_number(total_value) and total_value > 0 and _is_finite_number(cash):
+            cash_pct = cash / total_value
+        mechanical_fallback = run_mechanical_rulebook(
+            positions=portfolio_summary.get('positions', []),
+            current_prices=current_prices,
+            stale_tickers=stale_feed,
+            adaptive_stop_pct=adaptive_stop,
+            cash_pct=cash_pct,
+        )
+        mf_actions = mechanical_fallback['actions']
+        if mf_actions:
+            exit_list = ", ".join(
+                f"{a['ticker']} (dd {e['drawdown_pct']:.1f}%)"
+                for a, e in zip(mf_actions, mechanical_fallback['stop_exits'])
+            )
+            print(f"\n  ⚙ MECHANICAL FALLBACK: hard-stop exit(s) — {exit_list}")
+            print("    (LLM outage fallback: risk-closing exits only, no buys.)")
+            decision['actions'].extend(mf_actions)
+            decision['reasoning'] += (
+                f" Mechanical fallback rulebook (LLM outage): executed "
+                f"hard-stop exit(s) {exit_list}. Cash-band mandate "
+                f"surfaced, not executed."
+            )
+        else:
+            print("\n  ⚙ MECHANICAL FALLBACK: no hard-stop breaches; holding.")
+        mandate = mechanical_fallback['cash_mandate']
+        if mandate['active']:
+            print(
+                f"  ⚙ CASH-BAND MANDATE: cash {mandate['cash_pct']:.1%} is "
+                f"{mandate['side']} the {mandate['band'][0]:.0%}–{mandate['band'][1]:.0%} "
+                f"band — surfaced for the next working LLM session, NOT executed."
+            )
+        if mechanical_fallback['watch']:
+            print(
+                "  ⚙ WATCH: "
+                + ", ".join(
+                    f"{w['ticker']} ({w['distance_to_stop_pp']:.2f} pp from stop)"
+                    for w in mechanical_fallback['watch']
+                )
+            )
+
     # Step 4b: H4 shadow arm — run the mid-band-deployment variant prompt in
     # dry-run alongside the live decision and log the hypothetical outcome.
     # Best-effort: never aborts the pipeline; skipped in dry-run so tests do
@@ -980,6 +1038,11 @@ def run_daily_pipeline(dry_run: bool = False, no_overwrite: bool = False):
         # llm_outage: a broken experiment is visible here but must never
         # escalate the live-arm outage streak.
         'shadow_arm': shadow_arm_status,
+        # Mechanical fallback rulebook outcome (Step 4a). None on every
+        # non-error day; on LLM error days it carries the hard-stop exits,
+        # the watch band and the (unexecuted) cash-band mandate so the
+        # outage day's risk state is auditable from the daily JSON alone.
+        'mechanical_fallback': mechanical_fallback,
     }
     
     # Save to daily results
