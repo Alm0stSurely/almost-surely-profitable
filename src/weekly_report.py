@@ -151,6 +151,82 @@ def _safe_position_field(value, fmt='.2f', default='n/a'):
     return default
 
 
+def _summarize_outage_days(week_results):
+    """Aggregate LLM-outage and mechanical-fallback context for the week.
+
+    Returns None when every daily result has a healthy LLM decision, so the
+    report renders no outage section. Old daily JSONs (pre-rulebook, Nov 18-20
+    2026) carry decision.error=True without a mechanical_fallback block; those
+    days count as outage days with no rulebook activity.
+    """
+    days = []
+    mf_exits = []
+    mf_watch = []
+    cash_mandate_days = []
+
+    for day in week_results or []:
+        decision = day.get("decision") or {}
+        if not decision.get("error"):
+            continue
+        date = day.get('date', 'unknown')
+        fb = day.get('mechanical_fallback') or {}
+        row = {
+            'date': date,
+            'has_rulebook': bool(fb),
+            'exits': [],
+            'watch': [],
+            'cash_mandate': None,
+        }
+        if fb:
+            for exit_ in fb.get('stop_exits') or []:
+                ticker = exit_.get('ticker')
+                row['exits'].append(ticker)
+                mf_exits.append((date, ticker))
+            for item in fb.get('watch') or []:
+                ticker = item.get('ticker')
+                row['watch'].append(ticker)
+                mf_watch.append((date, ticker))
+            mandate = fb.get('cash_mandate') or {}
+            if mandate.get('active'):
+                mandate_row = {
+                    'date': date,
+                    'cash_pct': mandate.get('cash_pct'),
+                    'side': mandate.get('side'),
+                    'band': mandate.get('band'),
+                    'executed': mandate.get('executed', False),
+                }
+                row['cash_mandate'] = mandate_row
+                cash_mandate_days.append(mandate_row)
+        days.append(row)
+
+    if not days:
+        return None
+    return {
+        'outage_days': len(days),
+        'trading_days': len(week_results or []),
+        'rulebook_days': sum(1 for d in days if d['has_rulebook']),
+        'days': days,
+        'mf_exits': mf_exits,
+        'mf_watch': mf_watch,
+        'cash_mandate_days': cash_mandate_days,
+    }
+
+
+def _format_cash_mandate_cell(mandate):
+    """Render one MF-3 cash-mandate cell for the markdown table."""
+    cash_pct = mandate.get('cash_pct')
+    pct_str = f"{cash_pct * 100:.2f}%" if _is_finite_number(cash_pct) else "n/a"
+    side = mandate.get('side', '?')
+    band = mandate.get('band') or []
+    if len(band) == 2 and all(_is_finite_number(b) for b in band):
+        band_str = f" (band {band[0] * 100:.0f}-{band[1] * 100:.0f}%)"
+    else:
+        band_str = ""
+    executed = mandate.get('executed', False)
+    verdict = "executed" if executed else "surfaced, never executed"
+    return f"{pct_str} {side} band{band_str} — {verdict}"
+
+
 def _sortino_display(returns, sortino_ratio, risk_free_rate=0.02):
     """Render the Sortino ratio, or 'n/a' when the sample cannot define it.
 
@@ -304,6 +380,9 @@ def generate_weekly_report():
     end_value = _safe_positive_scalar(raw_end_value, default=None)
     weekly_return = _safe_weekly_return(start_value, end_value)
     
+    # LLM outage / mechanical fallback context (absent on healthy weeks)
+    outage = _summarize_outage_days(week_results)
+
     if len(week_results) >= 1:
         print(f"\n📈 Weekly Performance:")
         start_str = f"€{start_value:.2f}" if start_value is not None else "n/a"
@@ -312,6 +391,26 @@ def generate_weekly_report():
         print(f"   Start of week: {start_str}")
         print(f"   End of week: {end_str}")
         print(f"   Weekly return: {return_str}")
+
+    if outage is not None:
+        print(f"\n⚠️  LLM Outage & Mechanical Fallback:")
+        print(f"   Outage days: {outage['outage_days']}/{outage['trading_days']} "
+              f"(rulebook active on {outage['rulebook_days']})")
+        if outage['mf_exits']:
+            exits_str = ", ".join(
+                f"{ticker or 'unknown'} ({date})" for date, ticker in outage['mf_exits']
+            )
+            print(f"   MF-1 stop exits: {exits_str}")
+        if outage['mf_watch']:
+            watch_str = ", ".join(
+                f"{ticker or 'unknown'} ({date})" for date, ticker in outage['mf_watch']
+            )
+            print(f"   MF-2 watch band: {watch_str}")
+        for mandate in outage['cash_mandate_days']:
+            print(f"   Cash mandate: {mandate['date']} at "
+                  f"{_format_cash_mandate_cell(mandate)}")
+        print("   Note: monitor-executed stops appear in Trades; "
+              "the rulebook never buys.")
     
     # Calculate performance metrics
     portfolio_dates, portfolio_returns = calculate_weekly_returns(week_results)
@@ -445,6 +544,27 @@ def generate_weekly_report():
             f.write(f"| End of Week | {end_cell} |\n")
             f.write(f"| Weekly Return | {return_cell} |\n")
             f.write(f"| Trading Days | {len(week_results)} |\n")
+
+        # LLM outage / mechanical fallback context (absent on healthy weeks)
+        if outage is not None:
+            f.write(f"\n## LLM Outage & Mechanical Fallback\n\n")
+            f.write(
+                f"{outage['outage_days']} of {outage['trading_days']} trading days "
+                f"ran with the LLM unavailable; the mechanical fallback rulebook "
+                f"was active on {outage['rulebook_days']} of them. The rulebook "
+                f"enforces hard stops only — it never buys, and the cash mandate "
+                f"is surfaced, never executed.\n\n"
+            )
+            f.write(f"| Day | MF-1 stop exits | MF-2 watch | Cash mandate |\n")
+            f.write(f"|-----|-----------------|----------|--------------|\n")
+            for row in outage['days']:
+                exits_str = ", ".join(t or 'unknown' for t in row['exits']) or "—"
+                watch_str = ", ".join(t or 'unknown' for t in row['watch']) or "—"
+                if row['cash_mandate'] is not None:
+                    mandate_str = _format_cash_mandate_cell(row['cash_mandate'])
+                else:
+                    mandate_str = "—"
+                f.write(f"| {row['date']} | {exits_str} | {watch_str} | {mandate_str} |\n")
         
         # Performance Metrics
         if len(portfolio_returns) >= 2:
