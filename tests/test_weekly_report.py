@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 
 from weekly_report import (
+    _summarize_outage_days,
     _load_week_trades_from_history,
     _safe_benchmark_alpha,
     _safe_pct_str,
@@ -884,3 +885,132 @@ class TestLoadWeekTradesFromHistory:
         assert len(extra) == 1
         assert extra[0]["ticker"] == "GLD"
         assert extra[0]["price"] is None
+
+
+class TestSummarizeOutageDays:
+    """Unit tests for the LLM-outage / mechanical-fallback week summary."""
+
+    def test_returns_none_when_no_llm_errors(self):
+        days = [
+            {"date": "2026-11-23", "decision": {"error": False, "actions": []}},
+            {"date": "2026-11-24", "portfolio_before": {"total_value": 1.0}},  # no decision key
+            {"date": "2026-11-25", "decision": None},
+        ]
+        assert _summarize_outage_days(days) is None
+
+    def test_counts_outage_days_across_old_and_new_json_shapes(self):
+        days = [
+            # Pre-rulebook outage day (18-20 Nov shape): error, no block.
+            {"date": "2026-11-18", "decision": {"error": True, "actions": []}},
+            # Rulebook day: error + mechanical_fallback block with activity.
+            {
+                "date": "2026-11-23",
+                "decision": {"error": True, "actions": []},
+                "mechanical_fallback": {
+                    "active": True,
+                    "stop_exits": [{"ticker": "IJR"}],
+                    "watch": [{"ticker": "GLD"}],
+                    "cash_mandate": {
+                        "active": True,
+                        "cash_pct": 0.4841,
+                        "band": [0.15, 0.3],
+                        "side": "above",
+                        "executed": False,
+                    },
+                },
+            },
+            # Healthy LLM day is ignored.
+            {"date": "2026-11-20", "decision": {"error": False, "actions": [{"ticker": "SPY"}]}},
+        ]
+        s = _summarize_outage_days(days)
+        assert s is not None
+        assert s["outage_days"] == 2
+        assert s["trading_days"] == 3
+        assert s["rulebook_days"] == 1
+        # Flat event lists contain only actual rulebook events; the
+        # pre-rulebook day contributes no events but appears in `days`.
+        assert s["mf_exits"] == [("2026-11-23", "IJR")]
+        assert s["mf_watch"] == [("2026-11-23", "GLD")]
+        assert len(s["cash_mandate_days"]) == 1
+        assert s["cash_mandate_days"][0]["date"] == "2026-11-23"
+        assert s["cash_mandate_days"][0]["cash_pct"] == 0.4841
+        assert len(s["days"]) == 2
+        assert s["days"][0]["date"] == "2026-11-18"
+        assert s["days"][0]["has_rulebook"] is False
+        assert s["days"][0]["exits"] == []
+        assert s["days"][1]["date"] == "2026-11-23"
+        assert s["days"][1]["exits"] == ["IJR"]
+        assert s["days"][1]["watch"] == ["GLD"]
+        assert s["days"][1]["cash_mandate"]["cash_pct"] == 0.4841
+
+    def test_error_day_without_ticker_in_stop_exit_is_counted(self):
+        days = [
+            {"date": "2026-11-23", "decision": {"error": True, "actions": []},
+             "mechanical_fallback": {"stop_exits": [{}], "watch": [], "cash_mandate": {"active": False}}},
+        ]
+        s = _summarize_outage_days(days)
+        assert s["mf_exits"] == [("2026-11-23", None)]
+        assert s["cash_mandate_days"] == []
+
+    def test_rulebook_day_without_error_flag_is_not_an_outage_day(self):
+        # Defensive: a mechanical_fallback block on a non-error day
+        # (should not happen — rulebook only runs on error) must not
+        # fabricate an outage entry.
+        days = [
+            {"date": "2026-11-23", "decision": {"error": False, "actions": []},
+             "mechanical_fallback": {"stop_exits": [], "watch": [], "cash_mandate": {"active": False}}},
+        ]
+        assert _summarize_outage_days(days) is None
+
+
+class TestWeeklyReportOutageSection:
+    """Integration: the rendered weekly report surfaces outage/rulebook context."""
+
+    def test_outage_section_rendered_when_llm_errors(self, capsys, tmp_path, monkeypatch):
+        base = TestGenerateWeeklyReportFormatting
+        summary = base._make_summary()
+        patches = base._patch_external_calls(tmp_path, monkeypatch, summary)
+        mock_rg = MagicMock()
+        mock_rg.load_daily_results.return_value = [
+            {"date": "2026-08-24", "decision": {"error": True, "actions": []},
+             "portfolio_before": {"total_value": 10000.0},
+             "mechanical_fallback": {
+                 "active": True,
+                 "stop_exits": [{"ticker": "IJR"}],
+                 "watch": [],
+                 "cash_mandate": {"active": True, "cash_pct": 0.48, "band": [0.15, 0.3],
+                                  "side": "above", "executed": False},
+             },
+             "executed_trades": []},
+        ]
+        patches["ReportGenerator"] = MagicMock(return_value=mock_rg)
+
+        with patch.multiple("weekly_report", **patches):
+            generate_weekly_report()
+
+        out = capsys.readouterr().out
+        assert "LLM Outage" in out
+        assert "IJR" in out
+        # Markdown artifact also carries the section.
+        report = (tmp_path / "results" / "weekly-2026-W35.md").read_text()
+        assert "LLM Outage" in report
+        assert "never executed" in report
+
+    def test_no_outage_section_when_llm_healthy(self, capsys, tmp_path, monkeypatch):
+        base = TestGenerateWeeklyReportFormatting
+        summary = base._make_summary()
+        patches = base._patch_external_calls(tmp_path, monkeypatch, summary)
+        mock_rg = MagicMock()
+        mock_rg.load_daily_results.return_value = [
+            {"date": "2026-08-24", "decision": {"error": False, "actions": []},
+             "portfolio_before": {"total_value": 10000.0}, "executed_trades": []},
+        ]
+        patches["ReportGenerator"] = MagicMock(return_value=mock_rg)
+
+        with patch.multiple("weekly_report", **patches):
+            generate_weekly_report()
+
+        out = capsys.readouterr().out
+        assert "LLM Outage" not in out
+        report = (tmp_path / "results" / "weekly-2026-W35.md").read_text()
+        assert "LLM Outage" not in report
